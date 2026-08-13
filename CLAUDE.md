@@ -30,7 +30,7 @@ Researched mainstream "karaoke apps for smart TV" (Smule, StarMaker, Singa, Kara
 ## What to reuse from the UltraStar ecosystem (formats/ideas, not code)
 
 - **Song format**: standard UltraStar `.txt` song folders (lyrics + pitch + timing data as plain text, paired with an audio file and a background video or image). Write an original parser for this format — it's simple, well-documented, and gives access to the entire existing community song library without touching Play's code.
-- **Pitch detection**: don't reimplement DSP from scratch. Use **TarsosDSP** (open-source Java audio library, several existing Android ports) — has YIN, McLeod Pitch Method, and Dynamic Wavelet pitch-detection algorithms already implemented.
+- **Pitch detection**: the **YIN** algorithm (de Cheveigné & Kawahara, JASA 111(4), 2002) — the same method UltraStar and most karaoke scorers use. Implemented originally in `pitch/Yin.kt` from the published paper. TarsosDSP was the obvious library here and was used and verified first, but it's GPL-3.0 and isn't on Maven Central (only the author's personal repo), and this repo may be opened up publicly — so it was replaced with ~90 lines of original code. **Don't reintroduce a GPL audio library.** Note the algorithm itself is not the licensed part; only implementations are.
 - **UI toolkit**: **Compose for TV** (`androidx.tv:tv-material`, `androidx.tv:tv-foundation`), not the older Leanback library. Leanback is now officially deprecated by Google in favor of Compose for TV. Note the historical naming gotcha: the Android manifest category for "show this app on the TV home screen" is still literally named `LEANBACK_LAUNCHER` for legacy reasons, even though it has nothing to do with the deprecated Leanback UI library — every TV app, Compose or not, still uses that exact category name.
 
 ## Mic input — SOLVED, but not the way you'd expect (read before touching audio)
@@ -73,6 +73,7 @@ Gotchas if you touch this code:
 - Android Studio, SDK Platform 30 + Build-Tools, **NDK 30.0.15729638**, CMake (AGP auto-installs 3.22.1 to satisfy `cmake_minimum_required`).
 - Project: **"UltraStar Android(TV)"**, package `com.example.ultrastarandroidtv`, Kotlin, Android TV template.
 - Key Gradle config: Compose BOM `2026.06.00`, `androidx.tv:tv-material`, the **Compose Compiler Gradle plugin** (`org.jetbrains.kotlin.plugin.compose`, version-locked to Kotlin `2.2.10` — mandatory since Kotlin 2.0, and its absence causes a confusing compiler ICE rather than a clear error), `buildFeatures { compose = true }`, `externalNativeBuild` → `cpp/CMakeLists.txt`, `ndkVersion`, and `abiFilters = ["arm64-v8a"]` (the Shield is arm64-only, so don't build other ABIs).
+- **Dependencies come from Maven Central and Google only** — no custom repositories, and every runtime dependency is permissively licensed. This is deliberate: the repo may be opened publicly, and a personal Maven host is a durability risk (it can vanish and break builds years later) as well as a licence question. Check both before adding anything.
 - Deploys over network ADB (`adb connect <shield-ip>:5555`). The connection drops occasionally mid-install with `InstallException: EOF` — just `adb disconnect` + `adb connect` and retry, it's not a code problem.
 - Build/test from the CLI needs `JAVA_HOME` set to Android Studio's bundled JBR: `export JAVA_HOME="C:/Program Files/Android/Android Studio/jbr"`.
 
@@ -81,9 +82,12 @@ Gotchas if you touch this code:
 **Done:**
 - **Song parser** (`song/`) — full UltraStar `.txt` parsing: headers, note types (normal/golden/freestyle/rap/golden-rap), line breaks, duets (`P1`/`P2`), comma-decimal values, BOM handling, plus beat↔time conversion. Covered by JVM unit tests (`./gradlew testDebugUnitTest`). Known gap: `#RELATIVE:YES` beat offsets are not implemented (rare, deliberately deferred).
 - **USB mic capture** (`mic/` + `cpp/usb_iso.c`) — see the mic section above. Two mics simultaneously, confirmed on hardware.
+- **Pitch detection** (`pitch/`) — `Yin.kt` is an original YIN implementation (no third-party DSP dependency; see the reuse section above). `PitchTracker` runs it, one instance per mic, fed straight from `UsbIsoCapture`'s callback: it buffers the ragged USB chunks into 2048-sample windows sliding by 1024 (~47 readings/s, 43 ms latency, allocation-free in steady state). Three gates before a reading counts as voiced — window RMS, YIN confidence, and a 65–1200 Hz range that bounds the lags searched rather than filtering after. Plus `Pitches.kt` (Hz↔MIDI, note names, cents). Unit tests cover pure tones, sawtooth/square waves and a missing fundamental (the cases where octave errors actually happen — pure sines prove nothing there), noise, and silence. **Verified on hardware** with a 4-octave reference sweep (A2/A3/A4/A5 read back exactly, no octave errors), both mics live at 45–47 readings/s each, 100% voiced on sustained notes, 0% on silence.
 
-**Not started:** song library scanning from the USB drive (SAF + persisted URI permissions), TV browse UI, playback engine (Media3/ExoPlayer synced to parsed timing), pitch detection (TarsosDSP), scoring, two-player gameplay UI, settings.
+**Not started:** song library scanning from the USB drive (SAF + persisted URI permissions), TV browse UI, playback engine (Media3/ExoPlayer synced to parsed timing), scoring, two-player gameplay UI, settings.
 
-**Next up:** pitch detection — it plugs straight into the PCM stream from `UsbIsoCapture`, and together with the parser it forms the whole scoring core.
+**Next up:** scoring — comparing `PitchTracker` output against parsed `Note.pitch` over each note's beat window. Note that UltraStar scores **octave-agnostically** (pitch class, i.e. `mod 12`), so resolve the format's pitch-to-MIDI reference offset when starting this; nothing so far depends on it.
+
+Deliberately not done in the pitch layer: no smoothing/median filter over readings. Raw YIN proved stable enough on the real mics that adding one would only hide information. Revisit only if scoring shows dropouts.
 
 Note `MainActivity` currently launches `diagnostics/IsoCaptureScreen.kt`, which is a test harness, not real UI.
