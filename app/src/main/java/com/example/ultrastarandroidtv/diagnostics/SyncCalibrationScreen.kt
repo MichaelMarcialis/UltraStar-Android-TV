@@ -55,6 +55,9 @@ private class MicCalibration(
     private var scorer = PlayerScorer(song.voiceParts[0], beats)
     private val noteCount = song.voiceParts[0].lines.sumOf { it.notes.size }
 
+    /** Fixed for the length of a pass, so the score and the number it is reported against agree. */
+    private var passLatencySeconds = calibration.totalLatencySeconds
+
     var status by mutableStateOf("waiting…")
     var heard by mutableStateOf("no tones heard yet")
     var lastPass by mutableStateOf("—")
@@ -73,7 +76,7 @@ private class MicCalibration(
             if (position <= songEnd) {
                 synchronized(this) {
                     probe.onReading(position, reading.voiced)
-                    scorer.update(calibration.songTimeFor(position), reading)
+                    scorer.update(position - passLatencySeconds, reading)
                     heard = describe()
                 }
             }
@@ -90,36 +93,45 @@ private class MicCalibration(
         )
     }
 
+    /** What one mic made of one pass. */
+    class Pass(val count: Int, val medianSeconds: Double?)
+
     /**
-     * Ends a pass: adopts what was measured, then starts over.
+     * Ends a pass and reports it, without touching the shared calibration — deciding what to
+     * believe is the screen's job, since every mic is measuring the same system.
      *
-     * The score reported is the one just achieved using the calibration that was in force
-     * during the pass — so the first pass scores on the default guess and the next scores on
-     * the measured value. A correctly calibrated system scores near the maximum, because the
-     * "singer" is the song itself, exactly on pitch and exactly in time.
+     * The score is reported against [passLatencySeconds], the value actually in force while it
+     * was earned, rather than whatever the shared calibration says by now. Reading the shared
+     * value here is how this first reported one mic's score against another mic's measurement.
      */
-    fun finishPass(passNumber: Int) = synchronized(this) {
+    fun finishPass(passNumber: Int): Pass = synchronized(this) {
         val score = scorer.snapshot()
         val median = probe.medianSeconds
         lastPass = "pass $passNumber: %d / 10000   %d/%d beats hit   scored with %d ms".format(
             score.total,
             score.beatsHit,
             score.beatsScored,
-            (calibration.totalLatencySeconds * 1000).roundToInt(),
+            (passLatencySeconds * 1000).roundToInt(),
         )
         Log.i(
             TAG,
             "$label $lastPass — heard ${probe.count} tones, " +
-                "median ${median?.times(1000)?.roundToInt()} ms",
+                "median ${median?.times(1000)?.roundToInt()} ms, " +
+                "spread ${probe.spreadSeconds?.times(1000)?.roundToInt()} ms, " +
+                "samples ${probe.samples.map { (it * 1000).roundToInt() }}",
         )
 
-        // One or two tones could be a cough. Wait for a real set before believing the number.
-        if (median != null && probe.count >= 4) calibration.totalLatencySeconds = median
-
+        val result = Pass(probe.count, median)
         probe.reset()
         // The pitch tracker is deliberately left alone: it is only ever touched from the
         // capture thread, and a half-filled window spanning the restart costs one reading.
         scorer = PlayerScorer(song.voiceParts[0], beats)
+        result
+    }
+
+    /** Pins the latency this next pass will be scored and reported with. */
+    fun beginPass() = synchronized(this) {
+        passLatencySeconds = calibration.totalLatencySeconds
     }
 }
 
@@ -210,7 +222,18 @@ fun SyncCalibrationScreen() {
             )
 
             if (previous <= songEnd && position > songEnd) {
-                mics.forEach { it.finishPass(pass) }
+                val results = mics.map { it.finishPass(pass) }
+
+                // Every mic measures the same system, so believe the one that actually heard
+                // it: the mic at the speaker hears every tone, while one across the room
+                // catches a handful and times them off room reflections. A couple of tones
+                // could just be a cough, so require a real set before adopting anything.
+                results
+                    .filter { it.count >= 4 && it.medianSeconds != null }
+                    .maxByOrNull { it.count }
+                    ?.let { calibration.totalLatencySeconds = it.medianSeconds!! }
+
+                mics.forEach { it.beginPass() }
                 pass++
                 player.seekTo(0.0)
                 player.play()

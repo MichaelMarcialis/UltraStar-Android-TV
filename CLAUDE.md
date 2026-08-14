@@ -94,7 +94,7 @@ Gotchas if you touch this code:
 - **Playback engine** (`playback/`) — Media3/ExoPlayer 1.11.0 (Apache-2.0, Google's Maven). `SongPlayer` wraps the player; its real job is `SongClock`.
   - `SongClock` exists because `ExoPlayer.getCurrentPosition()` is callable only from the player's own thread and updates in coarse steps, while ~47 readings/s arrive on capture threads that must not touch the player. The owner re-anchors it once per frame; everyone else extrapolates with `System.nanoTime()` off a single volatile immutable time base, lock-free.
   - **It never runs backwards while playing.** Small backwards corrections are treated as jitter and ignored, since the scorer's cursor can't rewind. On backwards jitter the time base is left *untouched* rather than rewritten with the value it already yields — re-anchoring recomputes the same instant from a new origin and can land a bit lower in the last place, which a reader sees as the song stepping back. `lastCorrectionSeconds` publishes the jitter so it stays a measurement, not an assumption.
-  - **Sync is one number, not two** (`SyncCalibration`). Output latency and capture+analysis latency sit on the same path, so a reading describes `playerPosition(now) − total`. Always *subtracted* — readings describe the past, and flipping the sign doubles the error instead of removing it.
+  - **Sync is one number for scoring, but two for drawing** (`SyncCalibration`). Output and capture+analysis latency sit on the same path, so a *reading* describes `playerPosition(now) − total` (`songTimeFor`). Anything *on screen* must use the output share alone (`heardSongTimeFor`), since that is how far behind the player the singer's ears are. Both are always *subtracted* — they describe the past, and flipping the sign doubles the error instead of removing it.
   - `LatencyProbe` measures that number by listening for tones at known song positions; median, so one masked tone can't move it.
 
 **Sync calibration harness** — `assets/calibration.{wav,txt}` is a real UltraStar song of 16 tones at exactly 1.0–16.0 s, alternating A4/E4, generated and verified to the millisecond. Uncompressed **on purpose**: an MP3/AAC decoder's priming delay would land in the measurement and be indistinguishable from real output latency. Point a mic at the speaker and the mic hears the song itself, so the lag from a tone's written position to its detection *is* the round trip. `diagnostics/SyncCalibrationScreen.kt` loops it, adopting the measurement at the end of each pass and scoring the next one with it — a correctly calibrated system scores near 10000, because the "singer" is the song, exactly on pitch and in time.
@@ -103,13 +103,18 @@ Gotchas if you touch this code:
 
 **Not started:** song library scanning from the USB drive (SAF + persisted URI permissions), TV browse UI, two-player gameplay UI, settings.
 
-**Next up:** run the calibration on hardware to get the real latency number — it is the one thing the whole chain still lacks, and it needs the TV on with a mic at the speaker. Everything upstream of the acoustic loop is confirmed working on the device (see below). After that: song library scanning (SAF) and the gameplay UI.
+**Next up:** song library scanning from the USB drive (SAF + persisted URI permissions), then the gameplay UI.
 
-**Verified on hardware, and what is still open.** Both mics capture, ExoPlayer plays the calibration song, and passes complete every 17.80 s against a 17.5 s song — the 0.3 s is seek-and-rebuffer, so the clock tracks real time. The scorer reports `0/128 beats hit`: every beat is being judged, so readings flow capture → pitch → scorer end to end. All unvoiced because nothing audible is reaching the mic yet. **The latency number itself is still unmeasured.**
+**The whole chain is verified end to end on hardware.** Playing the calibration song with a mic at the speaker, the first pass scores **9766–9922 / 10000 (125–127 of 128 beats)** using the shipped 127 ms default. The "singer" is the song itself, so a correct system has to score near the maximum — that number is the proof that playback, capture, pitch detection, timing and scoring all agree.
 
-Two things learned on the device:
-- **Audio is re-encoded to E-AC3 for HDMI** on this Shield (`AudioOut_3D5`, type DIRECT). That path adds latency of exactly the kind the calibration measures — expect a number well above the 21 ms half-window default.
-- **Frame-driven loops stall when the display sleeps.** `withFrameNanos` simply stops resuming, so playback ran on with nothing advancing the game. `MainActivity` now sets `FLAG_KEEP_SCREEN_ON`, which gameplay needs regardless.
+**Measured latency: 127 ms round trip**, from four runs whose medians landed within 3 ms (124–132). This is now `SyncCalibration.DEFAULT_LATENCY_SECONDS`: a measured default, not a guess, because the app targets exactly one device and one TV.
+
+Findings worth keeping:
+- **Most of the 127 ms is Dolby.** The Shield re-encodes to E-AC3 for HDMI (`AudioOut_3D5`, type DIRECT) and the TV decodes it again. Switching the Shield's audio output away from Dolby would cut most of it — re-run the calibration if that or the TV ever changes.
+- **The split matters for what is drawn.** Scoring subtracts the whole 127 ms; lyrics and the pitch bar must subtract only the *output* share (~106 ms), because that is how far behind the player the singer's ears are. Rendering at the raw player position would push singers early and then score them for it. See `heardSongTimeFor` vs `songTimeFor`.
+- **The first note after playback starts is ~65 ms late**, every time (samples like `[192, 134, 121, 122, 130, …]`). The audio pipeline is still re-syncing. A median absorbs it, which is why the probe uses one — but expect the very first note of a real song to be judged slightly late.
+- Residual onset jitter is about ±15 ms, roughly one analysis hop plus room acoustics.
+- **Frame-driven loops stall when the display sleeps.** `withFrameNanos` simply stops resuming, so playback ran on with nothing advancing the game — this looked exactly like a hang. `MainActivity` now sets `FLAG_KEEP_SCREEN_ON`, which gameplay needs regardless.
 
 `PlayerScorer` is not thread-safe and capture runs on its own thread. Timestamp each reading where it is produced, then drive `update()` and read `snapshot()` from one thread — or take a lock, as `SyncCalibrationScreen` does, since its per-pass teardown races the capture threads.
 
