@@ -74,7 +74,13 @@ Gotchas if you touch this code:
 - Project: **"UltraStar Android(TV)"**, package `com.example.ultrastarandroidtv`, Kotlin, Android TV template.
 - Key Gradle config: Compose BOM `2026.06.00`, `androidx.tv:tv-material`, the **Compose Compiler Gradle plugin** (`org.jetbrains.kotlin.plugin.compose`, version-locked to Kotlin `2.2.10` — mandatory since Kotlin 2.0, and its absence causes a confusing compiler ICE rather than a clear error), `buildFeatures { compose = true }`, `externalNativeBuild` → `cpp/CMakeLists.txt`, `ndkVersion`, and `abiFilters = ["arm64-v8a"]` (the Shield is arm64-only, so don't build other ABIs).
 - **Dependencies come from Maven Central and Google only** — no custom repositories, and every runtime dependency is permissively licensed. This is deliberate: the repo may be opened publicly, and a personal Maven host is a durability risk (it can vanish and break builds years later) as well as a licence question. Check both before adding anything.
-- Deploys over network ADB (`adb connect <shield-ip>:5555`). The connection drops occasionally mid-install with `InstallException: EOF` — just `adb disconnect` + `adb connect` and retry, it's not a code problem.
+- Deploys over network ADB (`adb connect <shield-ip>:5555`). The connection drops occasionally mid-install with `InstallException: EOF` — just `adb disconnect` + `adb connect` and retry, it's not a code problem. If the device shows as `unauthorized`, the Shield is waiting on its "Allow USB debugging" prompt.
+- **`export MSYS_NO_PATHCONV=1` before any adb command with a device path.** Git Bash rewrites `/sdcard/foo` into `C:/Program Files/Git/sdcard/foo`, and `adb push` then fails with a baffling `remote secure_mkdirs failed`. Costs an hour if you don't know it.
+- **The whole TV UI can be driven from here**, which is how the song library and the document picker were tested without asking anyone to pick up a remote:
+  - `adb exec-out screencap -p > shot.png` then read the image — the fastest way to see what is actually on the TV.
+  - `adb shell uiautomator dump /sdcard/ui.xml` gives the view tree with `focused="true"` and `bounds`. Use it rather than guessing: several TV widgets show no visible focus ring, so a screenshot alone will convince you focus is lost when it isn't.
+  - **`input tap` coordinates are in 1920x1080, but `screencap` returns 3840x2160.** Halve screenshot coordinates or taps land off-screen and silently do nothing. Take bounds from the uiautomator dump instead, which is already in input space.
+  - The Shield sleeps on its own; `adb shell input keyevent KEYCODE_WAKEUP` before a test run. A sleeping display stalls anything driven by frame callbacks.
 - Build/test from the CLI needs `JAVA_HOME` set to Android Studio's bundled JBR: `export JAVA_HOME="C:/Program Files/Android/Android Studio/jbr"`.
 
 ## Current state
