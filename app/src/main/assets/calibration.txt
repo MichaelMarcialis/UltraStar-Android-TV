@@ -1,0 +1,25 @@
+#TITLE:Sync Calibration
+#ARTIST:UltraStar Android TV
+#MP3:calibration.wav
+#BPM:240
+#GAP:1000
+: 0 8 9 tone
+: 16 8 4 tone
+: 32 8 9 tone
+: 48 8 4 tone
+- 60
+: 64 8 9 tone
+: 80 8 4 tone
+: 96 8 9 tone
+: 112 8 4 tone
+- 124
+: 128 8 9 tone
+: 144 8 4 tone
+: 160 8 9 tone
+: 176 8 4 tone
+- 188
+: 192 8 9 tone
+: 208 8 4 tone
+: 224 8 9 tone
+: 240 8 4 tone
+E

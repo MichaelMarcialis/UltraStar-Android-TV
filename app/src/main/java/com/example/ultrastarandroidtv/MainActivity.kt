@@ -1,15 +1,22 @@
 package com.example.ultrastarandroidtv
 
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import com.example.ultrastarandroidtv.diagnostics.IsoCaptureScreen
+import com.example.ultrastarandroidtv.diagnostics.SyncCalibrationScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Nobody touches the remote while singing, and the screen going dark mid-song would
+        // take the whole game with it: Compose drives gameplay from frame callbacks, which
+        // stop being delivered the moment the display sleeps.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent {
-            IsoCaptureScreen()
+            // Still a test harness rather than real UI. `diagnostics/IsoCaptureScreen.kt` is
+            // the other one, for mic capture and pitch on their own.
+            SyncCalibrationScreen()
         }
     }
 }

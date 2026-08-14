@@ -63,4 +63,8 @@ dependencies {
 
     // Compose for TV
     implementation(libs.androidx.tv.material)
+
+    // Playback. Media3 is Apache-2.0 and comes from Google's Maven, so it satisfies the
+    // permissive-licence and no-custom-repository rules this project holds itself to.
+    implementation(libs.androidx.media3.exoplayer)
 }
