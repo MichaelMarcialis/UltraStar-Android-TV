@@ -81,6 +81,21 @@ class GameSettings(context: Context) {
         prefs.edit().putFloat(KEY_MIC_THRESHOLD, micThreshold).apply()
     }
 
+    /**
+     * The same dial as [micThreshold], the way round a person expects it: 0 to 1, where **1
+     * hears the most**.
+     *
+     * The stored value is a gate — how loud a sound must be before it counts — so raising it
+     * makes the microphone hear *less*. Exposing that directly under the word "sensitivity"
+     * had the slider running backwards against the plain meaning of the word: a sensitive
+     * microphone picks up more of the room, not less. The gate is what the audio code needs
+     * and the sensitivity is what a person reasons about, so the two are kept apart and
+     * converted in one place rather than left to whoever draws the screen.
+     */
+    val micSensitivity: Float get() = sensitivityOf(micThreshold)
+
+    fun updateMicSensitivity(sensitivity: Float) = updateMicThreshold(thresholdOf(sensitivity))
+
     companion object {
         /**
          * Well above `PitchTracker`'s own 0.01 noise floor.
@@ -93,5 +108,20 @@ class GameSettings(context: Context) {
          * ignores you too — which is why it is a slider rather than a constant.
          */
         const val DEFAULT_MIC_THRESHOLD = 0.06f
+
+        /** Gate → sensitivity: a high gate hears little, so it comes out near zero. */
+        fun sensitivityOf(threshold: Float): Float {
+            val range = SettingsRange.micThreshold
+            val span = range.endInclusive - range.start
+            return ((range.endInclusive - threshold) / span).coerceIn(0f, 1f)
+        }
+
+        /** Sensitivity → gate. The exact inverse of [sensitivityOf]. */
+        fun thresholdOf(sensitivity: Float): Float {
+            val range = SettingsRange.micThreshold
+            val span = range.endInclusive - range.start
+            return (range.endInclusive - sensitivity.coerceIn(0f, 1f) * span)
+                .coerceIn(range)
+        }
     }
 }

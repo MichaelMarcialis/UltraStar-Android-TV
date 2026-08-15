@@ -90,17 +90,14 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
 
         SettingRow(
             label = "Microphone sensitivity",
-            explanation = "Lower hears the whole room, including the other singer and the TV. Higher needs a voice right on the mic.",
-            value = settings.micThreshold.toDouble(),
-            range = SettingsRange.micThreshold.start.toDouble()..SettingsRange.micThreshold.endInclusive.toDouble(),
-            step = 0.005,
-            // Shown as a percentage of the way along the dial rather than as a raw RMS figure,
-            // which would mean nothing to anyone.
-            format = {
-                val span = SettingsRange.micThreshold.endInclusive - SettingsRange.micThreshold.start
-                "%d%%".format((((it - SettingsRange.micThreshold.start) / span) * 100).roundToInt())
-            },
-            onChange = { settings.updateMicThreshold(it.toFloat()) },
+            explanation = "Higher hears more of the room, including the other singer and the TV. Lower needs a voice close to the mic.",
+            // Sensitivity, not the underlying gate: a sensitive microphone picks up more, and a
+            // slider labelled this way has to move that way.
+            value = settings.micSensitivity.toDouble(),
+            range = 0.0..1.0,
+            step = 0.05,
+            format = { "%d%%".format((it * 100).roundToInt()) },
+            onChange = { settings.updateMicSensitivity(it.toFloat()) },
         )
 
         Spacer(Modifier.height(24.dp))
