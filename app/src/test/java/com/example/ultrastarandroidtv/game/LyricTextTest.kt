@@ -53,6 +53,24 @@ class LyricTextTest {
     }
 
     @Test
+    fun `a word continues across a held syllable in the middle of it`() {
+        // Straight from the card: "7 Years" charts "seven" as "se" "~" "ven ", with the tilde
+        // drawing nothing. Peeking only one note ahead saw an empty string, decided there was
+        // nothing to join to, and dropped the hyphen — but the word does continue, just not on
+        // the very next note. It showed up on the TV as "was se ven years old".
+        assertEquals(
+            listOf("was", "se-", "", "ven", "years"),
+            syllableTexts(line("was ", "se", "~", "ven ", "years ")),
+        )
+    }
+
+    @Test
+    fun `a word starting with a held syllable is hyphenated too`() {
+        // "Once" is charted "O" "~nce " in the same song.
+        assertEquals(listOf("O-", "nce"), syllableTexts(line("O", "~nce ")))
+    }
+
+    @Test
     fun `no hyphen is left pointing at nothing`() {
         // "hold" runs into the next syllable by the space rule, but that syllable draws no
         // text — a dangling hyphen would be worse than none.

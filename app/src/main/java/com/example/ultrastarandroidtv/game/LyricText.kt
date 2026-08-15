@@ -25,18 +25,35 @@ import com.example.ultrastarandroidtv.song.Note
 fun syllableTexts(notes: List<Note>): List<String> {
     val cleaned = notes.map { it.text.replace("~", "").trim() }
 
+    /**
+     * Whether the word starting at [index] carries on to a syllable that is actually drawn.
+     *
+     * Walking rather than peeking at the next note, because a held syllable sits between them:
+     * "seven" is charted as `"se"` `"~"` `"ven "`, and the tilde draws nothing. Peeking one
+     * ahead saw an empty string, concluded there was nothing to join to, and dropped the
+     * hyphen — the word continues, just not on the very next note.
+     */
+    fun wordContinuesFrom(index: Int): Boolean {
+        var i = index
+        while (true) {
+            // The raw text decides this, not the cleaned one: it is the trailing space that
+            // carries the meaning, and trimming is exactly what throws it away.
+            val raw = notes[i].text
+            if (raw.isEmpty() || raw.last().isWhitespace()) return false
+
+            i++
+            if (i >= cleaned.size) return false
+            if (cleaned[i].isNotEmpty()) return true
+            // Otherwise this note draws nothing; keep walking, the word may continue past it.
+        }
+    }
+
     return notes.indices.map { i ->
         val text = cleaned[i]
-        if (text.isEmpty()) return@map ""
-
-        // The raw text decides this, not the cleaned one: it is the trailing space that carries
-        // the meaning, and trimming is exactly what throws it away.
-        val runsIntoNext = notes[i].text.isNotEmpty() && !notes[i].text.last().isWhitespace()
-
-        // No hyphen pointing at nothing — the next note may be a bare tilde that draws no text,
-        // or this may be the last syllable on the line.
-        val nextIsVisible = i + 1 < cleaned.size && cleaned[i + 1].isNotEmpty()
-
-        if (runsIntoNext && nextIsVisible) "$text-" else text
+        when {
+            text.isEmpty() -> ""
+            wordContinuesFrom(i) -> "$text-"
+            else -> text
+        }
     }
 }
