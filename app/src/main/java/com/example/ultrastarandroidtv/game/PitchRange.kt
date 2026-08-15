@@ -6,44 +6,50 @@ import kotlin.math.exp
 private const val MAX_STEP_SECONDS = 0.1
 
 /**
- * The slice of pitch the track is drawing, following the passage being sung.
+ * Which slice of pitch the track is showing.
  *
- * A real song is wide — "Free" covers 22 semitones — so a fixed scale over the whole range
- * leaves any one phrase in a third of the height, with the intervals too small to read and the
- * notes bunched wherever that phrase happens to sit. Following the visible notes instead gives
- * every passage the full height.
+ * **The span never changes — only the centre moves.** A range that resized to fit each passage
+ * made the notes visibly stretch and squash as the melody moved, which is distracting out of all
+ * proportion to what it buys. Holding the span fixed means a semitone is the same distance on
+ * screen for the whole song, so the shape of a phrase is something the eye can learn.
  *
- * The cost of following is that the ground can move under the singer, so it is eased rather
- * than snapped: the range slides toward its target with a time constant, which reads as the
- * view panning gently and never as a jump. Easing is done against elapsed song time rather than
- * per frame, so a dropped frame slows nothing down and the motion is the same whatever the
- * display is doing.
+ * The centre still has to move, because real songs are wide: "Free" spans 22 semitones, so a
+ * view locked to one place would leave whole verses off the track. It moves as little as
+ * possible — a **deadband** keeps it perfectly still until the notes start pressing against an
+ * edge, so most of the song is spent completely motionless, and when it does move it eases
+ * rather than jumps.
+ *
+ * Easing is measured against *song time* rather than per frame, so a dropped frame does not
+ * change how fast the view travels.
  *
  * Not thread-safe; owned by the draw pass, which is single-threaded.
+ *
+ * @param spanSemitones how much pitch is on screen at once. See
+ *   [TrackGeometry.visibleSpanSemitones], which sizes it from the song.
+ * @param deadbandSemitones how close to the edge a note may get before the view re-centres.
+ * @param secondsToSettle roughly how long a re-centre takes.
  */
 class PitchRange(
-    private val minSpanSemitones: Float = 11f,
-    private val paddingSemitones: Float = 2.5f,
-    /** Roughly how long the view takes to settle after the melody moves. */
-    private val secondsToSettle: Double = 0.4,
+    private val spanSemitones: Float,
+    private val deadbandSemitones: Float = 1.5f,
+    private val secondsToSettle: Double = 0.5,
 ) {
-    var low: Float = Float.NaN
-        private set
-
-    var high: Float = Float.NaN
-        private set
-
+    private var centre = Float.NaN
+    private var targetCentre = Float.NaN
     private var lastNowSeconds = Double.NaN
 
     /** False until the first passage has been seen and there is anything to draw against. */
-    val isReady: Boolean get() = !low.isNaN()
+    val isReady: Boolean get() = !centre.isNaN()
+
+    val low: Float get() = centre - spanSemitones / 2f
+    val high: Float get() = centre + spanSemitones / 2f
 
     /**
-     * Eases toward covering [target] at song time [nowSeconds].
+     * Eases toward showing [target] at song time [nowSeconds].
      *
-     * A null [target] — nothing on screen, during an intro or a long rest — holds the current
-     * range rather than collapsing it, so the notes after the rest arrive where the singer last
-     * saw them instead of sliding in from somewhere else.
+     * A null [target] — nothing on screen, during an intro or a long rest — holds the view where
+     * it is rather than drifting somewhere neutral, so the notes after the rest arrive where the
+     * singer was already looking.
      */
     fun follow(target: IntRange?, nowSeconds: Double) {
         val step = when {
@@ -53,32 +59,29 @@ class PitchRange(
         lastNowSeconds = nowSeconds
         if (target == null) return
 
-        var wantLow = target.first - paddingSemitones
-        var wantHigh = target.last + paddingSemitones
-
-        // A phrase sitting on one note would otherwise be magnified until a semitone of wobble
-        // looked like a leap.
-        val shortfall = minSpanSemitones - (wantHigh - wantLow)
-        if (shortfall > 0f) {
-            wantLow -= shortfall / 2f
-            wantHigh += shortfall / 2f
-        }
+        val wanted = (target.first + target.last) / 2f
 
         if (!isReady) {
-            low = wantLow
-            high = wantHigh
+            centre = wanted
+            targetCentre = wanted
             return
         }
 
+        // Only chase the melody when it is actually running out of room. Re-centring on every
+        // small move would put the whole track in constant gentle motion for no benefit.
+        val half = spanSemitones / 2f
+        val crowdingBottom = target.first < targetCentre - half + deadbandSemitones
+        val crowdingTop = target.last > targetCentre + half - deadbandSemitones
+        if (crowdingBottom || crowdingTop) targetCentre = wanted
+
         val approach = (1.0 - exp(-step / secondsToSettle)).toFloat()
-        low += (wantLow - low) * approach
-        high += (wantHigh - high) * approach
+        centre += (targetCentre - centre) * approach
     }
 
     /** Forgets where it was, so the next passage is snapped to rather than slid toward. */
     fun reset() {
-        low = Float.NaN
-        high = Float.NaN
+        centre = Float.NaN
+        targetCentre = Float.NaN
         lastNowSeconds = Double.NaN
     }
 }

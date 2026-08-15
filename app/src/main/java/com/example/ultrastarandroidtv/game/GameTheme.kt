@@ -61,11 +61,26 @@ object GameTheme {
     val playhead = Color(0x66FFFFFF)
     val playheadWidth = 2.dp
 
+    // ---- Pitch arrow ------------------------------------------------------------------------
+
+    /** Height of the arrow, tip to tail. */
+    val arrowHeight = 30.dp
+
+    /** How far it reaches toward the sing line. */
+    val arrowWidth = 24.dp
+
+    /** Clearance between the arrow's tip and the sing line, so the two never merge. */
+    val arrowGap = 8.dp
+
+    /** A soft halo behind the arrow, so it stays findable against a busy note field. */
+    const val arrowGlowScale = 2.0f
+
+    fun arrowGlow(player: Color): Color = player.copy(alpha = 0.20f)
+
     // ---- Dimensions -------------------------------------------------------------------------
 
     val noteHeight = 18.dp
     val noteGapSeconds = 0.012 // Trimmed off each note's end so neighbours do not fuse into one bar.
-    val traceWidth = 5.dp
     val trackPadding = 20.dp
 
     /** Reserved under the notes for the syllables, which scroll on the same axis. */

@@ -41,6 +41,13 @@ class TrackGeometryTest {
 
     private val geometry = TrackGeometry(part, beats)
 
+    /**
+     * Pinned to five seconds on screen, so the windowing tests below describe the arithmetic
+     * rather than whatever the default happens to be. The default is a matter of taste and has
+     * already moved once; these rules have not.
+     */
+    private val windowed = TrackGeometry(part, beats, windowSeconds = 5.0)
+
     @Test
     fun `placements line up with the scorer's notes, index for index`() {
         // The trace is looked up by index against PlayerScorer.noteScores. If these two ever
@@ -136,30 +143,70 @@ class TrackGeometryTest {
     }
 
     @Test
+    fun `the visible span is sized by a typical line, not by the song's extremes`() {
+        // One screamed high note must not shrink every verse for the whole song. "Free" spans
+        // 22 semitones overall while its individual phrases are far narrower — sizing from the
+        // maximum is what squashed every passage into a third of the height.
+        val wide = VoicePart(
+            label = null,
+            lines = List(10) { line ->
+                // Nine ordinary lines covering four semitones, and one that leaps two octaves.
+                val pitches = if (line == 9) listOf(0, 24) else listOf(0, 4)
+                LyricLine(
+                    notes = pitches.mapIndexed { i, pitch ->
+                        Note(NoteType.NORMAL, startBeat = line * 8 + i * 4, durationBeats = 4, pitch = pitch, text = "la")
+                    },
+                    lineBreakBeat = null,
+                )
+            },
+        )
+
+        val span = TrackGeometry(wide, beats).visibleSpanSemitones
+
+        assertTrue("span was $span", span < 20)
+        assertTrue("but still fits an ordinary line", span >= 8)
+    }
+
+    @Test
+    fun `the visible span stays readable for a song that barely moves`() {
+        val flat = VoicePart(
+            label = null,
+            lines = listOf(
+                LyricLine(
+                    notes = listOf(Note(NoteType.NORMAL, 0, 4, 0, "one")),
+                    lineBreakBeat = null,
+                ),
+            ),
+        )
+
+        assertTrue(TrackGeometry(flat, beats).visibleSpanSemitones >= 12)
+    }
+
+    @Test
     fun `only the notes touching the window are visible`() {
         // At time zero the window runs -1.5 to 3.5 s, which covers the first two notes but
         // stops short of the third at 4 s.
-        assertEquals(0 until 2, geometry.visibleIndices(0.0))
+        assertEquals(0 until 2, windowed.visibleIndices(0.0))
     }
 
     @Test
     fun `a note is still visible while it is only part way past the left edge`() {
         // Window 4.5 to 9.5 s. The last note runs 4 to 5 s, so it has started to leave but is
-        // still on screen — dropping it here would make notes vanish mid-trace.
-        assertEquals(2 until 3, geometry.visibleIndices(6.0))
+        // still on screen — dropping it here would make notes vanish as they were being sung.
+        assertEquals(2 until 3, windowed.visibleIndices(6.0))
     }
 
     @Test
     fun `nothing is visible once the song has run out of notes`() {
-        assertTrue(geometry.visibleIndices(20.0).isEmpty())
+        assertTrue(windowed.visibleIndices(20.0).isEmpty())
     }
 
     @Test
     fun `the active note is the one being sung, and there is none during a rest`() {
-        assertEquals(0, geometry.activeIndex(0.5))
-        assertEquals(1, geometry.activeIndex(1.5))
-        assertNull("nothing is sung in the gap", geometry.activeIndex(3.0))
-        assertEquals(2, geometry.activeIndex(4.5))
+        assertEquals(0, windowed.activeIndex(0.5))
+        assertEquals(1, windowed.activeIndex(1.5))
+        assertNull("nothing is sung in the gap", windowed.activeIndex(3.0))
+        assertEquals(2, windowed.activeIndex(4.5))
     }
 
     @Test

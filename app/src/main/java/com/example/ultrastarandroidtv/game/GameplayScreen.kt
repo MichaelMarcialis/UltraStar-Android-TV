@@ -41,13 +41,18 @@ import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.playback.SyncCalibration
 import com.example.ultrastarandroidtv.score.ScoreSnapshot
 import com.example.ultrastarandroidtv.song.UltraStarSong
+import kotlin.math.roundToInt
 
 private const val TAG = "Gameplay"
 
 /** How far one press of left/right moves the visible window, while tuning it on the TV. */
-private const val WINDOW_STEP_SECONDS = 0.5
-private const val MIN_WINDOW_SECONDS = 2.0
+private const val WINDOW_STEP_SECONDS = 0.25
+private const val MIN_WINDOW_SECONDS = 1.0
 private const val MAX_WINDOW_SECONDS = 12.0
+
+/** Up/down nudge the display lead, in seconds. Small, because the eye can resolve about this. */
+private const val LEAD_STEP_SECONDS = 0.01
+private const val MAX_LEAD_SECONDS = 0.3
 
 /** One track on screen: a voice part, and whoever is singing it. */
 private class TrackSpec(
@@ -81,6 +86,7 @@ fun GameplayScreen(
     var scores by remember { mutableStateOf<List<ScoreSnapshot>>(emptyList()) }
     var finished by remember { mutableStateOf(false) }
     var windowSeconds by remember { mutableStateOf(DEFAULT_WINDOW_SECONDS) }
+    var displayLead by remember { mutableStateOf(SyncCalibration.DEFAULT_DISPLAY_LEAD_SECONDS) }
     var notice by remember { mutableStateOf<String?>(null) }
 
     val focus = remember { FocusRequester() }
@@ -137,7 +143,9 @@ fun GameplayScreen(
                     TAG,
                     "%.1fs  ".format(position) + session.singers.joinToString("  ") {
                         val s = it.snapshot()
-                        "${it.name}: ${s.beatsHit}/${s.beatsScored} beats, ${s.total} pts"
+                        val pitch =
+                            if (it.currentMidi.isNaN()) "silent" else "%.1f".format(it.currentMidi)
+                        "${it.name}: ${s.beatsHit}/${s.beatsScored} beats, ${s.total} pts, $pitch"
                     },
                 )
             }
@@ -185,6 +193,19 @@ fun GameplayScreen(
                             (windowSeconds + WINDOW_STEP_SECONDS).coerceAtMost(MAX_WINDOW_SECONDS)
                         true
                     }
+                    // Up/down dial in how far ahead to draw. Nothing has measured the TV's own
+                    // display lag, and the only instrument that can is someone watching and
+                    // listening at once: raise it until the lyric meets the line as it is sung.
+                    Key.DirectionUp -> {
+                        displayLead = (displayLead + LEAD_STEP_SECONDS).coerceAtMost(MAX_LEAD_SECONDS)
+                        session.calibration.displayLeadSeconds = displayLead
+                        true
+                    }
+                    Key.DirectionDown -> {
+                        displayLead = (displayLead - LEAD_STEP_SECONDS).coerceAtLeast(0.0)
+                        session.calibration.displayLeadSeconds = displayLead
+                        true
+                    }
                     Key.Back -> {
                         onExit()
                         true
@@ -194,7 +215,7 @@ fun GameplayScreen(
             },
     ) {
         Column(modifier = Modifier.fillMaxSize().padding(GameTheme.trackPadding)) {
-            SongHeading(song, windowSeconds, notice)
+            SongHeading(song, windowSeconds, displayLead, notice)
 
             tracks.forEach { track ->
                 TrackPanel(
@@ -213,7 +234,12 @@ fun GameplayScreen(
 }
 
 @Composable
-private fun SongHeading(song: UltraStarSong, windowSeconds: Double, notice: String?) {
+private fun SongHeading(
+    song: UltraStarSong,
+    windowSeconds: Double,
+    displayLead: Double,
+    notice: String?,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -235,7 +261,7 @@ private fun SongHeading(song: UltraStarSong, windowSeconds: Double, notice: Stri
             Spacer(Modifier.width(16.dp))
         }
         Text(
-            "◀ %.1fs ▶".format(windowSeconds),
+            "◀ %.2fs ▶     ▲ lead %d ms ▼".format(windowSeconds, (displayLead * 1000).roundToInt()),
             style = MaterialTheme.typography.bodySmall,
             color = GameTheme.lyricIdle,
         )
@@ -254,6 +280,7 @@ private fun TrackPanel(
             Trace(
                 noteScores = singer.scorer.noteScores,
                 color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                currentMidi = { singer.currentMidi },
             )
         }
     }

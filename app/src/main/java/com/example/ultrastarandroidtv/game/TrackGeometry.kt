@@ -5,8 +5,14 @@ import com.example.ultrastarandroidtv.song.BeatTimeConverter
 import com.example.ultrastarandroidtv.song.Note
 import com.example.ultrastarandroidtv.song.VoicePart
 
-/** Seconds of song visible across the full width of a track. */
-const val DEFAULT_WINDOW_SECONDS: Double = 5.0
+/**
+ * Seconds of song visible across the full width of a track.
+ *
+ * Tuned on the TV, not chosen on paper. Five seconds looked like a reasonable amount of
+ * lookahead and crowded the lyrics badly — the narrower the window, the more pixels each second
+ * of song gets, and 2.5 s is where real lyrics stopped fighting each other for room.
+ */
+const val DEFAULT_WINDOW_SECONDS: Double = 2.5
 
 /**
  * Where "now" sits across the width, as a fraction from the left.
@@ -18,6 +24,9 @@ const val DEFAULT_PLAYHEAD_FRACTION: Float = 0.3f
 
 /** A song with a narrow range would otherwise be stretched until a semitone looked like a leap. */
 private const val MIN_SPAN_SEMITONES = 12
+
+/** Past this, intervals get too small to read across a living room; wide phrases are clamped. */
+private const val MAX_SPAN_SEMITONES = 22
 
 /** A note with its timing and pitch worked out once, in the units the track draws in. */
 class PlacedNote(
@@ -99,6 +108,35 @@ class TrackGeometry(
     }
 
     private val span: Float = (highMidi - lowMidi).toFloat()
+
+    /**
+     * How many semitones the track shows at once — fixed for the whole song, so the vertical
+     * scale never changes while it plays.
+     *
+     * A scale that adapts as the melody moves means the notes visibly stretch and squash, which
+     * is distracting in a way that is hard to ignore once seen. So the span is decided once, and
+     * only the *centre* of the view is allowed to move afterwards.
+     *
+     * Sized from what a typical line of this song actually covers rather than from its global
+     * extremes: one screamed high note should not shrink every verse for the whole song. The
+     * ninetieth percentile of the per-line ranges keeps almost every phrase comfortably inside
+     * the view while ignoring the outliers that a maximum would be ruled by.
+     */
+    val visibleSpanSemitones: Int = run {
+        val lineSpans = placements
+            .groupBy { it.lineIndex }
+            .values
+            .filter { it.isNotEmpty() }
+            .map { line -> line.maxOf { it.midi } - line.minOf { it.midi } }
+            .sorted()
+
+        val typical = if (lineSpans.isEmpty()) {
+            0
+        } else {
+            lineSpans[((lineSpans.size - 1) * 0.9).toInt()]
+        }
+        (typical + 2 * paddingSemitones).coerceIn(MIN_SPAN_SEMITONES, MAX_SPAN_SEMITONES)
+    }
 
     /** Horizontal position of song time [seconds] when the song has reached [nowSeconds]. */
     fun xFor(seconds: Double, nowSeconds: Double, width: Float): Float =

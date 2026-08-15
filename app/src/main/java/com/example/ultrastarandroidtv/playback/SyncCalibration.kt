@@ -52,11 +52,34 @@ class SyncCalibration(
         playerPositionSeconds - totalLatencySeconds
 
     /**
-     * Song position the singer is currently *hearing* — what lyrics and the pitch bar should be
-     * drawn against, so the display agrees with the sound rather than with the decoder.
+     * How long after this app draws a frame the TV actually shows it.
+     *
+     * The third delay, and the one originally missed. Output and capture latency both describe
+     * *sound*; this describes *light*, and it runs the other way — a frame drawn now is seen
+     * later, so the song time it depicts has to be pushed **forward** to compensate. It is
+     * therefore added where the other two are subtracted.
+     *
+     * It exists because a frame is composited, handed to the display pipeline and then processed
+     * by the TV before any of it reaches an eye, and TVs do a great deal of processing unless
+     * they are in game mode. Left uncorrected it shows up exactly as reported from the sofa: the
+     * lyric is sung a moment before it reaches the line.
+     *
+     * Tunable live from the gameplay screen, because the only instrument that can measure it is
+     * a person watching the TV and listening to the song at the same time.
+     */
+    @Volatile
+    var displayLeadSeconds: Double = DEFAULT_DISPLAY_LEAD_SECONDS
+
+    /**
+     * Song position to draw, so that what appears on the TV lines up with what is coming out of
+     * the speakers at the moment the singer sees it.
+     *
+     * The sound is [outputLatencySeconds] behind the player by the time it reaches the room, and
+     * the picture is [displayLeadSeconds] behind this call by the time it reaches the screen.
+     * Correcting only the first leaves the picture late by the second.
      */
     fun heardSongTimeFor(playerPositionSeconds: Double): Double =
-        playerPositionSeconds - outputLatencySeconds
+        playerPositionSeconds - outputLatencySeconds + displayLeadSeconds
 
     companion object {
         /**
@@ -76,5 +99,15 @@ class SyncCalibration(
          * output is switched away from Dolby, which is most of this number.
          */
         const val DEFAULT_LATENCY_SECONDS: Double = 0.127
+
+        /**
+         * Starts at zero: unlike the round trip, nothing has measured this yet.
+         *
+         * It is known to be non-zero — with no correction at all, lyrics on this TV visibly
+         * reach the line after they are sung — but guessing a value would only make the number
+         * that eventually gets dialled in harder to trust. Tune it on the gameplay screen and
+         * replace this with what it settles on, the way the 127 ms above was arrived at.
+         */
+        const val DEFAULT_DISPLAY_LEAD_SECONDS: Double = 0.0
     }
 }

@@ -7,7 +7,8 @@ import org.junit.Test
 
 class PitchRangeTest {
 
-    private val range = PitchRange()
+    private val span = 16f
+    private val range = PitchRange(spanSemitones = span)
 
     @Test
     fun `it has nothing to say until it has seen a passage`() {
@@ -25,74 +26,89 @@ class PitchRangeTest {
     }
 
     @Test
-    fun `a passage is padded so its extremes are not flush against the edge`() {
-        range.follow(60..72, 0.0)
-
-        assertTrue(range.low < 60f)
-        assertTrue(range.high > 72f)
-    }
-
-    @Test
-    fun `a passage on one note is not magnified until a wobble looks like a leap`() {
-        range.follow(60..60, 0.0)
-
-        assertTrue("span was ${range.high - range.low}", range.high - range.low >= 11f)
-        assertTrue("the note should sit near the middle", 60f - range.low in 4f..7f)
-    }
-
-    @Test
-    fun `moving to a new passage slides rather than jumps`() {
-        range.follow(60..64, 0.0)
-        val startedAt = range.low
-
-        range.follow(76..80, 0.016)
-
-        assertTrue("it should have moved", range.low > startedAt)
-        assertTrue("but not arrived in one frame", range.low < 70f)
-    }
-
-    @Test
-    fun `it does arrive, given a moment`() {
-        range.follow(60..64, 0.0)
+    fun `the span never changes, whatever the melody does`() {
+        // This is the whole point. A range that resized to fit each passage made the notes
+        // visibly stretch and squash as the melody moved, which was distracting on the TV out
+        // of all proportion to what it bought.
+        range.follow(60..61, 0.0)
+        assertEquals(span, range.high - range.low, 1e-4f)
 
         var t = 0.0
-        repeat(200) {
-            t += 0.016
-            range.follow(76..80, t)
+        for (target in listOf(48..72, 60..60, 70..84, 55..58)) {
+            repeat(30) {
+                t += 0.016
+                range.follow(target, t)
+                assertEquals("span moved at t=$t", span, range.high - range.low, 1e-4f)
+            }
         }
-
-        // Same rule the first snap uses: padded to 73.5..82.5, then widened to the 11-semitone
-        // minimum span because a four-semitone passage does not fill the track on its own.
-        assertEquals(72.5f, range.low, 0.2f)
-        assertEquals(83.5f, range.high, 0.2f)
     }
 
     @Test
-    fun `an empty window holds the range instead of collapsing it`() {
-        // Long rests and intros have nothing on screen. Collapsing to some default would mean
-        // the notes after the rest slid in from somewhere the singer was not looking.
+    fun `the view holds perfectly still while the melody stays clear of the edges`() {
+        // Most of a song should be spent motionless. Re-centring on every small move would put
+        // the whole track in constant gentle drift for no benefit.
         range.follow(60..64, 0.0)
         val low = range.low
-        val high = range.high
+
+        var t = 0.0
+        repeat(60) {
+            t += 0.016
+            range.follow(61..65, t)
+        }
+
+        assertEquals(low, range.low, 1e-4f)
+    }
+
+    @Test
+    fun `it re-centres once the melody presses against an edge`() {
+        range.follow(60..64, 0.0)
+        val before = range.low
+
+        var t = 0.0
+        repeat(120) {
+            t += 0.016
+            range.follow(74..78, t)
+        }
+
+        assertTrue("it should have panned up", range.low > before)
+        assertTrue("and brought the passage inside", range.low <= 74f && range.high >= 78f)
+    }
+
+    @Test
+    fun `re-centring slides rather than jumping`() {
+        range.follow(60..64, 0.0)
+        val before = range.low
+
+        range.follow(80..84, 0.016)
+
+        assertTrue("it should have moved", range.low > before)
+        assertTrue("but not arrived in one frame", range.low < before + 4f)
+    }
+
+    @Test
+    fun `an empty window holds the view instead of drifting somewhere neutral`() {
+        // Long rests and intros have nothing on screen. Moving during them would mean the notes
+        // after the rest arrive somewhere the singer was not looking.
+        range.follow(60..64, 0.0)
+        val low = range.low
 
         range.follow(null, 0.5)
         range.follow(null, 1.0)
 
         assertEquals(low, range.low, 1e-6f)
-        assertEquals(high, range.high, 1e-6f)
     }
 
     @Test
     fun `a long stall does not teleport the view`() {
         // A paused song, a stalled frame or a restart can hand this a huge time step. Treating
-        // it literally would snap the range across in a single frame, which is the one thing
-        // the easing exists to prevent.
+        // it literally would snap the view across in one frame, which is what the easing exists
+        // to prevent.
         range.follow(60..64, 0.0)
-        val startedAt = range.low
+        val before = range.low
 
-        range.follow(76..80, 60.0)
+        range.follow(80..84, 60.0)
 
-        assertTrue("it should have moved", range.low > startedAt)
+        assertTrue("it should have moved", range.low > before)
         assertTrue("but not all the way", range.low < 70f)
     }
 
@@ -101,7 +117,7 @@ class PitchRangeTest {
         range.follow(60..64, 5.0)
         val low = range.low
 
-        range.follow(76..80, 4.0)
+        range.follow(80..84, 4.0)
 
         assertEquals("a negative step must not move it", low, range.low, 1e-6f)
     }
@@ -113,7 +129,7 @@ class PitchRangeTest {
 
         assertFalse(range.isReady)
 
-        range.follow(76..80, 1.0)
-        assertTrue(range.low > 70f)
+        range.follow(80..84, 1.0)
+        assertTrue(range.low <= 80f && range.high >= 84f)
     }
 }

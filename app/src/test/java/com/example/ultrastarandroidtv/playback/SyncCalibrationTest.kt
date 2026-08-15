@@ -37,6 +37,36 @@ class SyncCalibrationTest {
     }
 
     @Test
+    fun `the display lead pushes what is drawn forward, not back`() {
+        // The two audio latencies describe sound that has already happened, so they come off.
+        // This one describes a frame that has not been seen yet, so it goes on. Getting the
+        // sign wrong here would double the very lateness it exists to cancel.
+        val before = measured.heardSongTimeFor(10.0)
+        measured.displayLeadSeconds = 0.05
+
+        assertEquals(before + 0.05, measured.heardSongTimeFor(10.0), 1e-9)
+        measured.displayLeadSeconds = 0.0
+    }
+
+    @Test
+    fun `the display lead does not touch scoring`() {
+        // It corrects where a picture lands on a screen. A pitch reading never went near the
+        // screen, so applying it there would score singers against a delay they never heard.
+        val before = measured.songTimeFor(10.0)
+        measured.displayLeadSeconds = 0.08
+
+        assertEquals(before, measured.songTimeFor(10.0), 1e-9)
+        measured.displayLeadSeconds = 0.0
+    }
+
+    @Test
+    fun `nothing has measured the display lead yet, so it starts at zero`() {
+        // Known non-zero on this TV, but a guessed default would only make the number that
+        // eventually gets dialled in harder to trust.
+        assertEquals(0.0, SyncCalibration().displayLeadSeconds, 1e-12)
+    }
+
+    @Test
     fun `a measurement below this app's own share claims no output latency, not a negative one`() {
         assertEquals(0.0, SyncCalibration(totalLatencySeconds = 0.001).outputLatencySeconds, 1e-9)
     }

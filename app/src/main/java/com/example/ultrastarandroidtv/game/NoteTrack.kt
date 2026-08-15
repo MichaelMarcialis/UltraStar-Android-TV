@@ -11,7 +11,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
@@ -25,10 +25,16 @@ import com.example.ultrastarandroidtv.score.isGolden
 import com.example.ultrastarandroidtv.song.NoteType
 import kotlin.math.ceil
 
-/** One singer's line on a track: what they scored, and the colour they are drawn in. */
+/**
+ * One singer on a track: what they have scored, what they are singing now, and their colour.
+ *
+ * @param currentMidi the singer's live pitch, read fresh every frame — this drives the arrow,
+ *   and unlike [noteScores] it has something to say between notes and during rests.
+ */
 class Trace(
     val noteScores: List<NoteScore>,
     val color: Color,
+    val currentMidi: () -> Float,
 )
 
 /**
@@ -71,8 +77,15 @@ fun NoteTrack(
         }
     }
 
-    // Follows the passage being sung; see PitchRange for why a fixed scale does not work.
-    val pitchRange = remember(geometry) { PitchRange() }
+    // Pans to follow the melody; the span is fixed for the song so the scale never changes.
+    val pitchRange = remember(geometry) {
+        PitchRange(spanSemitones = geometry.visibleSpanSemitones.toFloat())
+    }
+
+    // Per-singer arrow smoothing and one reusable Path, both kept out of the draw loop so a
+    // frame allocates nothing.
+    val motions = remember(geometry, traces.size) { List(traces.size) { ArrowMotion() } }
+    val arrowPath = remember { Path() }
 
     BoxWithConstraints(modifier) {
         val widthPx = constraints.maxWidth.toFloat()
@@ -87,7 +100,7 @@ fun NoteTrack(
         }
 
         Canvas(modifier = Modifier.fillMaxSize().clipToBounds()) {
-            drawTrack(geometry, traces, syllables, lyrics, pitchRange, now())
+            drawTrack(geometry, traces, motions, syllables, lyrics, pitchRange, arrowPath, now())
         }
     }
 }
@@ -95,9 +108,11 @@ fun NoteTrack(
 private fun DrawScope.drawTrack(
     geometry: TrackGeometry,
     traces: List<Trace>,
+    motions: List<ArrowMotion>,
     syllables: List<TextLayoutResult>,
     lyrics: LyricLayout,
     pitchRange: PitchRange,
+    arrowPath: Path,
     nowSeconds: Double,
 ) {
     val width = size.width
@@ -124,7 +139,6 @@ private fun DrawScope.drawTrack(
     if (!visible.isEmpty()) {
         drawNotes(geometry, visible, active, nowSeconds, width, noteArea, noteHeight, low, high)
         drawHits(geometry, traces, visible, nowSeconds, width, noteArea, noteHeight, low, high)
-        drawTraces(geometry, traces, visible, nowSeconds, width, noteArea, low, high)
         drawLyrics(geometry, syllables, lyrics, visible, active, nowSeconds, width, lyricLane)
     }
 
@@ -134,6 +148,12 @@ private fun DrawScope.drawTrack(
         start = Offset(playheadX, 0f),
         end = Offset(playheadX, size.height),
         strokeWidth = GameTheme.playheadWidth.toPx(),
+    )
+
+    // Last, so the arrows sit above both the notes and the line they point at.
+    drawArrows(
+        geometry, traces, motions, visible, active, nowSeconds,
+        width, noteArea, low, high, arrowPath,
     )
 }
 
@@ -252,56 +272,89 @@ private fun DrawScope.drawHits(
 }
 
 /**
- * Each singer's pitch, plotted at the instants the scorer judged it.
+ * One arrow per singer, at the sing line, showing where their voice is this instant.
  *
- * Drawn per note rather than as one continuous line: joining the last beat of one note to the
- * first of the next would draw a confident stroke straight across a rest nobody sang.
+ * This replaced a line plotted across every beat already sung. The line carried more data and
+ * read as less: the singer's own history is already told by the notes lighting up behind the
+ * sing line, so the plot mostly restated it in a second visual language while cluttering the
+ * field of notes they were trying to read ahead in. An arrow says the one thing the notes
+ * cannot — *where your voice is right now* — and says it in the one place the eye is already
+ * looking.
+ *
+ * It sits just left of the line and points at it, so pitch is read as a vertical gap between
+ * arrow and note: level means right, and which way to move is immediately obvious.
+ *
+ * Pitch is folded into the drawn octave first, since scoring is octave-agnostic and an arrow
+ * pinned to the floor of the track while the score climbed would read as a bug.
  */
-private fun DrawScope.drawTraces(
+private fun DrawScope.drawArrows(
     geometry: TrackGeometry,
     traces: List<Trace>,
+    motions: List<ArrowMotion>,
     visible: IntRange,
+    active: Int?,
     nowSeconds: Double,
     width: Float,
     noteArea: Float,
     low: Float,
     high: Float,
+    path: Path,
 ) {
-    val stroke = GameTheme.traceWidth.toPx()
+    // Fold against whatever the singer is nearest to being asked for: the note under the line
+    // if there is one, otherwise the closest one on screen, so the arrow keeps its bearings
+    // through rests instead of jumping an octave the moment a note ends.
+    val reference = active ?: nearestIndex(geometry, visible, nowSeconds)
+    val referenceMidi = reference?.let { geometry.placements[it].midi }
 
-    for (trace in traces) {
-        for (i in visible) {
-            val placed = geometry.placements[i]
-            val score = trace.noteScores.getOrNull(i) ?: continue
+    val tipX = width * geometry.playheadFraction - GameTheme.arrowGap.toPx()
+    val arrowWidth = GameTheme.arrowWidth.toPx()
+    val halfHeight = GameTheme.arrowHeight.toPx() / 2f
 
-            var joined = false
-            var previousX = 0f
-            var previousY = 0f
+    traces.forEachIndexed { index, trace ->
+        val motion = motions.getOrNull(index) ?: return@forEachIndexed
+        val raw = trace.currentMidi()
+        val folded = if (raw.isNaN() || referenceMidi == null) raw else foldToOctaveNear(raw, referenceMidi)
 
-            for (beat in placed.beatMidSeconds.indices) {
-                val sung = score.sungMidi(beat)
-                if (sung.isNaN()) {
-                    // A beat with nothing on it breaks the line, which is how silence is told
-                    // apart from a wrong note.
-                    joined = false
-                    continue
-                }
+        val midi = motion.update(folded, nowSeconds)
+        if (midi.isNaN()) return@forEachIndexed
 
-                val x = geometry.xFor(placed.beatMidSeconds[beat], nowSeconds, width)
-                val y = geometry.yFor(foldToOctaveNear(sung, placed.midi), noteArea, low, high)
+        val y = geometry.yFor(midi, noteArea, low, high)
 
-                if (joined) {
-                    drawLine(trace.color, Offset(previousX, previousY), Offset(x, y), stroke, StrokeCap.Round)
-                } else {
-                    // A single sung beat is a dot, not nothing.
-                    drawLine(trace.color, Offset(x, y), Offset(x, y), stroke, StrokeCap.Round)
-                }
-                previousX = x
-                previousY = y
-                joined = true
-            }
+        drawArrowHead(path, tipX, y, arrowWidth * GameTheme.arrowGlowScale, halfHeight * GameTheme.arrowGlowScale)
+        drawPath(path, GameTheme.arrowGlow(trace.color))
+
+        drawArrowHead(path, tipX, y, arrowWidth, halfHeight)
+        drawPath(path, trace.color)
+    }
+}
+
+/** Rebuilds [path] in place as a right-pointing head. Reused every frame rather than allocated. */
+private fun drawArrowHead(path: Path, tipX: Float, y: Float, width: Float, halfHeight: Float) {
+    path.reset()
+    path.moveTo(tipX, y)
+    path.lineTo(tipX - width, y - halfHeight)
+    path.lineTo(tipX - width * 0.62f, y)
+    path.lineTo(tipX - width, y + halfHeight)
+    path.close()
+}
+
+/** The visible note closest in time to [nowSeconds], for keeping the arrow's octave sensible. */
+private fun nearestIndex(geometry: TrackGeometry, visible: IntRange, nowSeconds: Double): Int? {
+    var best: Int? = null
+    var bestDistance = Double.MAX_VALUE
+    for (i in visible) {
+        val placed = geometry.placements[i]
+        val distance = when {
+            nowSeconds < placed.startSeconds -> placed.startSeconds - nowSeconds
+            nowSeconds > placed.endSeconds -> nowSeconds - placed.endSeconds
+            else -> 0.0
+        }
+        if (distance < bestDistance) {
+            bestDistance = distance
+            best = i
         }
     }
+    return best
 }
 
 private fun DrawScope.drawLyrics(

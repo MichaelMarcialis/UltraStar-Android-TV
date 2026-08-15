@@ -54,6 +54,21 @@ class GameSession(
         /** One tracker per mic, only ever touched from that mic's capture thread. */
         internal val tracker = PitchTracker()
 
+        /**
+         * What this singer is producing *right now*, as fractional MIDI, or NaN for silence.
+         *
+         * Separate from the per-beat record the scorer keeps, and deliberately so: the scorer
+         * answers "what did this beat earn", which is only settled once the beat has passed,
+         * while the pitch arrow has to answer "where is this voice this instant" — including
+         * between notes and during rests, where there is no beat to attach it to.
+         *
+         * Written on the capture thread, read by the draw pass. A single 32-bit field, so a
+         * frame can be one reading behind but never sees a value that was never produced.
+         */
+        @Volatile
+        var currentMidi: Float = Float.NaN
+            internal set
+
         val micStatus: String get() = mic.status
         val micLabel: String get() = mic.label
 
@@ -136,6 +151,7 @@ class GameSession(
 
     private fun feed(singer: Singer, buffer: ByteBuffer, count: Int) {
         singer.tracker.process(buffer, count) { reading ->
+            singer.currentMidi = if (reading.voiced) reading.midi else Float.NaN
             // Read the clock per reading rather than per buffer: a buffer can carry more than
             // one analysis window, and they did not happen at the same moment.
             singer.scorer.update(calibration.songTimeFor(playerPositionSeconds()), reading)
