@@ -18,6 +18,7 @@ class NoteScore internal constructor(
     val lineIndex: Int,
 ) {
     private val sung = FloatArray(note.durationBeats) { Float.NaN }
+    private val hits = BooleanArray(note.durationBeats)
 
     /** Points this note is worth if every beat is hit. Zero for freestyle notes. */
     val maxPoints: Int = note.type.beatWeight * note.durationBeats
@@ -39,8 +40,19 @@ class NoteScore internal constructor(
      */
     fun sungMidi(beatOffset: Int): Float = sung[beatOffset]
 
+    /**
+     * Whether beat [beatOffset] counted as a hit — false for beats not yet reached.
+     *
+     * Kept rather than re-derived so the pitch bar lights up exactly the beats that were paid
+     * for. Working it out again at draw time from [sungMidi] would mean two copies of the
+     * tolerance rule, and the day they disagreed the bar would quietly start lying about the
+     * score sitting next to it.
+     */
+    fun wasHit(beatOffset: Int): Boolean = hits[beatOffset]
+
     internal fun record(beatOffset: Int, midi: Float, hit: Boolean, points: Int) {
         sung[beatOffset] = midi
+        hits[beatOffset] = hit
         beatsScored++
         if (hit) {
             beatsHit++
@@ -50,6 +62,7 @@ class NoteScore internal constructor(
 
     internal fun reset() {
         sung.fill(Float.NaN)
+        hits.fill(false)
         beatsScored = 0
         beatsHit = 0
         earnedPoints = 0

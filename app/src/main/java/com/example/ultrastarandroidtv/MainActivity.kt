@@ -4,7 +4,7 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import com.example.ultrastarandroidtv.diagnostics.SongLibraryScreen
+import com.example.ultrastarandroidtv.game.SongLauncher
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -14,9 +14,9 @@ class MainActivity : ComponentActivity() {
         // stop being delivered the moment the display sleeps.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent {
-            // Still a test harness rather than real UI. The others are
-            // `diagnostics/SyncCalibrationScreen.kt` and `diagnostics/IsoCaptureScreen.kt`.
-            SongLibraryScreen()
+            // The game. Diagnostics still live in `diagnostics/` — `SyncCalibrationScreen.kt`,
+            // `IsoCaptureScreen.kt` and `SongLibraryScreen.kt` — swap the call here to run one.
+            SongLauncher()
         }
     }
 }
