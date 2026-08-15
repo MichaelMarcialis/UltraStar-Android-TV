@@ -115,7 +115,7 @@ object UltraStarSongParser {
             mp3 = required("MP3"),
             bpm = bpm,
             gapMs = rawTags["GAP"]?.let { parseLocaleDouble(it) } ?: 0.0,
-            videoGapMs = rawTags["VIDEOGAP"]?.let { parseLocaleDouble(it) } ?: 0.0,
+            videoGapSeconds = rawTags["VIDEOGAP"]?.let { parseLocaleDouble(it) } ?: 0.0,
             cover = rawTags["COVER"],
             background = rawTags["BACKGROUND"],
             video = rawTags["VIDEO"],

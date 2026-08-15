@@ -34,6 +34,9 @@ data class ScanSummary(
     val candidates: Int,
 )
 
+/** What counts as a song's video when no `#VIDEO` header names one. */
+private val VIDEO_EXTENSIONS = setOf("mp4", "mkv", "avi", "webm", "mov", "m4v", "mpg", "mpeg")
+
 /** Folders that are never worth descending into, whatever the card has on it. */
 private val SKIPPED_FOLDERS = setOf(
     "android",
@@ -134,7 +137,7 @@ class SongLibraryScanner(
         textId = textId,
         folderName = folderName,
         audioId = findFile(song.metadata.mp3, entries),
-        videoId = findFile(song.metadata.video, entries),
+        videoId = findVideo(song.metadata.video, entries),
         coverId = findFile(song.metadata.cover, entries),
         backgroundId = findFile(song.metadata.background, entries),
     )
@@ -149,6 +152,20 @@ class SongLibraryScanner(
         if (name.isNullOrEmpty()) return null
         return entries.firstOrNull { !it.isDirectory && it.name.equals(name, ignoreCase = true) }?.id
     }
+
+    /**
+     * The song's video, falling back to any video file sitting in its folder.
+     *
+     * `#VIDEO` is optional and frequently missing — not one song on this card declares it, while
+     * several ship an `.mp4` right beside the `.txt`. A song folder holds exactly one song's
+     * media, so a lone video file in it is not ambiguous, and refusing to use it because a
+     * header is absent would mean shipping a feature that never fires on the actual library.
+     */
+    private fun findVideo(reference: String?, entries: List<TreeEntry>): String? =
+        findFile(reference, entries) ?: entries.firstOrNull {
+            !it.isDirectory &&
+                it.name.substringAfterLast('.', "").lowercase() in VIDEO_EXTENSIONS
+        }?.id
 
     private fun looksLikeSong(text: String): Boolean =
         text.lineSequence().take(40).any { it.trimStart().startsWith("#TITLE:", ignoreCase = true) }

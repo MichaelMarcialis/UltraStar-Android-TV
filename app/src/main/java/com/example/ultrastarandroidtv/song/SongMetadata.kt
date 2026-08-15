@@ -12,7 +12,15 @@ data class SongMetadata(
     val mp3: String,
     val bpm: Double,
     val gapMs: Double = 0.0,
-    val videoGapMs: Double = 0.0,
+    /**
+     * How long after the audio the video should start, **in seconds**.
+     *
+     * Not a typo and not consistent with [gapMs]: the UltraStar format really does measure
+     * `#GAP` in milliseconds and `#VIDEOGAP` in seconds. This field was called `videoGapMs`
+     * until video was wired up, which would have put every video out by a factor of a thousand
+     * the first time anyone used it.
+     */
+    val videoGapSeconds: Double = 0.0,
     val cover: String? = null,
     val background: String? = null,
     val video: String? = null,

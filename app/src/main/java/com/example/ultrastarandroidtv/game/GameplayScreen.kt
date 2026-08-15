@@ -70,6 +70,7 @@ private class TrackSpec(
 fun GameplayScreen(
     song: UltraStarSong,
     audioUri: String,
+    videoUri: String?,
     settings: GameSettings,
     playerCount: Int,
     onExit: () -> Unit = {},
@@ -201,6 +202,16 @@ fun GameplayScreen(
                 }
             },
     ) {
+        // Behind everything, and behind its own scrim. Silent: the mp3 is the audio and the
+        // clock, and this only has to look like the song.
+        SongVideo(
+            videoUri = videoUri,
+            videoGapSeconds = song.metadata.videoGapSeconds,
+            songPosition = { session.drawTimeSeconds() },
+            isPlaying = { session.player.isPlaying },
+            modifier = Modifier.fillMaxSize(),
+        )
+
         Column(modifier = Modifier.fillMaxSize().padding(GameTheme.trackPadding)) {
             TopBar(song, session, scores, notice)
 

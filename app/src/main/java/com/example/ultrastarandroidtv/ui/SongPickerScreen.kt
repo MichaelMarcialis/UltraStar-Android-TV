@@ -193,9 +193,16 @@ fun SongPickerScreen(
                     onFocused = { focusedIndex = index },
                     onSelect = {
                         val audioId = scanned.audioId ?: return@SongCard
-                        val uri = tree?.uriFor(audioId) ?: return@SongCard
+                        val currentTree = tree ?: return@SongCard
                         preview.stop()
-                        onPlay(ChosenSong(scanned.song, uri.toString()))
+                        onPlay(
+                            ChosenSong(
+                                song = scanned.song,
+                                audioUri = currentTree.uriFor(audioId).toString(),
+                                videoUri = scanned.videoId
+                                    ?.let { currentTree.uriFor(it).toString() },
+                            ),
+                        )
                     },
                     modifier = if (index == 0) Modifier.focusRequester(first) else Modifier,
                 )

@@ -23,6 +23,16 @@ object GameTheme {
     /** The track's own panel, lifted just enough to separate it from the page. */
     val trackBackground = Color(0xFF16171F)
 
+    /**
+     * Laid over the song video so the game stays readable on top of it.
+     *
+     * Heavy, and deliberately so: this has to work over the brightest, busiest video in the
+     * library, not the average one, and the notes and lyrics are thin bright shapes that a
+     * light background destroys. Turn it down only after checking the worst song, not the
+     * prettiest.
+     */
+    val videoScrim = Color(0xCC07070B)
+
     /** Faint horizontal rule every octave, so leaps have something to be measured against. */
     val octaveLine = Color(0x14FFFFFF)
 

@@ -11,8 +11,13 @@ import com.example.ultrastarandroidtv.game.GameplayScreen
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.song.UltraStarSong
 
-/** A song that has been picked, with its audio resolved to something the player can open. */
-class ChosenSong(val song: UltraStarSong, val audioUri: String)
+/** A song that has been picked, with its media resolved to something the players can open. */
+class ChosenSong(
+    val song: UltraStarSong,
+    val audioUri: String,
+    /** Null when the song ships no video, which is most of the time. */
+    val videoUri: String?,
+)
 
 private enum class Screen { Menu, Players, Songs, Settings, Playing }
 
@@ -72,6 +77,7 @@ fun AppRoot() {
                 GameplayScreen(
                     song = ready.song,
                     audioUri = ready.audioUri,
+                    videoUri = ready.videoUri,
                     settings = settings,
                     playerCount = playerCount,
                     // Back out to the songs list rather than the menu: the usual next thing
