@@ -78,16 +78,41 @@ class SongClockTest {
     }
 
     @Test
-    fun `honours a jump big enough to be a seek`() {
+    fun `catches up to a big jump forwards`() {
+        // Forwards means the song got ahead of us — a stall, a slow frame. Following it is the
+        // only way back in step.
         val clock = SongClock()
         clock.sample(0.0, 0L, 1.0, playing = true)
 
         clock.sample(30.0, nanos(1.0), 1.0, playing = true)
         assertEquals(30.0, clock.positionAt(nanos(1.0)), 1e-6)
+    }
 
-        // Backwards too — a seek to the start of the chorus is not jitter.
-        clock.sample(5.0, nanos(2.0), 1.0, playing = true)
-        assertEquals(5.0, clock.positionAt(nanos(2.0)), 1e-6)
+    @Test
+    fun `refuses a big jump backwards while playing`() {
+        // This used to be honoured, on the theory that only a seek could move the song back by
+        // a quarter of a second or more. It cannot: ExoPlayer occasionally reports a position a
+        // few hundred milliseconds behind, and adopting it rewound the drawn song for a single
+        // frame — seen on the TV as the notes and lyrics flashing and briefly doubling.
+        val clock = SongClock()
+        clock.sample(10.0, 0L, 1.0, playing = true)
+
+        clock.sample(9.0, nanos(1.0), 1.0, playing = true)
+
+        assertEquals("must keep extrapolating", 11.0, clock.positionAt(nanos(1.0)), 1e-6)
+        assertEquals("but still report what it saw", -2.0, clock.lastCorrectionSeconds, 1e-6)
+    }
+
+    @Test
+    fun `a real seek still moves the clock backwards, through reset`() {
+        // The refusal above is only safe because a genuine seek never comes through sample() —
+        // it arrives via onPositionDiscontinuity, which resets unconditionally.
+        val clock = SongClock()
+        clock.sample(30.0, 0L, 1.0, playing = true)
+
+        clock.reset(5.0, nanos(1.0), playing = true)
+
+        assertEquals(5.0, clock.positionAt(nanos(1.0)), 1e-6)
     }
 
     @Test

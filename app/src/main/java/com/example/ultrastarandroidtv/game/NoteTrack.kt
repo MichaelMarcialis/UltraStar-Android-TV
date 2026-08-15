@@ -26,7 +26,7 @@ import com.example.ultrastarandroidtv.score.pitchClassDistance
 import com.example.ultrastarandroidtv.score.ultraStarPitchToMidi
 import com.example.ultrastarandroidtv.song.NoteType
 import kotlin.math.ceil
-import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.sin
 
 /**
@@ -82,7 +82,7 @@ fun NoteTrack(
     // sit. Laying out a screenful of text every frame is the obvious way to make this stutter.
     val syllables = remember(geometry, lyricStyle) {
         geometry.placements.map {
-            measurer.measure(AnnotatedString(it.note.text.trimEnd()), lyricStyle)
+            measurer.measure(AnnotatedString(it.displayText), lyricStyle)
         }
     }
 
@@ -323,9 +323,10 @@ private fun DrawScope.drawArrows(
             if (raw.isNaN() || referenceMidi == null) raw else foldToOctaveNear(raw, referenceMidi)
 
         val midi = motion.update(folded, nowSeconds)
-        if (midi.isNaN()) return@forEachIndexed
+        if (!motion.isVisible) return@forEachIndexed
 
         val y = geometry.yFor(midi, noteArea, low, high)
+        val alpha = motion.alpha
 
         // Only the note actually under the line can be being sung, and only the untouched raw
         // pitch can be compared with it — the same call the scorer makes.
@@ -335,47 +336,65 @@ private fun DrawScope.drawArrows(
         ) <= toleranceSemitones
 
         if (onNote) {
-            drawSparks(tipX, y, trace.color, nowSeconds, index)
+            drawSparks(tipX, y, nowSeconds, index, alpha)
         }
 
         buildArrowHead(path, tipX, y, arrowWidth * GameTheme.arrowGlowScale, halfHeight * GameTheme.arrowGlowScale)
-        drawPath(path, GameTheme.arrowGlow(trace.color))
+        drawPath(path, GameTheme.arrowGlow(trace.color).copy(alpha = 0.22f * alpha))
 
         buildArrowHead(path, tipX, y, arrowWidth, halfHeight)
-        drawPath(path, trace.color)
+        drawPath(path, trace.color.copy(alpha = alpha))
     }
 }
 
 /**
- * A little burst where the arrow meets the note.
+ * Sparks thrown off where the arrow meets the note bar.
+ *
+ * They trail **leftwards**, the direction the notes are travelling, which is what makes the
+ * arrow read as scraping along the bar rather than as a firework going off beside it. Each
+ * cools from white-hot to amber as it flies, and the vertical scatter widens with distance the
+ * way struck sparks actually spread.
  *
  * Struck procedurally from the clock rather than simulated, so there is no particle state to
  * keep, nothing to allocate per frame, and nothing that can be left behind when a note ends.
- * [seed] separates the two singers so their bursts do not fire in lockstep.
+ * [seed] separates the two singers so their sparks do not fire in lockstep.
  */
 private fun DrawScope.drawSparks(
     x: Float,
     y: Float,
-    color: Color,
     nowSeconds: Double,
     seed: Int,
+    alpha: Float,
 ) {
     val reach = GameTheme.sparkReach.toPx()
+    val spread = GameTheme.sparkSpread.toPx()
     val dotRadius = GameTheme.sparkRadius.toPx()
 
     for (i in 0 until GameTheme.sparkCount) {
-        // Each spark runs its own 0..1 life on a staggered phase, so the burst is continuous
+        // Each spark runs its own 0..1 life on a staggered phase, so the stream is continuous
         // rather than pulsing all together.
-        val phase = ((nowSeconds * GameTheme.sparkSpeed + i * 0.37 + seed * 0.5) % 1.0).toFloat()
-        val angle = (i * 2.399f) + seed * 1.1f // Golden angle: an even spray without a pattern.
-        val distance = phase * reach
+        val phase = ((nowSeconds * GameTheme.sparkSpeed + i * 0.61 + seed * 0.5) % 1.0).toFloat()
+
+        // Fixed per spark, so each one keeps its own trajectory for its whole life instead of
+        // wandering between frames.
+        val scatter = scatterFor(i, seed)
+
+        // Fading with the square keeps the strike point bright and the tail thin, which is what
+        // separates a spark from a dot sliding away.
+        val fade = (1f - phase) * (1f - phase)
 
         drawCircle(
-            color = GameTheme.sparkColor(color).copy(alpha = (1f - phase) * 0.95f),
-            radius = dotRadius * (1f - phase * 0.5f),
-            center = Offset(x + cos(angle) * distance, y + sin(angle) * distance),
+            color = GameTheme.sparkColor(phase).copy(alpha = fade * 0.95f * alpha),
+            radius = dotRadius * (1f - phase * 0.45f),
+            center = Offset(x - phase * reach, y + scatter * phase * spread),
         )
     }
+}
+
+/** A stable pseudo-random -1..1 for spark [i] of singer [seed]. No allocation, no state. */
+private fun scatterFor(i: Int, seed: Int): Float {
+    val n = sin(i * 12.9898f + seed * 78.233f) * 43758.547f
+    return (n - floor(n)) * 2f - 1f
 }
 
 /** Rebuilds [path] in place as a right-pointing head. Reused every frame rather than allocated. */

@@ -1,7 +1,5 @@
 package com.example.ultrastarandroidtv.playback
 
-import kotlin.math.abs
-
 private const val NANOS_PER_SECOND = 1_000_000_000.0
 
 /**
@@ -15,18 +13,18 @@ private const val NANOS_PER_SECOND = 1_000_000_000.0
  * extrapolating from the last sample with `System.nanoTime()`. Reads are lock-free: the whole
  * time base is one immutable object behind a single volatile field.
  *
- * **The clock never runs backwards while playing.** A small backwards correction from the
- * player is treated as jitter and ignored, because the scorer walks its notes with a
- * forward-only cursor and a pitch bar that twitches backwards looks broken. The cost is that
- * the clock tracks the upper edge of the player's jitter rather than its middle — a bias of
- * about the jitter amplitude, far below the latency being calibrated out anyway. Corrections
- * are published as [lastCorrectionSeconds] so the size of that jitter is a measurement rather
- * than an assumption.
+ * **The clock never runs backwards while playing — at all, by any amount.** The scorer walks
+ * its notes with a forward-only cursor, and anything drawn from a clock that steps back flashes.
+ * An earlier version allowed backwards moves larger than a quarter of a second through, assuming
+ * only a real seek could produce one; that assumption was wrong and cost a visible glitch. See
+ * [sample]. Genuine seeks come through [reset] instead.
  *
- * @param snapSeconds correction big enough to mean a seek, a stall, or buffering rather than
- *   jitter. Those are honoured immediately, backwards or not.
+ * The cost is that the clock tracks the upper edge of the player's jitter rather than its
+ * middle — a bias of about the jitter amplitude, far below the latency being calibrated out
+ * anyway. Corrections are published as [lastCorrectionSeconds] so the size of that jitter stays
+ * a measurement rather than an assumption.
  */
-class SongClock(private val snapSeconds: Double = 0.25) {
+class SongClock {
 
     private class Base(
         val positionSeconds: Double,
@@ -63,24 +61,35 @@ class SongClock(private val snapSeconds: Double = 0.25) {
      */
     fun sample(positionSeconds: Double, nowNanos: Long, speed: Double, playing: Boolean) {
         val previous = base
-        val extrapolated = positionAt(nowNanos)
-        val error = positionSeconds - extrapolated
+        val error = positionSeconds - positionAt(nowNanos)
         lastCorrectionSeconds = error
 
-        // Running, and the correction is small enough to be jitter rather than a seek or a
-        // stall. Anything else — starting, stopping, a big jump — is taken at face value.
-        val jitter = playing && previous.playing && abs(error) < snapSeconds
+        // Playing without interruption: the same song running at the same speed as last time.
+        val continuous = playing && previous.playing && speed == previous.speed
 
-        if (jitter && error < 0.0 && speed == previous.speed) {
-            // Backwards jitter: hold what we have. Leaving the time base alone, rather than
-            // rewriting it with the value it already yields, is what makes readers exactly
-            // monotonic — recomputing one instant from a new anchor can land a bit lower in
-            // the last place, and a reader would see that as the song stepping backwards.
+        if (continuous && error < 0.0) {
+            // **Never move backwards while playing, however far back the player claims to be.**
+            //
+            // This used to hold only for corrections smaller than a quarter of a second, on the
+            // theory that a big backwards report had to be a real seek. It is not: ExoPlayer
+            // occasionally reports a position a few hundred milliseconds behind — after a
+            // decoder hiccup, at a buffer boundary — and adopting it rewound the drawn song for
+            // exactly one frame. On a 60 Hz display that reads as the notes and lyrics flashing
+            // or briefly doubling, which is precisely how it was reported from the sofa and
+            // what a framebuffer recording confirmed.
+            //
+            // Real backwards movement only ever comes from a seek, and a seek arrives through
+            // `onPositionDiscontinuity` → [reset], which is unconditional. So there is nothing
+            // legitimate left for this path to serve.
+            //
+            // Holding the time base rather than rewriting it with the value it already yields
+            // is also what keeps readers exactly monotonic: recomputing one instant from a new
+            // anchor can land a bit lower in the last place, and a reader sees that as the song
+            // stepping backwards.
             return
         }
 
-        val adopted = if (jitter && error < 0.0) extrapolated else positionSeconds
-        base = Base(adopted, nowNanos, speed, playing)
+        base = Base(positionSeconds, nowNanos, speed, playing)
     }
 
     /**

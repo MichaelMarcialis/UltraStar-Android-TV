@@ -159,4 +159,50 @@ class UltraStarSongParserTest {
         assertEquals(listOf(Note(NoteType.NORMAL, 4, 4, 0, "Yo")), p2Lines[0].notes)
         assertEquals(8, p2Lines[0].lineBreakBeat)
     }
+
+    @Test
+    fun `a syllable's trailing space is data and survives parsing`() {
+        // It is the only thing in the format marking the end of a word: "some" + "thing " is
+        // one word, "but " + "you" is two. Trimming whole lines threw it away, and the drawn
+        // lyrics came out hyphenated end to end — "I- was- suf- fo-" — because every syllable
+        // then looked like it ran into the next.
+        //
+        // Built by concatenation rather than as a raw string so that the trailing space cannot
+        // be quietly removed by an editor or a formatter.
+        val text = listOf(
+            "#TITLE:T",
+            "#ARTIST:A",
+            "#MP3:a.mp3",
+            "#BPM:60",
+            ": 0 4 0 some",
+            ": 4 4 0 thing" + " ",
+            ": 8 4 0 but" + "  ",
+            "- 12",
+            "E",
+        ).joinToString("\n")
+
+        val notes = UltraStarSongParser.parse(text).voiceParts[0].lines[0].notes
+
+        assertEquals("some", notes[0].text)
+        assertEquals("thing ", notes[1].text)
+        assertEquals("but  ", notes[2].text)
+    }
+
+    @Test
+    fun `carriage returns are still stripped from note text`() {
+        // Windows-authored files are the norm in this library, and a stray \r on the end of a
+        // syllable would read as "this word continues" just as convincingly as a space.
+        val text = listOf(
+            "#TITLE:T",
+            "#ARTIST:A",
+            "#MP3:a.mp3",
+            "#BPM:60",
+            ": 0 4 0 word",
+            "- 4",
+            "E",
+        ).joinToString("\r\n")
+
+        val notes = UltraStarSongParser.parse(text).voiceParts[0].lines[0].notes
+        assertEquals("word", notes[0].text)
+    }
 }

@@ -1,6 +1,7 @@
 package com.example.ultrastarandroidtv.game
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -9,12 +10,54 @@ class ArrowMotionTest {
     private val motion = ArrowMotion()
 
     @Test
-    fun `silence hides the arrow rather than freezing it`() {
-        // A frozen arrow says "singing this note"; there is no note. Not singing has to look
-        // different from singing.
-        motion.update(60f, 0.0)
+    fun `the arrow fades in rather than appearing`() {
+        // A voice stops and starts constantly — between syllables, between breaths — and an
+        // arrow that blinks on every one of those is exhausting to watch.
+        var t = 0.0
+        motion.update(60f, t)
+        repeat(4) {
+            t += 0.016
+            motion.update(60f, t)
+        }
 
-        assertTrue(motion.update(Float.NaN, 0.016).isNaN())
+        assertTrue("should have started to appear", motion.alpha > 0f)
+        assertTrue("but not be fully there yet", motion.alpha < 0.95f)
+    }
+
+    @Test
+    fun `silence fades the arrow out rather than cutting it`() {
+        var t = 0.0
+        repeat(40) {
+            t += 0.016
+            motion.update(60f, t)
+        }
+        val singing = motion.alpha
+        assertTrue("should be solid while singing", singing > 0.8f)
+
+        repeat(3) {
+            t += 0.016
+            motion.update(Float.NaN, t)
+        }
+        assertTrue("should be fading", motion.alpha < singing)
+        assertTrue("but not gone in three frames", motion.alpha > 0.2f)
+
+        repeat(60) {
+            t += 0.016
+            motion.update(Float.NaN, t)
+        }
+        assertFalse("eventually gone entirely", motion.isVisible)
+    }
+
+    @Test
+    fun `the arrow holds its place while it fades out`() {
+        // Darting somewhere neutral on the way out would draw a movement nobody sang.
+        var t = 0.0
+        repeat(20) {
+            t += 0.016
+            motion.update(60f, t)
+        }
+
+        assertEquals(60f, motion.update(Float.NaN, t + 0.016), 0.5f)
     }
 
     @Test

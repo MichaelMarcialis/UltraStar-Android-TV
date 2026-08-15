@@ -14,6 +14,7 @@ class LyricLayoutTest {
     private fun syllable(startSeconds: Double, lineIndex: Int = 0) = PlacedNote(
         note = Note(NoteType.NORMAL, startBeat = 0, durationBeats = 1, pitch = 0, text = "la"),
         lineIndex = lineIndex,
+        displayText = "la",
         startSeconds = startSeconds,
         endSeconds = startSeconds + 0.1,
         midi = 60,

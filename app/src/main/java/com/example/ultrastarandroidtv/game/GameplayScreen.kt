@@ -42,17 +42,10 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.playback.SyncCalibration
 import com.example.ultrastarandroidtv.score.ScoreSnapshot
+import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.song.UltraStarSong
-import kotlin.math.roundToInt
 
 private const val TAG = "Gameplay"
-
-/** Left/right change the backing track's volume — the one control here a singer actually wants. */
-private const val VOLUME_STEP = 0.1f
-
-/** Up/down nudge the display lead, in seconds. Small, because the eye can resolve about this. */
-private const val LEAD_STEP_SECONDS = 0.01
-private const val MAX_LEAD_SECONDS = 0.3
 
 /** One track on screen: a voice part, and whoever is singing it. */
 private class TrackSpec(
@@ -77,11 +70,22 @@ private class TrackSpec(
 fun GameplayScreen(
     song: UltraStarSong,
     audioUri: String,
+    settings: GameSettings,
+    playerCount: Int,
     onExit: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    val session = remember(song, audioUri) {
-        GameSession(context, song, audioUri, SyncCalibration())
+    val session = remember(song, audioUri, playerCount) {
+        GameSession(
+            context = context,
+            song = song,
+            audioUri = audioUri,
+            calibration = SyncCalibration().apply {
+                displayLeadSeconds = settings.displayLeadSeconds
+            },
+            playerCount = playerCount,
+            micThreshold = settings.micThreshold,
+        )
     }
 
     // Read inside the draw pass, so the track repaints each frame without recomposing anything.
@@ -89,8 +93,6 @@ fun GameplayScreen(
 
     var scores by remember { mutableStateOf<List<ScoreSnapshot>>(emptyList()) }
     var finished by remember { mutableStateOf(false) }
-    var displayLead by remember { mutableStateOf(SyncCalibration.DEFAULT_DISPLAY_LEAD_SECONDS) }
-    var volume by remember { mutableStateOf(1f) }
     var notice by remember { mutableStateOf<String?>(null) }
 
     val focus = remember { FocusRequester() }
@@ -103,13 +105,14 @@ fun GameplayScreen(
 
     // Tracks come from the song's parts rather than from the mics, so a duet still shows both
     // lines when only one mic is plugged in — you can see the part you are not singing.
-    val tracks = remember(session) {
+    val tracks = remember(session, settings.windowSeconds) {
         val partCount = if (session.isDuet) session.song.voiceParts.size else 1
         (0 until partCount).map { partIndex ->
             TrackSpec(
                 geometry = TrackGeometry(
                     part = session.song.voiceParts[partIndex],
                     beats = session.beats,
+                    windowSeconds = settings.windowSeconds,
                 ),
                 singers = session.singers.filter { it.partIndex == partIndex },
             )
@@ -190,29 +193,6 @@ fun GameplayScreen(
                         }
                         true
                     }
-                    // The backing track only. The mics never pass through the player, so turning
-                    // this down makes the singers louder relative to the song, not quieter.
-                    Key.DirectionLeft -> {
-                        volume = (volume - VOLUME_STEP).coerceAtLeast(0f)
-                        session.volume = volume
-                        true
-                    }
-                    Key.DirectionRight -> {
-                        volume = (volume + VOLUME_STEP).coerceAtMost(1f)
-                        session.volume = volume
-                        true
-                    }
-                    // Up/down dial in how far ahead to draw, to cancel the TV's own display lag.
-                    Key.DirectionUp -> {
-                        displayLead = (displayLead + LEAD_STEP_SECONDS).coerceAtMost(MAX_LEAD_SECONDS)
-                        session.calibration.displayLeadSeconds = displayLead
-                        true
-                    }
-                    Key.DirectionDown -> {
-                        displayLead = (displayLead - LEAD_STEP_SECONDS).coerceAtLeast(0.0)
-                        session.calibration.displayLeadSeconds = displayLead
-                        true
-                    }
                     Key.Back -> {
                         onExit()
                         true
@@ -222,7 +202,7 @@ fun GameplayScreen(
             },
     ) {
         Column(modifier = Modifier.fillMaxSize().padding(GameTheme.trackPadding)) {
-            TopBar(song, session, scores, volume, displayLead, notice)
+            TopBar(song, session, scores, notice)
 
             // Reserved for the song video. Empty for now, and deliberately so — it is the
             // reason the track is a strip rather than the whole screen.
@@ -250,8 +230,6 @@ private fun TopBar(
     song: UltraStarSong,
     session: GameSession,
     scores: List<ScoreSnapshot>,
-    volume: Float,
-    displayLead: Double,
     notice: String?,
 ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -266,15 +244,9 @@ private fun TopBar(
                 style = MaterialTheme.typography.bodyMedium,
                 color = GameTheme.lyricIdle,
             )
-            Text(
-                "◀ vol %d%% ▶     ▲ lead %d ms ▼%s".format(
-                    (volume * 100).roundToInt(),
-                    (displayLead * 1000).roundToInt(),
-                    notice?.let { "     $it" } ?: "",
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = GameTheme.lyricIdle,
-            )
+            notice?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = GameTheme.playerColors[1])
+            }
         }
 
         session.singers.forEach { singer ->

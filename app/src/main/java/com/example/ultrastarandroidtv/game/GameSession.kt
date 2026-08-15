@@ -45,12 +45,21 @@ class GameSession(
     val calibration: SyncCalibration = SyncCalibration(),
     /** Also decides how tall a note is drawn — see [ScoringConfig.toleranceSemitones]. */
     val scoring: ScoringConfig = ScoringConfig(),
+    /** How many people are singing. Extra microphones are ignored rather than given a score. */
+    val playerCount: Int = 2,
+    /** How loud a voice must be to count. See `GameSettings.DEFAULT_MIC_THRESHOLD`. */
+    micThreshold: Float = 0.06f,
 ) {
     val beats = BeatTimeConverter(song.metadata)
     val player = SongPlayer(context)
 
-    /** A song with separate P1/P2 parts is what splits the screen into a track each. */
-    val isDuet: Boolean = song.voiceParts.size >= 2
+    /**
+     * A song with separate P1/P2 parts *and* two people to sing them.
+     *
+     * One player never gets a duet: splitting the screen would show them a part nobody is
+     * singing and score them against half a song.
+     */
+    val isDuet: Boolean = song.voiceParts.size >= 2 && playerCount >= 2
 
     /** One singer, which in practice means one microphone. */
     class Singer internal constructor(
@@ -60,9 +69,9 @@ class GameSession(
         val partIndex: Int,
         val scorer: PlayerScorer,
         private val mic: OpenMic,
-    ) {
         /** One tracker per mic, only ever touched from that mic's capture thread. */
-        internal val tracker = PitchTracker()
+        internal val tracker: PitchTracker,
+    ) {
 
         /**
          * What this singer is producing *right now*, as fractional MIDI, or NaN for silence.
@@ -133,7 +142,7 @@ class GameSession(
         onAudio = { mic, buffer, count -> byPort[mic.portId]?.let { feed(it, buffer, count) } },
     )
 
-    val singers: List<Singer> = micSession.mics.map { mic ->
+    val singers: List<Singer> = micSession.mics.take(playerCount).map { mic ->
         val partIndex = if (isDuet) mic.index.coerceAtMost(song.voiceParts.size - 1) else 0
         Singer(
             index = mic.index,
@@ -141,6 +150,7 @@ class GameSession(
             partIndex = partIndex,
             scorer = PlayerScorer(song.voiceParts[partIndex], beats, scoring),
             mic = mic,
+            tracker = PitchTracker(minLevel = micThreshold),
         )
     }.onEach { byPort[micSession.mics[it.index].portId] = it }
 

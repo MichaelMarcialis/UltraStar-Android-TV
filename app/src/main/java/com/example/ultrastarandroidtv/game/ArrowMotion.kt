@@ -6,21 +6,28 @@ import kotlin.math.exp
 private const val MAX_STEP_SECONDS = 0.1
 
 /**
- * Smooths one singer's pitch arrow so it glides instead of twitching.
+ * Smooths one singer's pitch arrow: where it sits, and whether it is there at all.
  *
  * Readings arrive about 47 times a second and are honest rather than tidy: a steady note still
- * wobbles a fraction of a semitone reading to reading. Drawn literally, the arrow buzzes, and a
- * buzzing arrow is hard to read and looks like the detector is unsure when it is not.
+ * wanders, and the detector occasionally throws a single wild reading. Drawn literally that
+ * becomes a twitching arrow that looks like the detector is unsure when it is not. (The worst
+ * of those outliers are already gone by here — `GameSession.Singer` medians them first — and
+ * this eases what is left.)
  *
- * The smoothing is deliberately fast — around a twentieth of a second — because this is an
- * instrument, not a decoration. Too much smoothing and a singer correcting their pitch sees the
- * arrow agree with them late, which is worse than a little jitter.
+ * The easing is deliberately fast, around a twentieth of a second, because this is an
+ * instrument rather than a decoration: a singer correcting their pitch must not see the arrow
+ * agree late.
  *
- * Silence hides the arrow rather than freezing it, so "not singing" never looks like "singing
- * the same note". Coming back from a *short* gap eases from where the arrow was, since that is
- * usually the same phrase continuing; coming back from a long one snaps, since the singer has
- * almost certainly moved somewhere new and sliding across the whole track to reach it would be
- * a lie about what they sang.
+ * **Appearing and disappearing is eased separately, and more slowly.** Position wants to be
+ * quick and truthful; presence wants to be gentle, because a voice stops and starts constantly
+ * — between syllables, between breaths — and an arrow that blinks in and out on every one of
+ * those is exhausting to watch. So [alpha] fades rather than switching, and the arrow holds its
+ * last position while it fades out instead of darting somewhere neutral.
+ *
+ * Coming back from a *short* gap eases from where the arrow was, since that is usually the same
+ * phrase continuing; coming back from a long one snaps, since the singer has almost certainly
+ * moved somewhere new and sliding across the whole track to reach it would be a lie about what
+ * they sang.
  *
  * Not thread-safe; owned by the draw pass.
  */
@@ -28,13 +35,25 @@ class ArrowMotion(
     private val secondsToSettle: Double = 0.05,
     /** A silence longer than this is treated as a fresh start rather than a continuation. */
     private val snapAfterSilenceSeconds: Double = 0.35,
+    /** Roughly how long the arrow takes to fade in or out. */
+    private val fadeSeconds: Double = 0.12,
 ) {
     private var shown = Float.NaN
     private var lastNowSeconds = Double.NaN
     private var lastVoicedSeconds = Double.NaN
 
+    /** How solid to draw the arrow, 0..1. Zero means do not draw it at all. */
+    var alpha: Float = 0f
+        private set
+
+    /** True when there is anything worth drawing this frame. */
+    val isVisible: Boolean get() = alpha > 0.01f && !shown.isNaN()
+
     /**
-     * Returns where to draw the arrow, or NaN to hide it.
+     * Returns where to draw the arrow, or NaN if it has never had a position.
+     *
+     * Check [alpha] as well: a silent singer keeps their last position while the arrow fades
+     * out, so a returned value does not on its own mean "draw this".
      *
      * @param targetMidi the singer's pitch now, already folded into the drawn octave, or NaN
      *   if nothing is being sung.
@@ -46,9 +65,12 @@ class ArrowMotion(
         }
         lastNowSeconds = nowSeconds
 
-        // Hide the arrow, but remember where it was: a breath between two syllables of the same
-        // phrase should not cost the arrow its place and force it to snap on the way back.
-        if (targetMidi.isNaN()) return Float.NaN
+        val voiced = !targetMidi.isNaN()
+        alpha += ((if (voiced) 1f else 0f) - alpha) * approach(step, fadeSeconds)
+
+        // Hold position through the fade-out, and remember it: a breath between two syllables
+        // of the same phrase should not cost the arrow its place.
+        if (!voiced) return shown
 
         val silence = if (lastVoicedSeconds.isNaN()) {
             Double.MAX_VALUE
@@ -62,8 +84,7 @@ class ArrowMotion(
             return shown
         }
 
-        val approach = (1.0 - exp(-step / secondsToSettle)).toFloat()
-        shown += (targetMidi - shown) * approach
+        shown += (targetMidi - shown) * approach(step, secondsToSettle)
         return shown
     }
 
@@ -71,5 +92,10 @@ class ArrowMotion(
         shown = Float.NaN
         lastNowSeconds = Double.NaN
         lastVoicedSeconds = Double.NaN
+        alpha = 0f
     }
+
+    /** Frame-rate independent easing: the same journey takes the same time whatever the fps. */
+    private fun approach(step: Double, timeConstant: Double): Float =
+        (1.0 - exp(-step / timeConstant)).toFloat()
 }

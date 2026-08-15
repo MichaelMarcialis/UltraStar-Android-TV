@@ -86,21 +86,32 @@ object GameTheme {
     // ---- Sparks -----------------------------------------------------------------------------
 
     /** Struck where the arrow meets the bar, while the singer is inside the scoring window. */
-    const val sparkCount = 9
-
-    /** How far a spark travels before it fades out. */
-    val sparkReach = 24.dp
-    val sparkRadius = 4.dp
-
-    /** Bursts per second. Fast enough to read as sparks rather than orbiting dots. */
-    const val sparkSpeed = 2.4
+    const val sparkCount = 16
 
     /**
-     * Sparks are struck in a lightened version of the singer's colour rather than the colour
-     * itself — at this size a saturated dot on a dark track just reads as more arrow, where a
-     * near-white one reads as heat.
+     * How far a spark trails **backwards** — leftwards, the way the notes are travelling — so
+     * the arrow reads as scraping along the bar rather than as a firework going off next to it.
      */
-    fun sparkColor(player: Color): Color = lerp(player, Color.White, 0.55f)
+    val sparkReach = 46.dp
+
+    /** Vertical scatter at the end of that trail. Small: this is a scrape, not an explosion. */
+    val sparkSpread = 11.dp
+
+    /** Small on purpose — a spark is a point of light, and a fat dot reads as a bubble. */
+    val sparkRadius = 2.dp
+
+    /** Bursts per second. Fast enough to read as sparks rather than as orbiting dots. */
+    const val sparkSpeed = 3.0
+
+    /**
+     * Deliberately *not* the singer's colour: this is meant to look like metal on metal, and
+     * real sparks go white-hot at the strike and cool through amber as they fly. Position tells
+     * you whose spark it is — it is at their arrow — so the colour is free to say what it is.
+     */
+    val sparkHot = Color(0xFFFFFDF0)
+    val sparkCool = Color(0xFFFF9A2E)
+
+    fun sparkColor(phase: Float): Color = lerp(sparkHot, sparkCool, phase)
 
     // ---- Dimensions -------------------------------------------------------------------------
 

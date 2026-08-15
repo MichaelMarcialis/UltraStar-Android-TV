@@ -38,21 +38,26 @@ object UltraStarSongParser {
         }
 
         for (rawLine in lines) {
-            val line = rawLine.removePrefix(BYTE_ORDER_MARK).trim()
-            if (line.isEmpty()) continue
+            // Line endings go; spaces do not. **A note's trailing space is data** — it is the
+            // only thing in the format that marks the end of a word, so "some" "thing " is one
+            // word and "but " "you" is two. Trimming the whole line threw that away, and every
+            // syllable then looked like it ran into the next.
+            val line = rawLine.removePrefix(BYTE_ORDER_MARK).trimEnd('\r', '\n')
+            val tag = line.trim()
+            if (tag.isEmpty()) continue
 
             when {
-                line.startsWith("#") -> parseHeaderTag(line)?.let { (key, value) ->
+                tag.startsWith("#") -> parseHeaderTag(tag)?.let { (key, value) ->
                     rawTags[key] = value
                 }
-                line == "E" -> break
-                line == "P1" || line == "P2" -> {
+                tag == "E" -> break
+                tag == "P1" || tag == "P2" -> {
                     finishLine(null)
-                    currentVoiceLabel = line
+                    currentVoiceLabel = tag
                     currentLineList()
                 }
-                line.startsWith("-") -> finishLine(parseLineBreak(line))
-                else -> currentNotes.add(parseNoteLine(line))
+                tag.startsWith("-") -> finishLine(parseLineBreak(tag))
+                else -> currentNotes.add(parseNoteLine(line.trimStart()))
             }
         }
         finishLine(null)

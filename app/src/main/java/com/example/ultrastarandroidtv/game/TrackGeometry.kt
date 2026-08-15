@@ -8,11 +8,12 @@ import com.example.ultrastarandroidtv.song.VoicePart
 /**
  * Seconds of song visible across the full width of a track.
  *
- * Tuned on the TV, not chosen on paper. Five seconds looked like a reasonable amount of
- * lookahead and crowded the lyrics badly — the narrower the window, the more pixels each second
- * of song gets, and 2.5 s is where real lyrics stopped fighting each other for room.
+ * Tuned on the TV, not chosen on paper, and twice: five seconds looked like a reasonable amount
+ * of lookahead and crowded the lyrics badly, 2.5 s fixed that for most songs, and 2.25 s is
+ * where the fastest songs in the library stopped crowding too. The narrower the window, the
+ * more pixels each second of song gets — and the less of what is coming you can see.
  */
-const val DEFAULT_WINDOW_SECONDS: Double = 2.5
+const val DEFAULT_WINDOW_SECONDS: Double = 2.25
 
 /**
  * Where "now" sits across the width, as a fraction from the left.
@@ -30,6 +31,8 @@ class PlacedNote(
     val note: Note,
     /** Which lyric line this note belongs to — where the syllable layout starts afresh. */
     val lineIndex: Int,
+    /** What actually gets drawn: tildes stripped, a hyphen if the word runs on. See [syllableTexts]. */
+    val displayText: String,
     val startSeconds: Double,
     val endSeconds: Double,
     /** The note's own pitch as MIDI, which is also what a sung pitch is folded towards. */
@@ -70,10 +73,14 @@ class TrackGeometry(
      * index. `TrackGeometryTest` pins that correspondence rather than trusting this comment.
      */
     val placements: List<PlacedNote> = part.lines.flatMapIndexed { lineIndex, line ->
-        line.notes.map { note ->
+        // Hyphenation needs the whole line at once — whether a syllable runs into the next one
+        // depends on the next one.
+        val texts = syllableTexts(line.notes)
+        line.notes.mapIndexed { noteIndex, note ->
             PlacedNote(
                 note = note,
                 lineIndex = lineIndex,
+                displayText = texts[noteIndex],
                 startSeconds = beats.beatToSeconds(note.startBeat),
                 endSeconds = beats.beatToSeconds(note.startBeat + note.durationBeats),
                 midi = ultraStarPitchToMidi(note.pitch),
