@@ -8,12 +8,20 @@ import com.example.ultrastarandroidtv.playback.SongPlayer
 import com.example.ultrastarandroidtv.playback.SyncCalibration
 import com.example.ultrastarandroidtv.score.PlayerScorer
 import com.example.ultrastarandroidtv.score.ScoreSnapshot
+import com.example.ultrastarandroidtv.score.ScoringConfig
 import com.example.ultrastarandroidtv.song.BeatTimeConverter
 import com.example.ultrastarandroidtv.song.UltraStarSong
 import java.nio.ByteBuffer
 
 /** Quiet tail after the last note before the song is called finished. */
 private const val TAIL_SECONDS = 2.0
+
+/**
+ * Readings behind the arrow's median filter. Five at ~47 readings a second is a touch over a
+ * tenth of a second — long enough to swallow a lone bad reading, short enough that a deliberate
+ * slide between notes still looks like one.
+ */
+private const val MEDIAN_WINDOW = 5
 
 /**
  * One playthrough: the song, the player, the mics, and a scorer per singer.
@@ -35,6 +43,8 @@ class GameSession(
     val song: UltraStarSong,
     private val audioUri: String,
     val calibration: SyncCalibration = SyncCalibration(),
+    /** Also decides how tall a note is drawn — see [ScoringConfig.toleranceSemitones]. */
+    val scoring: ScoringConfig = ScoringConfig(),
 ) {
     val beats = BeatTimeConverter(song.metadata)
     val player = SongPlayer(context)
@@ -62,12 +72,48 @@ class GameSession(
          * while the pitch arrow has to answer "where is this voice this instant" — including
          * between notes and during rests, where there is no beat to attach it to.
          *
+         * **Median-filtered, and only for display.** Raw YIN on a real voice is honest rather
+         * than tidy — a held note still wanders, and the detector occasionally throws a single
+         * wild reading. Drawn literally that becomes a twitching arrow that looks like the
+         * detector is unsure when it is not. A median of the last few readings removes exactly
+         * the lone outliers without blunting a real slide, at the cost of about a frame of lag.
+         *
+         * Scoring never sees this: [PlayerScorer] is fed the raw reading, so the filter cannot
+         * quietly change what a performance is worth.
+         *
          * Written on the capture thread, read by the draw pass. A single 32-bit field, so a
          * frame can be one reading behind but never sees a value that was never produced.
          */
         @Volatile
         var currentMidi: Float = Float.NaN
-            internal set
+            private set
+
+        private val recent = FloatArray(MEDIAN_WINDOW) { Float.NaN }
+        private var recentIndex = 0
+        private val sorting = FloatArray(MEDIAN_WINDOW)
+
+        /** Called on the capture thread, once per reading. */
+        internal fun observe(midi: Float) {
+            recent[recentIndex] = midi
+            recentIndex = (recentIndex + 1) % recent.size
+
+            var count = 0
+            for (value in recent) if (!value.isNaN()) sorting[count++] = value
+
+            // A voice has to be mostly present across the window to count as singing, so one
+            // stray voiced frame in a rest cannot flash the arrow into existence.
+            currentMidi = if (count * 2 <= recent.size) {
+                Float.NaN
+            } else {
+                sorting.sort(0, count)
+                sorting[count / 2]
+            }
+        }
+
+        internal fun forgetPitch() {
+            recent.fill(Float.NaN)
+            currentMidi = Float.NaN
+        }
 
         val micStatus: String get() = mic.status
         val micLabel: String get() = mic.label
@@ -93,7 +139,7 @@ class GameSession(
             index = mic.index,
             name = nameFor(mic.index, partIndex),
             partIndex = partIndex,
-            scorer = PlayerScorer(song.voiceParts[partIndex], beats),
+            scorer = PlayerScorer(song.voiceParts[partIndex], beats, scoring),
             mic = mic,
         )
     }.onEach { byPort[micSession.mics[it.index].portId] = it }
@@ -107,6 +153,18 @@ class GameSession(
         .maxOfOrNull { beats.beatToSeconds(it.startBeat + it.durationBeats) }
         ?.plus(TAIL_SECONDS)
         ?: TAIL_SECONDS
+
+    /**
+     * Backing-track volume, 0..1.
+     *
+     * Turning it down does not make the singers quieter: the mics never pass through the
+     * player. It also cannot remove the original vocal, which is mixed into the same file.
+     */
+    var volume: Float
+        get() = player.volume
+        set(value) {
+            player.volume = value
+        }
 
     /** Called on the main thread if playback fails. */
     var onError: ((String) -> Unit)?
@@ -139,7 +197,10 @@ class GameSession(
 
     /** Back to the top. The scorers walk forwards only, so each is rebuilt rather than rewound. */
     fun restart() {
-        singers.forEach { it.scorer.reset() }
+        singers.forEach {
+            it.scorer.reset()
+            it.forgetPitch()
+        }
         player.seekTo(0.0)
         player.play()
     }
@@ -151,9 +212,10 @@ class GameSession(
 
     private fun feed(singer: Singer, buffer: ByteBuffer, count: Int) {
         singer.tracker.process(buffer, count) { reading ->
-            singer.currentMidi = if (reading.voiced) reading.midi else Float.NaN
+            singer.observe(if (reading.voiced) reading.midi else Float.NaN)
             // Read the clock per reading rather than per buffer: a buffer can carry more than
-            // one analysis window, and they did not happen at the same moment.
+            // one analysis window, and they did not happen at the same moment. The scorer gets
+            // the raw reading, never the smoothed one.
             singer.scorer.update(calibration.songTimeFor(playerPositionSeconds()), reading)
         }
     }

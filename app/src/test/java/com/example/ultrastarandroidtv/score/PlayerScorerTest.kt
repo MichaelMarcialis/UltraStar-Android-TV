@@ -78,7 +78,7 @@ class PlayerScorerTest {
 
     @Test
     fun `strict scoring rejects the semitone a default game forgives`() {
-        val scorer = PlayerScorer(twoLines, BEATS, ScoringConfig(toleranceSemitones = 0))
+        val scorer = PlayerScorer(twoLines, BEATS, ScoringConfig(toleranceSemitones = 0f))
 
         scorer.sing(twoLines, singer = onPitch(twoLines, offsetSemitones = 1))
 

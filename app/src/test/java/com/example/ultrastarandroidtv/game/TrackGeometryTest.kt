@@ -1,6 +1,7 @@
 package com.example.ultrastarandroidtv.game
 
 import com.example.ultrastarandroidtv.score.PlayerScorer
+import com.example.ultrastarandroidtv.score.ultraStarPitchToMidi
 import com.example.ultrastarandroidtv.song.BeatTimeConverter
 import com.example.ultrastarandroidtv.song.LyricLine
 import com.example.ultrastarandroidtv.song.Note
@@ -143,43 +144,13 @@ class TrackGeometryTest {
     }
 
     @Test
-    fun `the visible span is sized by a typical line, not by the song's extremes`() {
-        // One screamed high note must not shrink every verse for the whole song. "Free" spans
-        // 22 semitones overall while its individual phrases are far narrower — sizing from the
-        // maximum is what squashed every passage into a third of the height.
-        val wide = VoicePart(
-            label = null,
-            lines = List(10) { line ->
-                // Nine ordinary lines covering four semitones, and one that leaps two octaves.
-                val pitches = if (line == 9) listOf(0, 24) else listOf(0, 4)
-                LyricLine(
-                    notes = pitches.mapIndexed { i, pitch ->
-                        Note(NoteType.NORMAL, startBeat = line * 8 + i * 4, durationBeats = 4, pitch = pitch, text = "la")
-                    },
-                    lineBreakBeat = null,
-                )
-            },
-        )
+    fun `the drawn range covers every note in the song`() {
+        // The scale is fixed and never pans, so anything it does not cover is a note the singer
+        // can never see.
+        val pitches = part.lines.flatMap { it.notes }.map { ultraStarPitchToMidi(it.pitch) }
 
-        val span = TrackGeometry(wide, beats).visibleSpanSemitones
-
-        assertTrue("span was $span", span < 20)
-        assertTrue("but still fits an ordinary line", span >= 8)
-    }
-
-    @Test
-    fun `the visible span stays readable for a song that barely moves`() {
-        val flat = VoicePart(
-            label = null,
-            lines = listOf(
-                LyricLine(
-                    notes = listOf(Note(NoteType.NORMAL, 0, 4, 0, "one")),
-                    lineBreakBeat = null,
-                ),
-            ),
-        )
-
-        assertTrue(TrackGeometry(flat, beats).visibleSpanSemitones >= 12)
+        assertTrue(geometry.lowMidi < pitches.min())
+        assertTrue(geometry.highMidi > pitches.max())
     }
 
     @Test

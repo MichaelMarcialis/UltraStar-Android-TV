@@ -27,35 +27,51 @@ class ScoringTest {
 
     @Test
     fun `pitch class distance goes the short way round`() {
-        assertEquals(0, pitchClassDistance(60, 60))
-        assertEquals(0, pitchClassDistance(60, 72))
-        assertEquals(1, pitchClassDistance(71, 72)) // B to C, not eleven semitones.
-        assertEquals(6, pitchClassDistance(60, 66)) // The farthest apart two notes can be.
-        assertEquals(2, pitchClassDistance(58, 60))
+        assertEquals(0f, pitchClassDistance(60f, 60f), 1e-4f)
+        assertEquals(0f, pitchClassDistance(60f, 72f), 1e-4f)
+        assertEquals(1f, pitchClassDistance(71f, 72f), 1e-4f) // B to C, not eleven semitones.
+        assertEquals(6f, pitchClassDistance(60f, 66f), 1e-4f) // The farthest apart two notes can be.
+        assertEquals(2f, pitchClassDistance(58f, 60f), 1e-4f)
+    }
+
+    @Test
+    fun `pitch class distance is measured in fractions of a semitone`() {
+        // Rounding to whole semitones first is what let a singer sit half a semitone outside
+        // the drawn note and still be credited for it.
+        assertEquals(0.4f, pitchClassDistance(60.4f, 60f), 1e-4f)
+        assertEquals(0.5f, pitchClassDistance(71.5f, 72f), 1e-4f)
     }
 
     @Test
     fun `hits ignore the octave`() {
         for (octave in -2..3) {
             val sung = (ultraStarPitchToMidi(4) + 12 * octave).toFloat()
-            assertTrue("octave $octave", isPitchHit(sung, notePitch = 4, toleranceSemitones = 0))
+            assertTrue("octave $octave", isPitchHit(sung, notePitch = 4, toleranceSemitones = 0f))
         }
     }
 
     @Test
-    fun `tolerance zero still allows ordinary drift`() {
-        // Rounding to the nearest semitone means +-50 cents is inside "strict".
-        assertTrue(isPitchHit(64.45f, notePitch = 4, toleranceSemitones = 0))
-        assertTrue(isPitchHit(63.55f, notePitch = 4, toleranceSemitones = 0))
-        assertFalse(isPitchHit(64.6f, notePitch = 4, toleranceSemitones = 0))
+    fun `the window is exactly the tolerance, with nothing added behind the scenes`() {
+        // This is the promise the note bar's drawn height depends on: what is inside the bar
+        // scores, what is outside does not, with no hidden half-semitone either side.
+        assertTrue(isPitchHit(65f, notePitch = 4, toleranceSemitones = 1f))
+        assertTrue(isPitchHit(63f, notePitch = 4, toleranceSemitones = 1f))
+        assertFalse(isPitchHit(65.01f, notePitch = 4, toleranceSemitones = 1f))
+        assertFalse(isPitchHit(62.99f, notePitch = 4, toleranceSemitones = 1f))
     }
 
     @Test
     fun `tolerance widens the window a semitone at a time`() {
-        assertFalse(isPitchHit(65f, notePitch = 4, toleranceSemitones = 0))
-        assertTrue(isPitchHit(65f, notePitch = 4, toleranceSemitones = 1))
-        assertFalse(isPitchHit(66f, notePitch = 4, toleranceSemitones = 1))
-        assertTrue(isPitchHit(66f, notePitch = 4, toleranceSemitones = 2))
+        assertFalse(isPitchHit(65f, notePitch = 4, toleranceSemitones = 0f))
+        assertTrue(isPitchHit(65f, notePitch = 4, toleranceSemitones = 1f))
+        assertFalse(isPitchHit(66f, notePitch = 4, toleranceSemitones = 1f))
+        assertTrue(isPitchHit(66f, notePitch = 4, toleranceSemitones = 2f))
+    }
+
+    @Test
+    fun `a half-semitone tolerance is half a semitone, not a whole one`() {
+        assertTrue(isPitchHit(64.5f, notePitch = 4, toleranceSemitones = 0.5f))
+        assertFalse(isPitchHit(64.6f, notePitch = 4, toleranceSemitones = 0.5f))
     }
 
     @Test

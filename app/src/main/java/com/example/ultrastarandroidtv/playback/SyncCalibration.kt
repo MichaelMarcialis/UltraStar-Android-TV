@@ -101,13 +101,14 @@ class SyncCalibration(
         const val DEFAULT_LATENCY_SECONDS: Double = 0.127
 
         /**
-         * Starts at zero: unlike the round trip, nothing has measured this yet.
+         * Dialled in on the sofa at 40 ms: raised live until the lyric met the sing line at the
+         * moment it was sung.
          *
-         * It is known to be non-zero — with no correction at all, lyrics on this TV visibly
-         * reach the line after they are sung — but guessing a value would only make the number
-         * that eventually gets dialled in harder to trust. Tune it on the gameplay screen and
-         * replace this with what it settles on, the way the 127 ms above was arrived at.
+         * Judged by eye and ear rather than measured by the app, so it is less precise than the
+         * 127 ms above — but it is a real observation on the real TV, which beats the zero it
+         * replaced. Roughly two frames' worth, which is about what a display pipeline plus a
+         * TV's own processing costs. Re-check it if the TV or its picture mode changes.
          */
-        const val DEFAULT_DISPLAY_LEAD_SECONDS: Double = 0.0
+        const val DEFAULT_DISPLAY_LEAD_SECONDS: Double = 0.040
     }
 }

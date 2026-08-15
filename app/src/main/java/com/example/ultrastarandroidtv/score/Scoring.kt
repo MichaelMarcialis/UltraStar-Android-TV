@@ -52,10 +52,14 @@ val NoteType.ignoresPitch: Boolean
 /**
  * Distance between two pitch classes in semitones, always 0..6 — the shorter way round the
  * circle, so B and C are one semitone apart rather than eleven.
+ *
+ * Fractional rather than rounded to whole semitones. Rounding first silently widened every
+ * tolerance by half a semitone in each direction, which is how a singer could sit visibly off
+ * the note bar and still be credited: the zone being scored was never the zone being drawn.
  */
-fun pitchClassDistance(midiA: Int, midiB: Int): Int {
-    val forward = Math.floorMod(midiA - midiB, 12)
-    return minOf(forward, 12 - forward)
+fun pitchClassDistance(midiA: Float, midiB: Float): Float {
+    val forward = ((midiA - midiB) % 12f + 12f) % 12f
+    return minOf(forward, 12f - forward)
 }
 
 /**
@@ -63,23 +67,25 @@ fun pitchClassDistance(midiA: Int, midiB: Int): Int {
  * note an octave down scores exactly the same, which is how UltraStar has always worked and
  * the only sane rule when adults and children sing the same song.
  *
- * The sung pitch is rounded to the nearest semitone first, so [toleranceSemitones] `0` still
- * allows the ±50 cents any real singer drifts by.
+ * The window is exactly ±[toleranceSemitones] around the note, with nothing added behind the
+ * scenes, so the note bar can be drawn exactly this tall and "the arrow is on the bar" and "the
+ * beat scored" become the same statement.
  */
-fun isPitchHit(sungMidi: Float, notePitch: Int, toleranceSemitones: Int): Boolean =
-    pitchClassDistance(sungMidi.roundToInt(), ultraStarPitchToMidi(notePitch)) <=
-        toleranceSemitones
+fun isPitchHit(sungMidi: Float, notePitch: Int, toleranceSemitones: Float): Boolean =
+    pitchClassDistance(sungMidi, ultraStarPitchToMidi(notePitch).toFloat()) <= toleranceSemitones
 
 /**
  * Knobs for how forgiving scoring is.
  *
- * @param toleranceSemitones how far off the target pitch class still counts as a hit. This is
- *   the difficulty setting: 0 is strict, 1 is the default, 2 is generous.
+ * @param toleranceSemitones how far off the target pitch class still counts as a hit, in
+ *   semitones either side. The difficulty setting: 0.5 is strict, 1 is the default, 2 is
+ *   generous. **This is also the drawn height of a note**, so changing it changes what the
+ *   singer sees as well as what they score.
  * @param maxHoldSeconds how late a reading may arrive and still be used for a beat. Readings
  *   normally land within one hop (~21 ms) of the beat they score. Anything later means capture
  *   stalled, and guessing from stale audio would score beats nobody sang.
  */
 data class ScoringConfig(
-    val toleranceSemitones: Int = 1,
+    val toleranceSemitones: Float = 1f,
     val maxHoldSeconds: Double = 0.1,
 )

@@ -67,6 +67,19 @@ class SongPlayer(context: Context) {
         })
     }
 
+    /**
+     * Backing-track volume, 0..1.
+     *
+     * Only the song is affected — the microphones are captured over USB and never pass through
+     * the player, so turning this down leaves the singers as loud as they ever were. It cannot
+     * isolate the original vocal, which is mixed into the same stereo file as everything else.
+     */
+    var volume: Float
+        get() = player.volume
+        set(value) {
+            player.volume = value.coerceIn(0f, 1f)
+        }
+
     /** True once the song has buffered enough to start. */
     val isReady: Boolean get() = player.playbackState == Player.STATE_READY
 

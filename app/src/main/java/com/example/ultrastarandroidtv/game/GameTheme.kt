@@ -1,6 +1,7 @@
 package com.example.ultrastarandroidtv.game
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -63,25 +64,66 @@ object GameTheme {
 
     // ---- Pitch arrow ------------------------------------------------------------------------
 
-    /** Height of the arrow, tip to tail. */
-    val arrowHeight = 30.dp
+    /**
+     * Height of the arrow, tip to tail.
+     *
+     * Kept narrow on purpose: in two-player mode both arrows share the sing line and spend much
+     * of a song within a few semitones of each other, so a tall arrow means constant overlap.
+     */
+    val arrowHeight = 17.dp
 
     /** How far it reaches toward the sing line. */
-    val arrowWidth = 24.dp
+    val arrowWidth = 22.dp
 
     /** Clearance between the arrow's tip and the sing line, so the two never merge. */
-    val arrowGap = 8.dp
+    val arrowGap = 7.dp
 
     /** A soft halo behind the arrow, so it stays findable against a busy note field. */
-    const val arrowGlowScale = 2.0f
+    const val arrowGlowScale = 1.75f
 
-    fun arrowGlow(player: Color): Color = player.copy(alpha = 0.20f)
+    fun arrowGlow(player: Color): Color = player.copy(alpha = 0.22f)
+
+    // ---- Sparks -----------------------------------------------------------------------------
+
+    /** Struck where the arrow meets the bar, while the singer is inside the scoring window. */
+    const val sparkCount = 9
+
+    /** How far a spark travels before it fades out. */
+    val sparkReach = 24.dp
+    val sparkRadius = 4.dp
+
+    /** Bursts per second. Fast enough to read as sparks rather than orbiting dots. */
+    const val sparkSpeed = 2.4
+
+    /**
+     * Sparks are struck in a lightened version of the singer's colour rather than the colour
+     * itself — at this size a saturated dot on a dark track just reads as more arrow, where a
+     * near-white one reads as heat.
+     */
+    fun sparkColor(player: Color): Color = lerp(player, Color.White, 0.55f)
 
     // ---- Dimensions -------------------------------------------------------------------------
 
-    val noteHeight = 18.dp
+    /**
+     * A note is normally drawn exactly as tall as the window that scores it, so that being on
+     * the bar and scoring are the same thing. This is the floor for that: a wide-ranging song
+     * in a shallow track would otherwise produce bars too thin to aim at.
+     */
+    val minNoteHeight = 7.dp
+
     val noteGapSeconds = 0.012 // Trimmed off each note's end so neighbours do not fuse into one bar.
     val trackPadding = 20.dp
+
+    /**
+     * Share of the screen the track occupies, leaving the rest for the song video.
+     *
+     * A shallow track is only possible because the vertical scale is fixed — nothing has to
+     * make room for the view zooming or panning.
+     */
+    const val trackScreenShare = 0.26f
+
+    /** Each half of a duet, so two tracks still leave the top half of the screen free. */
+    const val duetTrackScreenShare = 0.22f
 
     /** Reserved under the notes for the syllables, which scroll on the same axis. */
     val lyricLaneHeight = 68.dp

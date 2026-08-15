@@ -28,11 +28,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -45,10 +47,8 @@ import kotlin.math.roundToInt
 
 private const val TAG = "Gameplay"
 
-/** How far one press of left/right moves the visible window, while tuning it on the TV. */
-private const val WINDOW_STEP_SECONDS = 0.25
-private const val MIN_WINDOW_SECONDS = 1.0
-private const val MAX_WINDOW_SECONDS = 12.0
+/** Left/right change the backing track's volume — the one control here a singer actually wants. */
+private const val VOLUME_STEP = 0.1f
 
 /** Up/down nudge the display lead, in seconds. Small, because the eye can resolve about this. */
 private const val LEAD_STEP_SECONDS = 0.01
@@ -63,11 +63,15 @@ private class TrackSpec(
 /**
  * The game.
  *
- * Layout follows the song. A solo song is one track with a trace per singer, so two people on
+ * Layout follows the song. A solo song is one track with an arrow per singer, so two people on
  * the same melody can see at a glance who is closer. A duet is a track each, because the two
  * parts are genuinely different and overlaying them would be nonsense. Both cases are the same
  * component in a different arrangement — welding the lyrics to the scrolling notes is what made
  * a track self-contained enough for that to work.
+ *
+ * The track is a shallow strip along the bottom and the scores sit along the top, which leaves
+ * the whole middle of the screen free for the song video. That is only affordable because the
+ * pitch scale is fixed: nothing has to leave room for the view zooming or panning.
  */
 @Composable
 fun GameplayScreen(
@@ -85,22 +89,27 @@ fun GameplayScreen(
 
     var scores by remember { mutableStateOf<List<ScoreSnapshot>>(emptyList()) }
     var finished by remember { mutableStateOf(false) }
-    var windowSeconds by remember { mutableStateOf(DEFAULT_WINDOW_SECONDS) }
     var displayLead by remember { mutableStateOf(SyncCalibration.DEFAULT_DISPLAY_LEAD_SECONDS) }
+    var volume by remember { mutableStateOf(1f) }
     var notice by remember { mutableStateOf<String?>(null) }
 
     val focus = remember { FocusRequester() }
 
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val trackHeight = screenHeight * when {
+        session.isDuet -> GameTheme.duetTrackScreenShare
+        else -> GameTheme.trackScreenShare
+    }
+
     // Tracks come from the song's parts rather than from the mics, so a duet still shows both
     // lines when only one mic is plugged in — you can see the part you are not singing.
-    val tracks = remember(session, windowSeconds) {
+    val tracks = remember(session) {
         val partCount = if (session.isDuet) session.song.voiceParts.size else 1
         (0 until partCount).map { partIndex ->
             TrackSpec(
                 geometry = TrackGeometry(
                     part = session.song.voiceParts[partIndex],
                     beats = session.beats,
-                    windowSeconds = windowSeconds,
                 ),
                 singers = session.singers.filter { it.partIndex == partIndex },
             )
@@ -133,6 +142,15 @@ fun GameplayScreen(
                 if (over) session.pause()
             }
 
+            if (notice == null) {
+                val waiting = session.singers.filter { it.micStatus != "capturing" }
+                notice = when {
+                    session.singers.isEmpty() -> session.micSummary
+                    waiting.isNotEmpty() -> waiting.joinToString { "${it.name}: ${it.micStatus}" }
+                    else -> null
+                }
+            }
+
             // Bring-up trace. Beats keep being *scored* whether or not anyone sings, so this
             // separates "nobody is singing" from "the readings are not arriving at all" —
             // which look identical on screen.
@@ -148,15 +166,6 @@ fun GameplayScreen(
                         "${it.name}: ${s.beatsHit}/${s.beatsScored} beats, ${s.total} pts, $pitch"
                     },
                 )
-            }
-
-            if (notice == null) {
-                val waiting = session.singers.filter { it.micStatus != "capturing" }
-                notice = when {
-                    session.singers.isEmpty() -> session.micSummary
-                    waiting.isNotEmpty() -> waiting.joinToString { "${it.name}: ${it.micStatus}" }
-                    else -> null
-                }
             }
         }
     }
@@ -181,21 +190,19 @@ fun GameplayScreen(
                         }
                         true
                     }
-                    // Live tuning of how much song is on screen. This is the number most worth
-                    // deciding with a real song playing rather than in the abstract.
+                    // The backing track only. The mics never pass through the player, so turning
+                    // this down makes the singers louder relative to the song, not quieter.
                     Key.DirectionLeft -> {
-                        windowSeconds =
-                            (windowSeconds - WINDOW_STEP_SECONDS).coerceAtLeast(MIN_WINDOW_SECONDS)
+                        volume = (volume - VOLUME_STEP).coerceAtLeast(0f)
+                        session.volume = volume
                         true
                     }
                     Key.DirectionRight -> {
-                        windowSeconds =
-                            (windowSeconds + WINDOW_STEP_SECONDS).coerceAtMost(MAX_WINDOW_SECONDS)
+                        volume = (volume + VOLUME_STEP).coerceAtMost(1f)
+                        session.volume = volume
                         true
                     }
-                    // Up/down dial in how far ahead to draw. Nothing has measured the TV's own
-                    // display lag, and the only instrument that can is someone watching and
-                    // listening at once: raise it until the lyric meets the line as it is sung.
+                    // Up/down dial in how far ahead to draw, to cancel the TV's own display lag.
                     Key.DirectionUp -> {
                         displayLead = (displayLead + LEAD_STEP_SECONDS).coerceAtMost(MAX_LEAD_SECONDS)
                         session.calibration.displayLeadSeconds = displayLead
@@ -215,14 +222,19 @@ fun GameplayScreen(
             },
     ) {
         Column(modifier = Modifier.fillMaxSize().padding(GameTheme.trackPadding)) {
-            SongHeading(song, windowSeconds, displayLead, notice)
+            TopBar(song, session, scores, volume, displayLead, notice)
+
+            // Reserved for the song video. Empty for now, and deliberately so — it is the
+            // reason the track is a strip rather than the whole screen.
+            Spacer(Modifier.weight(1f))
 
             tracks.forEach { track ->
                 TrackPanel(
                     track = track,
-                    scores = scores,
+                    showName = session.isDuet,
+                    toleranceSemitones = session.scoring.toleranceSemitones,
                     now = { nowSeconds.doubleValue },
-                    modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 12.dp),
+                    modifier = Modifier.fillMaxWidth().height(trackHeight).padding(top = 10.dp),
                 )
             }
         }
@@ -234,16 +246,15 @@ fun GameplayScreen(
 }
 
 @Composable
-private fun SongHeading(
+private fun TopBar(
     song: UltraStarSong,
-    windowSeconds: Double,
+    session: GameSession,
+    scores: List<ScoreSnapshot>,
+    volume: Float,
     displayLead: Double,
     notice: String?,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 song.metadata.title,
@@ -255,23 +266,33 @@ private fun SongHeading(
                 style = MaterialTheme.typography.bodyMedium,
                 color = GameTheme.lyricIdle,
             )
+            Text(
+                "◀ vol %d%% ▶     ▲ lead %d ms ▼%s".format(
+                    (volume * 100).roundToInt(),
+                    (displayLead * 1000).roundToInt(),
+                    notice?.let { "     $it" } ?: "",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = GameTheme.lyricIdle,
+            )
         }
-        notice?.let {
-            Text(it, style = MaterialTheme.typography.bodySmall, color = GameTheme.playerColors[1])
-            Spacer(Modifier.width(16.dp))
+
+        session.singers.forEach { singer ->
+            Spacer(Modifier.width(40.dp))
+            ScoreReadout(
+                name = singer.name,
+                score = scores.getOrNull(singer.index)?.total ?: 0,
+                color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+            )
         }
-        Text(
-            "◀ %.2fs ▶     ▲ lead %d ms ▼".format(windowSeconds, (displayLead * 1000).roundToInt()),
-            style = MaterialTheme.typography.bodySmall,
-            color = GameTheme.lyricIdle,
-        )
     }
 }
 
 @Composable
 private fun TrackPanel(
     track: TrackSpec,
-    scores: List<ScoreSnapshot>,
+    showName: Boolean,
+    toleranceSemitones: Float,
     now: () -> Double,
     modifier: Modifier = Modifier,
 ) {
@@ -285,44 +306,33 @@ private fun TrackPanel(
         }
     }
 
-    Column(modifier = modifier) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(GameTheme.headerHeight),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            track.singers.forEachIndexed { position, singer ->
-                ScoreReadout(
-                    name = singer.name,
-                    score = scores.getOrNull(singer.index)?.total ?: 0,
-                    color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
-                    // On a shared track the second singer is pushed to the far side, so the two
-                    // scores sit at opposite corners and neither looks like the other's caption.
-                    alignEnd = position > 0,
-                )
-            }
-        }
-
+    Box(modifier = modifier) {
         NoteTrack(
             geometry = track.geometry,
             traces = traces,
             now = now,
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .clip(RoundedCornerShape(12.dp)),
+            toleranceSemitones = toleranceSemitones,
+            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
         )
+
+        // Only a duet needs this: the scores at the top say who is who on a shared track, but
+        // with a track each there is nothing to say which is which.
+        if (showName) {
+            track.singers.firstOrNull()?.let { singer ->
+                Text(
+                    singer.name,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                    modifier = Modifier.align(Alignment.TopStart).padding(10.dp),
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun ScoreReadout(
-    name: String,
-    score: Int,
-    color: androidx.compose.ui.graphics.Color,
-    alignEnd: Boolean,
-) {
-    Column(horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start) {
+private fun ScoreReadout(name: String, score: Int, color: Color) {
+    Column(horizontalAlignment = Alignment.End) {
         Text(
             name,
             style = MaterialTheme.typography.labelLarge.copy(fontSize = GameTheme.nameSize),

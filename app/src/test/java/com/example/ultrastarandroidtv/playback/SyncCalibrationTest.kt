@@ -26,7 +26,11 @@ class SyncCalibrationTest {
     fun `the display only takes the output half off`() {
         // A reading has been through capture and analysis; what the singer hears has not.
         assertEquals(0.130 - SyncCalibration.CAPTURE_LATENCY_SECONDS, measured.outputLatencySeconds, 1e-9)
-        assertEquals(10.0 - measured.outputLatencySeconds, measured.heardSongTimeFor(10.0), 1e-9)
+        assertEquals(
+            10.0 - measured.outputLatencySeconds + measured.displayLeadSeconds,
+            measured.heardSongTimeFor(10.0),
+            1e-9,
+        )
     }
 
     @Test
@@ -41,11 +45,11 @@ class SyncCalibrationTest {
         // The two audio latencies describe sound that has already happened, so they come off.
         // This one describes a frame that has not been seen yet, so it goes on. Getting the
         // sign wrong here would double the very lateness it exists to cancel.
-        val before = measured.heardSongTimeFor(10.0)
-        measured.displayLeadSeconds = 0.05
-
-        assertEquals(before + 0.05, measured.heardSongTimeFor(10.0), 1e-9)
         measured.displayLeadSeconds = 0.0
+        val uncorrected = measured.heardSongTimeFor(10.0)
+
+        measured.displayLeadSeconds = 0.05
+        assertEquals(uncorrected + 0.05, measured.heardSongTimeFor(10.0), 1e-9)
     }
 
     @Test
@@ -60,10 +64,10 @@ class SyncCalibrationTest {
     }
 
     @Test
-    fun `nothing has measured the display lead yet, so it starts at zero`() {
-        // Known non-zero on this TV, but a guessed default would only make the number that
-        // eventually gets dialled in harder to trust.
-        assertEquals(0.0, SyncCalibration().displayLeadSeconds, 1e-12)
+    fun `the display lead defaults to what was dialled in on the TV`() {
+        // Judged by eye and ear rather than measured by the app, so less precise than the round
+        // trip — but a real observation on the real TV, which is what a default is for.
+        assertEquals(0.040, SyncCalibration().displayLeadSeconds, 1e-12)
     }
 
     @Test
