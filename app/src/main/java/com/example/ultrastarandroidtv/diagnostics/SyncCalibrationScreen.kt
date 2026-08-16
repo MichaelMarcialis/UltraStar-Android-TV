@@ -176,18 +176,18 @@ fun SyncCalibrationScreen() {
 
         session = UsbMicSession(
             context = context,
-            onAudio = { mic, buffer, count ->
-                byPort[mic.portId]?.onAudio(
-                    buffer = buffer,
-                    count = count,
-                    playerPosition = { player.clock.positionAt(System.nanoTime()) },
-                    songEnd = songEnd,
-                )
-            },
             onChanged = {
                 session?.mics?.forEach { mic -> byPort[mic.portId]?.status = mic.status }
             },
         )
+        session.onAudio = { mic, buffer, count ->
+            byPort[mic.portId]?.onAudio(
+                buffer = buffer,
+                count = count,
+                playerPosition = { player.clock.positionAt(System.nanoTime()) },
+                songEnd = songEnd,
+            )
+        }
 
         mics = session.mics.map { mic ->
             MicCalibration(mic.label, song, beats, calibration, expectedOnsets)

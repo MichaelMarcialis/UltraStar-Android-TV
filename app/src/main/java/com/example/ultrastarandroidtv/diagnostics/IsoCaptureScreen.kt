@@ -120,16 +120,16 @@ fun IsoCaptureScreen() {
 
         session = UsbMicSession(
             context = context,
-            onAudio = { mic, buffer, count ->
-                byPort[mic.portId]?.let { meter ->
-                    meter.onAudio(buffer, count)
-                    meter.errors = mic.errorPackets
-                }
-            },
             onChanged = {
                 session?.mics?.forEach { mic -> byPort[mic.portId]?.note = mic.status }
             },
         )
+        session.onAudio = { mic, buffer, count ->
+            byPort[mic.portId]?.let { meter ->
+                meter.onAudio(buffer, count)
+                meter.errors = mic.errorPackets
+            }
+        }
 
         meters = session.mics.map { mic ->
             MicMeter(mic.label).also { byPort[mic.portId] = it }

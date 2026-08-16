@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.playback.SyncCalibration
 import com.example.ultrastarandroidtv.score.ScoreSnapshot
 import com.example.ultrastarandroidtv.settings.GameSettings
@@ -73,11 +74,12 @@ fun GameplayScreen(
     audioUri: String,
     videoUri: String?,
     settings: GameSettings,
-    playerCount: Int,
+    micSession: UsbMicSession,
+    lineup: List<GameSession.SingerSlot>,
     onExit: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    val session = remember(song, audioUri, playerCount) {
+    val session = remember(song, audioUri, lineup) {
         GameSession(
             context = context,
             song = song,
@@ -85,7 +87,8 @@ fun GameplayScreen(
             calibration = SyncCalibration().apply {
                 displayLeadSeconds = settings.displayLeadSeconds
             },
-            playerCount = playerCount,
+            micSession = micSession,
+            lineup = lineup,
             micThreshold = settings.micThreshold,
         )
     }

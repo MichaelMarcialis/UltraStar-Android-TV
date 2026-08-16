@@ -49,9 +49,19 @@ class OpenMic internal constructor(
  */
 class UsbMicSession(
     private val context: Context,
-    private val onAudio: (OpenMic, ByteBuffer, Int) -> Unit,
     private val onChanged: () -> Unit = {},
 ) {
+    /**
+     * Who currently wants the audio, or null for nobody.
+     *
+     * Settable rather than fixed at construction because the microphones outlive any one screen:
+     * they are opened once when the app starts and then handed from the screen where singers
+     * claim them to the game that scores them. Reopening USB devices between screens would mean
+     * repeating the permission dance and risking the capture threads racing a teardown, for no
+     * benefit.
+     */
+    @Volatile
+    var onAudio: ((OpenMic, ByteBuffer, Int) -> Unit)? = null
     private val manager = context.getSystemService(Context.USB_SERVICE) as UsbManager
     private val targets = findAudioCaptureTargets(manager)
 
@@ -115,7 +125,7 @@ class UsbMicSession(
         if (mic.capture != null) return
 
         val capture = UsbIsoCapture(manager, targets[index])
-        val failure = capture.start { buffer, count -> onAudio(mic, buffer, count) }
+        val failure = capture.start { buffer, count -> onAudio?.invoke(mic, buffer, count) }
         if (failure != null) {
             mic.status = "FAILED: $failure"
             Log.e(TAG, "${mic.portId}: $failure")

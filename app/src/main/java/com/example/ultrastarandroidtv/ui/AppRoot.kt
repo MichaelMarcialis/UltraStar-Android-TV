@@ -1,14 +1,18 @@
 package com.example.ultrastarandroidtv.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import com.example.ultrastarandroidtv.game.GameSession
 import com.example.ultrastarandroidtv.game.GameplayScreen
+import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.settings.GameSettings
+import com.example.ultrastarandroidtv.settings.Profiles
 import com.example.ultrastarandroidtv.song.UltraStarSong
 
 /** A song that has been picked, with its media resolved to something the players can open. */
@@ -19,7 +23,7 @@ class ChosenSong(
     val videoUri: String?,
 )
 
-private enum class Screen { Menu, Players, Songs, Settings, Playing }
+private enum class Screen { Menu, Players, Claim, Songs, Settings, Playing }
 
 /**
  * The whole app, and the order things happen in.
@@ -36,9 +40,19 @@ private enum class Screen { Menu, Players, Songs, Settings, Playing }
 fun AppRoot() {
     val context = LocalContext.current
     val settings = remember { GameSettings(context) }
+    val profiles = remember { Profiles(context) }
+
+    // Opened once for the life of the app and handed between screens. Reopening them per screen
+    // would repeat the USB permission dance and risk the capture threads racing a teardown.
+    val micSession = remember { UsbMicSession(context) }
+    DisposableEffect(micSession) {
+        micSession.start()
+        onDispose { micSession.stop() }
+    }
 
     var screen by remember { mutableStateOf(Screen.Menu) }
     var playerCount by remember { mutableIntStateOf(2) }
+    var lineup by remember { mutableStateOf<List<GameSession.SingerSlot>>(emptyList()) }
     var chosen by remember { mutableStateOf<ChosenSong?>(null) }
 
     when (screen) {
@@ -50,9 +64,23 @@ fun AppRoot() {
         Screen.Players -> PlayerCountScreen(
             onPick = {
                 playerCount = it
-                screen = Screen.Songs
+                screen = Screen.Claim
             },
             onBack = { screen = Screen.Menu },
+        )
+
+        // Who is holding which microphone, and what they are called. Asked every game: the
+        // microphone identifies itself, the person does not.
+        Screen.Claim -> ClaimScreen(
+            playerCount = playerCount,
+            micSession = micSession,
+            profiles = profiles,
+            settings = settings,
+            onReady = {
+                lineup = it
+                screen = Screen.Songs
+            },
+            onBack = { screen = Screen.Players },
         )
 
         Screen.Settings -> SettingsScreen(
@@ -79,7 +107,8 @@ fun AppRoot() {
                     audioUri = ready.audioUri,
                     videoUri = ready.videoUri,
                     settings = settings,
-                    playerCount = playerCount,
+                    micSession = micSession,
+                    lineup = lineup,
                     // Back out to the songs list rather than the menu: the usual next thing
                     // after one song is another song.
                     onExit = { screen = Screen.Songs },

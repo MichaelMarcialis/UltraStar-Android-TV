@@ -55,11 +55,24 @@ class GameSession(
     val calibration: SyncCalibration = SyncCalibration(),
     /** Also decides how tall a note is drawn — see [ScoringConfig.toleranceSemitones]. */
     val scoring: ScoringConfig = ScoringConfig(),
-    /** How many people are singing. Extra microphones are ignored rather than given a score. */
-    val playerCount: Int = 2,
+    /** Already open, and shared with the screen where the singers claimed them. */
+    private val micSession: UsbMicSession,
+    /**
+     * Who is singing, in slot order: slot 0 is the first colour, slot 1 the second.
+     *
+     * Built by the claim screen, where each singer took a microphone by singing into it, so a
+     * slot's colour and score belong to a person rather than to whichever USB device Android
+     * happened to enumerate first.
+     */
+    private val lineup: List<SingerSlot>,
     /** How loud a voice must be to count. See `GameSettings.DEFAULT_MIC_THRESHOLD`. */
     micThreshold: Float = 0.06f,
 ) {
+    /** One claimed microphone and the person holding it. */
+    data class SingerSlot(val portId: String, val name: String)
+
+    /** How many people are singing. */
+    val playerCount: Int get() = lineup.size
     val beats = BeatTimeConverter(song.metadata)
 
     /**
@@ -80,7 +93,7 @@ class GameSession(
      * One player never gets a duet: splitting the screen would show them a part nobody is
      * singing and score them against half a song.
      */
-    val isDuet: Boolean = song.voiceParts.size >= 2 && playerCount >= 2
+    val isDuet: Boolean = song.voiceParts.size >= 2 && lineup.size >= 2
 
     /** One singer, which in practice means one microphone. */
     class Singer internal constructor(
@@ -158,22 +171,25 @@ class GameSession(
 
     private val byPort = mutableMapOf<String, Singer>()
 
-    private val micSession = UsbMicSession(
-        context = context,
-        onAudio = { mic, buffer, count -> byPort[mic.portId]?.let { feed(it, buffer, count) } },
-    )
-
-    val singers: List<Singer> = micSession.mics.take(playerCount).map { mic ->
-        val partIndex = if (isDuet) mic.index.coerceAtMost(song.voiceParts.size - 1) else 0
+    /**
+     * One singer per claimed microphone, in the order they claimed them.
+     *
+     * The slot index is the identity here — it decides the colour, the score readout and the
+     * arrow — so it comes from the lineup rather than from USB enumeration order, which is
+     * arbitrary and changes between sessions.
+     */
+    val singers: List<Singer> = lineup.mapIndexedNotNull { slot, entry ->
+        val mic = micSession.mics.firstOrNull { it.portId == entry.portId } ?: return@mapIndexedNotNull null
+        val partIndex = if (isDuet) slot.coerceAtMost(song.voiceParts.size - 1) else 0
         Singer(
-            index = mic.index,
-            name = nameFor(mic.index, partIndex),
+            index = slot,
+            name = entry.name,
             partIndex = partIndex,
             scorer = PlayerScorer(song.voiceParts[partIndex], beats, scoring),
             mic = mic,
             tracker = PitchTracker(minLevel = micThreshold),
         )
-    }.onEach { byPort[micSession.mics[it.index].portId] = it }
+    }.onEach { byPort[lineup[it.index].portId] = it }
 
     /** One line on what was found, for when a mic is missing and nobody can tell why. */
     val micSummary: String get() = micSession.summary
@@ -240,7 +256,8 @@ class GameSession(
         }
 
     fun start() {
-        micSession.start()
+        // The microphones are already open; this only points them at the scorers.
+        micSession.onAudio = { mic, buffer, count -> byPort[mic.portId]?.let { feed(it, buffer, count) } }
         player.load(audioUri)
     }
 
@@ -259,7 +276,8 @@ class GameSession(
     }
 
     fun release() {
-        micSession.stop()
+        // The session outlives the game, so it is detached rather than stopped.
+        micSession.onAudio = null
         player.release()
     }
 
@@ -271,14 +289,5 @@ class GameSession(
             // the raw reading, never the smoothed one.
             singer.scorer.update(calibration.songTimeFor(playerPositionSeconds()), reading)
         }
-    }
-
-    private fun nameFor(index: Int, partIndex: Int): String {
-        if (isDuet) {
-            val named =
-                if (partIndex == 0) song.metadata.duetSingerP1 else song.metadata.duetSingerP2
-            if (!named.isNullOrBlank()) return named
-        }
-        return "Player ${index + 1}"
     }
 }
