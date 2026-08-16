@@ -194,6 +194,26 @@ class GameSession(
     /** One line on what was found, for when a mic is missing and nobody can tell why. */
     val micSummary: String get() = micSession.summary
 
+    /**
+     * The parts actually on screen, which is what a break is measured against.
+     *
+     * One singer never sees the second part of a duet, so the second part's notes must not keep
+     * the game on screen through a stretch that, for the person holding the microphone, is an
+     * instrumental.
+     */
+    private val playedParts =
+        if (isDuet) song.voiceParts else song.voiceParts.take(1)
+
+    /** The long instrumental stretches, where the game gets out of the video's way. */
+    val vocalBreaks: VocalBreaks = VocalBreaks(
+        playedParts.flatMap { part -> part.lines.flatMap { it.notes } }.map {
+            VocalSpan(
+                startSeconds = beats.beatToSeconds(it.startBeat),
+                endSeconds = beats.beatToSeconds(it.startBeat + it.durationBeats),
+            )
+        },
+    )
+
     /** When the last note of any part has finished, plus a little quiet. */
     val songEndSeconds: Double = song.voiceParts
         .flatMap { part -> part.lines.flatMap { it.notes } }

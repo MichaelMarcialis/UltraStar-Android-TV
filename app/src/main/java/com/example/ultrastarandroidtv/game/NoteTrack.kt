@@ -339,9 +339,9 @@ private fun DrawScope.drawArrows(
             drawSparks(tipX, y, nowSeconds, index, alpha)
         }
 
-        buildArrowHead(path, tipX, y, arrowWidth * GameTheme.arrowGlowScale, halfHeight * GameTheme.arrowGlowScale)
-        drawPath(path, GameTheme.arrowGlow(trace.color).copy(alpha = 0.22f * alpha))
-
+        // One solid shape and nothing behind it. There was a soft halo here to help the arrow
+        // stand out against the notes; two arrows of different weights read as two things, and
+        // the sparks now do the standing-out.
         buildArrowHead(path, tipX, y, arrowWidth, halfHeight)
         drawPath(path, trace.color.copy(alpha = alpha))
     }
@@ -351,9 +351,14 @@ private fun DrawScope.drawArrows(
  * Sparks thrown off where the arrow meets the note bar.
  *
  * They trail **leftwards**, the direction the notes are travelling, which is what makes the
- * arrow read as scraping along the bar rather than as a firework going off beside it. Each
- * cools from white-hot to amber as it flies, and the vertical scatter widens with distance the
- * way struck sparks actually spread.
+ * arrow read as scraping along the bar rather than as a firework going off beside it. Each cools
+ * from white-hot through gold to orange as it flies, and the vertical scatter widens with
+ * distance the way struck sparks actually spread.
+ *
+ * **Every spark differs from every other in three ways** — how fast it flies, how far it gets
+ * and which way it fans — all fixed for the spark's whole life so nothing wanders between
+ * frames. A shower where each particle takes the same trajectory at the same speed reads as a
+ * rotating pattern rather than as sparks; the variation is what makes it look struck.
  *
  * Struck procedurally from the clock rather than simulated, so there is no particle state to
  * keep, nothing to allocate per frame, and nothing that can be left behind when a note ends.
@@ -371,30 +376,37 @@ private fun DrawScope.drawSparks(
     val dotRadius = GameTheme.sparkRadius.toPx()
 
     for (i in 0 until GameTheme.sparkCount) {
-        // Each spark runs its own 0..1 life on a staggered phase, so the stream is continuous
-        // rather than pulsing all together.
-        val phase = ((nowSeconds * GameTheme.sparkSpeed + i * 0.61 + seed * 0.5) % 1.0).toFloat()
+        // Each spark runs its own 0..1 life at its own rate, so the stream is continuous rather
+        // than pulsing all together, and short-lived sparks sit among long-lived ones.
+        val speed = GameTheme.sparkSpeed * (0.65f + 0.7f * hashFor(i, seed, 0f))
+        val phase = ((nowSeconds * speed + i * 0.61 + seed * 0.5) % 1.0).toFloat()
 
-        // Fixed per spark, so each one keeps its own trajectory for its whole life instead of
-        // wandering between frames.
-        val scatter = scatterFor(i, seed)
+        val scatter = hashFor(i, seed, 5.3f) * 2f - 1f
+        val length = 0.35f + 0.65f * hashFor(i, seed, 11.7f)
 
-        // Fading with the square keeps the strike point bright and the tail thin, which is what
-        // separates a spark from a dot sliding away.
-        val fade = (1f - phase) * (1f - phase)
+        // Mostly linear rather than the square it used to be: squaring keeps the strike point
+        // bright but kills the tail within a few pixels, which is the whole thing being asked
+        // for here. A little curve is kept so the strike still reads as the hottest point.
+        val remaining = 1f - phase
+        val fade = remaining * 0.7f + remaining * remaining * 0.3f
 
         drawCircle(
-            color = GameTheme.sparkColor(phase).copy(alpha = fade * 0.95f * alpha),
-            radius = dotRadius * (1f - phase * 0.45f),
-            center = Offset(x - phase * reach, y + scatter * phase * spread),
+            color = GameTheme.sparkColor(phase).copy(alpha = fade * alpha),
+            radius = dotRadius * (1f - phase * 0.5f),
+            center = Offset(x - phase * reach * length, y + scatter * phase * spread),
         )
     }
 }
 
-/** A stable pseudo-random -1..1 for spark [i] of singer [seed]. No allocation, no state. */
-private fun scatterFor(i: Int, seed: Int): Float {
-    val n = sin(i * 12.9898f + seed * 78.233f) * 43758.547f
-    return (n - floor(n)) * 2f - 1f
+/**
+ * A stable pseudo-random 0..1 for spark [i] of singer [seed]. No allocation, no state.
+ *
+ * [salt] draws an independent value from the same spark, so speed, spread and length can vary
+ * without correlating with each other — which they would if one number drove all three.
+ */
+private fun hashFor(i: Int, seed: Int, salt: Float): Float {
+    val n = sin(i * 12.9898f + seed * 78.233f + salt) * 43758.547f
+    return n - floor(n)
 }
 
 /** Rebuilds [path] in place as a right-pointing head. Reused every frame rather than allocated. */

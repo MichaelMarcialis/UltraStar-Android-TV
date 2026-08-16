@@ -89,40 +89,51 @@ object GameTheme {
     /** Clearance between the arrow's tip and the sing line, so the two never merge. */
     val arrowGap = 7.dp
 
-    /** A soft halo behind the arrow, so it stays findable against a busy note field. */
-    const val arrowGlowScale = 1.75f
-
-    fun arrowGlow(player: Color): Color = player.copy(alpha = 0.22f)
-
     // ---- Sparks -----------------------------------------------------------------------------
 
-    /** Struck where the arrow meets the bar, while the singer is inside the scoring window. */
-    const val sparkCount = 16
+    /**
+     * Struck where the arrow meets the bar, while the singer is inside the scoring window.
+     *
+     * Generous, because this is the game's one moment of reward and a thin dribble of dots reads
+     * as a rendering artefact rather than as a prize. They cost nothing but a `drawCircle` each.
+     */
+    const val sparkCount = 34
 
     /**
-     * How far a spark trails **backwards** — leftwards, the way the notes are travelling — so
-     * the arrow reads as scraping along the bar rather than as a firework going off next to it.
+     * How far the longest sparks trail **backwards** — leftwards, the way the notes are
+     * travelling — so the arrow reads as scraping along the bar rather than as a firework going
+     * off next to it. Each spark takes its own fraction of this, so the tail feathers out
+     * instead of ending on a line.
      */
-    val sparkReach = 46.dp
+    val sparkReach = 120.dp
 
-    /** Vertical scatter at the end of that trail. Small: this is a scrape, not an explosion. */
-    val sparkSpread = 11.dp
+    /** Vertical scatter at the end of that trail: a fan, widening the further a spark gets. */
+    val sparkSpread = 32.dp
 
     /** Small on purpose — a spark is a point of light, and a fat dot reads as a bubble. */
-    val sparkRadius = 2.dp
+    val sparkRadius = 2.6.dp
 
-    /** Bursts per second. Fast enough to read as sparks rather than as orbiting dots. */
-    const val sparkSpeed = 3.0
+    /** Bursts per second, before each spark's own variation on it. */
+    const val sparkSpeed = 2.6
 
     /**
      * Deliberately *not* the singer's colour: this is meant to look like metal on metal, and
-     * real sparks go white-hot at the strike and cool through amber as they fly. Position tells
-     * you whose spark it is — it is at their arrow — so the colour is free to say what it is.
+     * real sparks go white-hot at the strike and cool through gold to orange as they fly.
+     * Position tells you whose spark it is — it is at their arrow — so the colour is free to say
+     * what it is instead.
+     *
+     * Three stops rather than two: a straight white-to-orange ramp spends its whole middle in
+     * washed-out cream, which is the least spark-like colour there is. Holding gold through the
+     * middle keeps the trail hot the whole way down.
      */
-    val sparkHot = Color(0xFFFFFDF0)
-    val sparkCool = Color(0xFFFF9A2E)
+    val sparkHot = Color(0xFFFFFFFF)
+    val sparkWarm = Color(0xFFFFE27A)
+    val sparkCool = Color(0xFFFF7A18)
 
-    fun sparkColor(phase: Float): Color = lerp(sparkHot, sparkCool, phase)
+    fun sparkColor(phase: Float): Color = when {
+        phase < 0.5f -> lerp(sparkHot, sparkWarm, phase * 2f)
+        else -> lerp(sparkWarm, sparkCool, (phase - 0.5f) * 2f)
+    }
 
     // ---- Dimensions -------------------------------------------------------------------------
 
@@ -168,4 +179,23 @@ object GameTheme {
     val scoreSize = 44.sp
     val nameSize = 20.sp
     val headerHeight = 76.dp
+
+    // ---- Title card -------------------------------------------------------------------------
+
+    /**
+     * The song's name, shown alone in the middle of the screen before the music starts.
+     *
+     * It replaces the permanent corner label it grew out of. A title that sits there all song is
+     * read once and then occupies a corner for three minutes; shown large, once, at the moment
+     * everyone is waiting anyway, it is read by the whole room — and the corners are freed for
+     * the two things that keep changing, which is the scores.
+     */
+    val titleSize = 68.sp
+    val titleArtistSize = 32.sp
+
+    /** How long the card holds at full strength before the music starts and it begins to go. */
+    const val titleHoldMillis = 2200
+
+    /** The crossfade from title card to game. Also how long the game takes to appear. */
+    const val titleFadeMillis = 900
 }

@@ -81,6 +81,7 @@ fun AppRoot() {
                 screen = Screen.Songs
             },
             onBack = { screen = Screen.Players },
+            onMenu = { screen = Screen.Menu },
         )
 
         Screen.Settings -> SettingsScreen(
@@ -94,7 +95,10 @@ fun AppRoot() {
                 chosen = it
                 screen = Screen.Playing
             },
-            onBack = { screen = Screen.Menu },
+            // One step up rather than out: whoever is holding which microphone is the thing
+            // most likely to be wrong by the time anyone is looking at the songs.
+            onChangeSingers = { screen = Screen.Claim },
+            onMenu = { screen = Screen.Menu },
         )
 
         Screen.Playing -> {

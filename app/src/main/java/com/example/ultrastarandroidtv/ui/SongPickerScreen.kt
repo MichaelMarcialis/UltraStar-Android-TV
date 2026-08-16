@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -90,7 +92,9 @@ private const val FALLBACK_PREVIEW_SECONDS = 45.0
 fun SongPickerScreen(
     playerCount: Int,
     onPlay: (ChosenSong) -> Unit,
-    onBack: () -> Unit,
+    /** Back to the microphones and names, which is one step up rather than out. */
+    onChangeSingers: () -> Unit,
+    onMenu: () -> Unit,
 ) {
     val context = LocalContext.current
     val location = remember { LibraryLocation(context) }
@@ -101,7 +105,7 @@ fun SongPickerScreen(
     var focusedIndex by remember { mutableIntStateOf(0) }
 
     val first = remember { FocusRequester() }
-    BackHandler(onBack = onBack)
+    BackHandler(onBack = onChangeSingers)
 
     val tree = remember(treeUri) {
         treeUri?.let { SafDocumentTree(context.contentResolver, it) }
@@ -177,6 +181,20 @@ fun SongPickerScreen(
                 Spacer(Modifier.height(20.dp))
                 Button(onClick = { picker.launch(null) }) { Text("Choose song folder") }
             }
+
+            // The two ways out, spelled out rather than left to the remote's back button. The
+            // singers are already chosen by this point, and the commonest reason to leave this
+            // screen is that the wrong person ended up holding the wrong microphone.
+            Spacer(Modifier.height(20.dp))
+            Row {
+                Button(onClick = onChangeSingers) {
+                    Text("Change singers", modifier = Modifier.padding(horizontal = 12.dp))
+                }
+                Spacer(Modifier.width(16.dp))
+                Button(onClick = onMenu) {
+                    Text("Main menu", modifier = Modifier.padding(horizontal = 12.dp))
+                }
+            }
         }
 
         Spacer(Modifier.height(28.dp))
@@ -190,6 +208,9 @@ fun SongPickerScreen(
                 SongCard(
                     scanned = scanned,
                     tree = tree,
+                    // Only meaningful with two people in the room: on your own, a duet is
+                    // collapsed to a single line and there is nothing to distinguish.
+                    badge = if (playerCount == 2) badgeFor(scanned) else null,
                     onFocused = { focusedIndex = index },
                     onSelect = {
                         val audioId = scanned.audioId ?: return@SongCard
@@ -211,10 +232,41 @@ fun SongPickerScreen(
     }
 }
 
+/** What a badge says, and the colour it says it in. */
+private class SongBadge(val label: String, val color: Color)
+
+/**
+ * Nearly opaque, unlike the panels over the song video.
+ *
+ * A badge sits on album artwork, which is an image chosen by somebody else and is as likely to be
+ * near-white as near-black. The gameplay panels can afford to be translucent because they always
+ * sit over the same thing; this cannot.
+ */
+private val BADGE_BACKGROUND = Color(0xEE090A0F)
+
+/**
+ * Whether two singers will get different parts or the same one.
+ *
+ * The UltraStar format does say: a song written as a duet marks its lines `P1` and `P2`, and the
+ * parser turns those into separate voice parts with their own notes, lyrics and timings.
+ * Everything else is a single melody, which two people can still sing at once — they just sing
+ * the same line and the scores are a comparison rather than a division of labour.
+ *
+ * Gold for a duet because it is the rarer and more interesting answer; the ordinary case is
+ * stated plainly so that "no badge" never has to mean "not checked yet".
+ */
+private fun badgeFor(scanned: ScannedSong): SongBadge =
+    if (scanned.song.voiceParts.size >= 2) {
+        SongBadge("Duet", GameTheme.sparkWarm)
+    } else {
+        SongBadge("Versus", Color(0xFFDCE2ED))
+    }
+
 @Composable
 private fun SongCard(
     scanned: ScannedSong,
     tree: SafDocumentTree?,
+    badge: SongBadge?,
     onFocused: () -> Unit,
     onSelect: () -> Unit,
     modifier: Modifier = Modifier,
@@ -279,6 +331,21 @@ private fun SongCard(
                     scanned.song.metadata.title.take(1).uppercase(),
                     style = MaterialTheme.typography.displayMedium,
                     color = GameTheme.lyricIdle,
+                )
+            }
+
+            badge?.let {
+                Text(
+                    it.label,
+                    style = MaterialTheme.typography.labelMedium
+                        .copy(fontWeight = FontWeight.Bold),
+                    color = it.color,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(10.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(BADGE_BACKGROUND)
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
                 )
             }
         }

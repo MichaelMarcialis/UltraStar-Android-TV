@@ -1,9 +1,11 @@
 package com.example.ultrastarandroidtv.game
 
 import android.util.Log
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,12 +15,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -29,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -37,6 +42,8 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
@@ -46,6 +53,7 @@ import com.example.ultrastarandroidtv.playback.SyncCalibration
 import com.example.ultrastarandroidtv.score.ScoreSnapshot
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.song.UltraStarSong
+import kotlinx.coroutines.delay
 
 private const val TAG = "Gameplay"
 
@@ -96,9 +104,23 @@ fun GameplayScreen(
     // Read inside the draw pass, so the track repaints each frame without recomposing anything.
     val nowSeconds = remember { mutableDoubleStateOf(0.0) }
 
+    // How present the game is over the video. Written every frame and read only inside a
+    // graphics-layer block, so a fade costs a layer update rather than a recomposition.
+    val breakFade = remember { mutableFloatStateOf(1f) }
+
     var scores by remember { mutableStateOf<List<ScoreSnapshot>>(emptyList()) }
     var finished by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
+
+    // The song announces itself before it starts. `introDone` starts the music and the crossfade;
+    // `introGone` takes the card out of the tree once it has finished fading.
+    var introDone by remember(session) { mutableStateOf(false) }
+    var introGone by remember(session) { mutableStateOf(false) }
+    val reveal = animateFloatAsState(
+        targetValue = if (introDone) 1f else 0f,
+        animationSpec = tween(GameTheme.titleFadeMillis, easing = FastOutSlowInEasing),
+        label = "intro",
+    )
 
     // A song can name a video that this device cannot decode. Falling back is automatic; there
     // is nothing to configure per song, and nothing to do when a new song is added.
@@ -132,8 +154,19 @@ fun GameplayScreen(
     DisposableEffect(session) {
         session.onError = { notice = it }
         session.start()
-        session.play()
         onDispose { session.release() }
+    }
+
+    // Loading is what makes the first second of a song stutter — building the player, enumerating
+    // USB, measuring every syllable — and it all happens while this card is on screen doing
+    // nothing but being read. The music starts as the card begins to go, so the fade lands over
+    // the song's intro rather than over silence.
+    LaunchedEffect(session) {
+        delay(GameTheme.titleHoldMillis.toLong())
+        introDone = true
+        session.play()
+        delay(GameTheme.titleFadeMillis.toLong())
+        introGone = true
     }
 
     LaunchedEffect(session) {
@@ -142,6 +175,7 @@ fun GameplayScreen(
         while (true) {
             withFrameNanos { }
             nowSeconds.doubleValue = session.drawTimeSeconds()
+            breakFade.floatValue = session.vocalBreaks.hudAlpha(nowSeconds.doubleValue)
 
             // Only republish the scores when they actually move. Writing them every frame would
             // recompose the readouts sixty times a second to show the same number, which is
@@ -202,6 +236,9 @@ fun GameplayScreen(
                         // Once the results are up they own the button; the singers are picking
                         // between "again" and "another one", not un-pausing anything.
                         if (finished) return@onPreviewKeyEvent false
+                        // Swallowed while the title card is up, rather than starting the song
+                        // early and leaving it playing under a card that is still counting down.
+                        if (!introDone) return@onPreviewKeyEvent true
                         if (session.player.isPlaying) session.pause() else session.play()
                         true
                     }
@@ -230,11 +267,18 @@ fun GameplayScreen(
             SongVisualizer(session.spectrum, modifier = Modifier.fillMaxSize())
         }
 
-        Column(modifier = Modifier.fillMaxSize().padding(GameTheme.trackPadding)) {
-            TopBar(song, session, scores, notice)
+        // The whole game fades as one. Both reasons to hide it — the song has not started, and
+        // there is nothing to sing for the next half minute — are the same request: let the
+        // video have the screen. Read inside the layer block, so neither costs a recomposition.
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(GameTheme.trackPadding)
+                .graphicsLayer { alpha = reveal.value * breakFade.floatValue },
+        ) {
+            TopBar(session, scores, notice)
 
-            // Reserved for the song video. Empty for now, and deliberately so — it is the
-            // reason the track is a strip rather than the whole screen.
+            // The song video's share of the screen: everything the game does not need.
             Spacer(Modifier.weight(1f))
 
             tracks.forEach { track ->
@@ -246,6 +290,15 @@ fun GameplayScreen(
                     modifier = Modifier.fillMaxWidth().height(trackHeight).padding(top = 10.dp),
                 )
             }
+        }
+
+        if (!introGone) {
+            TitleCard(
+                song = song,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .graphicsLayer { alpha = 1f - reveal.value },
+            )
         }
 
         if (finished) {
@@ -263,42 +316,101 @@ fun GameplayScreen(
     }
 }
 
+/**
+ * A singer in each top corner, and nothing else.
+ *
+ * The two scores used to share a chip in one corner while the song's name held the other, which
+ * had it backwards: the title is read once and then sits there for three minutes, while the
+ * scores are the only thing on screen that keeps changing. So the title moved to the card at the
+ * start and the singers took a corner each — the same left/right split as their colours, their
+ * arrows and, in a duet, their tracks.
+ */
 @Composable
 private fun TopBar(
-    song: UltraStarSong,
     session: GameSession,
     scores: List<ScoreSnapshot>,
     notice: String?,
 ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        Column(modifier = Modifier.panel()) {
-            Text(
-                song.metadata.title,
-                style = MaterialTheme.typography.titleLarge,
-                color = GameTheme.lyricActive,
-            )
-            Text(
-                song.metadata.artist,
-                style = MaterialTheme.typography.bodyMedium,
-                color = GameTheme.lyricIdle,
-            )
-            notice?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = GameTheme.playerColors[1])
+        session.singers.getOrNull(0)?.let { singer ->
+            Column(modifier = Modifier.panel()) {
+                ScoreReadout(
+                    name = singer.name,
+                    score = scores.getOrNull(singer.index)?.total ?: 0,
+                    color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                    alignment = Alignment.Start,
+                )
             }
         }
 
         Spacer(Modifier.weight(1f))
 
-        Row(modifier = Modifier.panel()) {
-            session.singers.forEachIndexed { position, singer ->
-                if (position > 0) Spacer(Modifier.width(36.dp))
+        // Only ever there when something is wrong — a microphone that has not opened, or a
+        // playback error. Centred, because it belongs to the room rather than to either singer.
+        notice?.let {
+            Column(modifier = Modifier.panel()) {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = GameTheme.playerColors[1],
+                )
+            }
+            Spacer(Modifier.weight(1f))
+        }
+
+        session.singers.getOrNull(1)?.let { singer ->
+            Column(modifier = Modifier.panel()) {
                 ScoreReadout(
                     name = singer.name,
                     score = scores.getOrNull(singer.index)?.total ?: 0,
                     color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                    alignment = Alignment.End,
                 )
             }
         }
+    }
+}
+
+/**
+ * The song's name and artist, alone in the middle, before the music starts.
+ *
+ * Everyone is waiting at this moment anyway — the player is loading, the singers are getting
+ * hold of their microphones — so it costs nothing and tells the whole room what is about to
+ * happen, at a size that can be read from a sofa. It is also the only thing on screen, which is
+ * why the title no longer needs a corner for the rest of the song.
+ */
+@Composable
+private fun TitleCard(song: UltraStarSong, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .widthIn(max = 1000.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(GameTheme.trackBackground)
+            .padding(horizontal = 64.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            song.metadata.title,
+            style = MaterialTheme.typography.displayMedium.copy(
+                fontSize = GameTheme.titleSize,
+                fontWeight = FontWeight.Bold,
+            ),
+            color = GameTheme.lyricActive,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(14.dp))
+        Text(
+            song.metadata.artist,
+            style = MaterialTheme.typography.headlineSmall.copy(
+                fontSize = GameTheme.titleArtistSize,
+            ),
+            color = GameTheme.lyricIdle,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -357,8 +469,14 @@ private fun TrackPanel(
 }
 
 @Composable
-private fun ScoreReadout(name: String, score: Int, color: Color) {
-    Column(horizontalAlignment = Alignment.End) {
+private fun ScoreReadout(
+    name: String,
+    score: Int,
+    color: Color,
+    /** Which edge of the screen this singer's corner is on, so name and number line up with it. */
+    alignment: Alignment.Horizontal,
+) {
+    Column(horizontalAlignment = alignment) {
         Text(
             name,
             style = MaterialTheme.typography.labelLarge.copy(fontSize = GameTheme.nameSize),

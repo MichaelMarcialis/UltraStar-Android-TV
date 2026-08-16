@@ -80,6 +80,7 @@ fun ClaimScreen(
     settings: GameSettings,
     onReady: (List<GameSession.SingerSlot>) -> Unit,
     onBack: () -> Unit,
+    onMenu: () -> Unit,
 ) {
     val mics = micSession.mics
     val claimed = remember { mutableStateListOf<GameSession.SingerSlot>() }
@@ -92,15 +93,16 @@ fun ClaimScreen(
     // Repainted from the frame loop; read inside composition so the meters animate.
     var tick by remember { mutableFloatStateOf(0f) }
 
-    BackHandler {
-        // Back undoes the last claim rather than leaving the screen, so a mis-heard microphone
-        // costs one press instead of starting the evening again.
+    // Back undoes the last claim rather than leaving the screen, so a mis-heard microphone costs
+    // one press instead of starting the evening again. The same step the button offers.
+    val stepBack: () -> Unit = {
         when {
             naming != null -> naming = null
             claimed.isNotEmpty() -> claimed.removeAt(claimed.size - 1)
             else -> onBack()
         }
     }
+    BackHandler(onBack = stepBack)
 
     DisposableEffect(micSession) {
         micSession.onAudio = { mic, buffer, count ->
@@ -201,11 +203,22 @@ fun ClaimScreen(
             }
 
             Spacer(Modifier.height(36.dp))
-            Text(
-                "Back undoes the last one.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = GameTheme.lyricIdle,
-            )
+
+            // This screen waits on a voice, so without these there is nothing on it to press and
+            // no visible way out — which matters most in the one case that strands you, a
+            // microphone the room is not loud enough to claim.
+            Row {
+                Button(onClick = stepBack) {
+                    Text(
+                        if (claimed.isEmpty()) "How many singers" else "Undo last singer",
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                    )
+                }
+                Spacer(Modifier.width(16.dp))
+                Button(onClick = onMenu) {
+                    Text("Main menu", modifier = Modifier.padding(horizontal = 12.dp))
+                }
+            }
         }
     }
 }
