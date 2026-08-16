@@ -49,6 +49,8 @@ import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.settings.MAX_NAME_LENGTH
 import com.example.ultrastarandroidtv.settings.Profiles
+import com.example.ultrastarandroidtv.settings.isNameTaken
+import com.example.ultrastarandroidtv.settings.namesAvailable
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.sqrt
@@ -151,6 +153,9 @@ fun ClaimScreen(
             NamePicker(
                 colour = GameTheme.playerColors[slot % GameTheme.playerColors.size],
                 profiles = profiles,
+                // Whoever has already been named this game. The slot being named is still in
+                // the list with a blank name, so nothing has to be excluded by index.
+                taken = claimed.map { it.name }.filter { it.isNotBlank() }.toSet(),
                 onPicked = { name ->
                     profiles.use(name)
                     claimed[slot] = claimed[slot].copy(name = name)
@@ -283,16 +288,28 @@ private fun MicSlot(
  * Recent names first, because with children rotating the best predictor of who is about to sing
  * is who sang last. Typing is the rare path — once per person, ever — and it is deliberately the
  * last option on the row rather than the first.
+ *
+ * **A name already in use this game is not offered at all.** One person cannot be holding both
+ * microphones, so a second singer picking the first singer's name is never what they meant — and
+ * the cost of allowing it is two identical names in the two top corners, which makes the scores
+ * unreadable for the whole song. Removed from the list rather than shown and refused: an option
+ * that cannot be chosen is only there to be pressed by mistake.
+ *
+ * @param taken names another singer has already claimed this game, compared without case the
+ *   same way [Profiles] does, so "mia" cannot slip past an existing "Mia".
  */
 @Composable
 private fun NamePicker(
     colour: Color,
     profiles: Profiles,
+    taken: Set<String>,
     onPicked: (String) -> Unit,
 ) {
     var typing by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
     val first = remember { FocusRequester() }
+
+    val available = namesAvailable(profiles.names, taken)
 
     LaunchedEffect(typing) {
         withFrameNanos { }
@@ -308,6 +325,12 @@ private fun NamePicker(
     Spacer(Modifier.height(32.dp))
 
     if (typing) {
+        // Typing the other singer's name reaches the same collision by a different road, so it
+        // is refused here too — with the reason on screen, since a Done button that silently
+        // does nothing is the one thing worse than allowing it.
+        val clash = draft.isNotBlank() && isNameTaken(draft, taken)
+        val accept = { if (draft.isNotBlank() && !clash) onPicked(draft) }
+
         BasicTextField(
             value = draft,
             onValueChange = { draft = it.take(MAX_NAME_LENGTH) },
@@ -315,7 +338,7 @@ private fun NamePicker(
             textStyle = TextStyle(color = GameTheme.lyricActive, fontSize = 34.sp),
             cursorBrush = SolidColor(colour),
             keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                onDone = { if (draft.isNotBlank()) onPicked(draft) },
+                onDone = { accept() },
             ),
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                 imeAction = ImeAction.Done,
@@ -327,9 +350,19 @@ private fun NamePicker(
                 .background(GameTheme.trackBackground)
                 .padding(horizontal = 20.dp, vertical = 16.dp),
         )
+
+        if (clash) {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "${draft.trim()} is already singing on the other microphone.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = GameTheme.playerColors[1],
+            )
+        }
+
         Spacer(Modifier.height(20.dp))
         Row {
-            Button(onClick = { if (draft.isNotBlank()) onPicked(draft) }) {
+            Button(onClick = accept) {
                 Text("Done", modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             }
             Spacer(Modifier.width(16.dp))
@@ -339,10 +372,10 @@ private fun NamePicker(
         }
     } else {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            items(profiles.names) { name ->
+            items(available) { name ->
                 Button(
                     onClick = { onPicked(name) },
-                    modifier = if (name == profiles.names.firstOrNull()) {
+                    modifier = if (name == available.firstOrNull()) {
                         Modifier.focusRequester(first)
                     } else {
                         Modifier
@@ -363,7 +396,7 @@ private fun NamePicker(
                 draft = ""
                 typing = true
             },
-            modifier = if (profiles.names.isEmpty()) Modifier.focusRequester(first) else Modifier,
+            modifier = if (available.isEmpty()) Modifier.focusRequester(first) else Modifier,
         ) {
             Text("New name…", modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
         }

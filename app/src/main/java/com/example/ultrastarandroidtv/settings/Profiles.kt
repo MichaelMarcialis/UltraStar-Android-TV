@@ -58,3 +58,24 @@ class Profiles(context: Context) {
     fun exists(name: String): Boolean =
         names.any { it.equals(name.trim(), ignoreCase = true) }
 }
+
+/**
+ * True when [name] belongs to somebody else already singing this game.
+ *
+ * Case-insensitive, matching [Profiles.use]: the two have to agree, or a name typed in a
+ * different case would be refused by one and folded onto the existing profile by the other.
+ *
+ * Free functions rather than methods because [Profiles] needs a `Context` and this rule does
+ * not — which is what lets it be tested rather than only read.
+ */
+fun isNameTaken(name: String, taken: Set<String>): Boolean =
+    taken.any { it.equals(name.trim(), ignoreCase = true) }
+
+/**
+ * [all] minus anyone already singing this game.
+ *
+ * One person cannot hold both microphones, so the second singer is never offered the first
+ * singer's name at all — an option that cannot be chosen is only there to be pressed by mistake.
+ */
+fun namesAvailable(all: List<String>, taken: Set<String>): List<String> =
+    all.filterNot { isNameTaken(it, taken) }
