@@ -59,23 +59,20 @@ class GameSession(
     val playerCount: Int = 2,
     /** How loud a voice must be to count. See `GameSettings.DEFAULT_MIC_THRESHOLD`. */
     micThreshold: Float = 0.06f,
-    /** True when the song has no video and the spectrum analyser stands in for it. */
-    visualize: Boolean = false,
 ) {
     val beats = BeatTimeConverter(song.metadata)
 
     /**
-     * Taps the song's audio for the visualiser, and only exists when there is no video to show.
+     * Taps the song's audio for the visualiser.
      *
-     * Building it unconditionally would spend an FFT per audio buffer on something nobody can
-     * see, for the majority of the library that does have a video.
+     * Always fitted, because it has to go in when the player is built and whether anyone will
+     * need it is not known by then — a song with a video file that turns out not to decode
+     * wants the visualiser after all. It does no work until something switches it on, so the
+     * majority of the library, which does have a working video, pays nothing for it.
      */
-    val spectrum: SpectrumTap? = if (visualize) SpectrumTap() else null
+    val spectrum: SpectrumTap = SpectrumTap()
 
-    val player = SongPlayer(
-        context,
-        spectrum?.let { arrayOf<AudioProcessor>(it) } ?: emptyArray(),
-    )
+    val player = SongPlayer(context, arrayOf<AudioProcessor>(spectrum))
 
     /**
      * A song with separate P1/P2 parts *and* two people to sing them.

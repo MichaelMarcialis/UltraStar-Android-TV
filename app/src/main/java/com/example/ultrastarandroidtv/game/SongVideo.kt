@@ -124,6 +124,8 @@ fun SongVideo(
     videoGapSeconds: Double,
     songPosition: () -> Double,
     isPlaying: () -> Boolean,
+    /** Called if the file will not play, so something else can take the screen. */
+    onFailed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (videoUri == null) return
@@ -142,6 +144,12 @@ fun SongVideo(
             volume = 0f
             repeatMode = Player.REPEAT_MODE_OFF
             addListener(object : Player.Listener {
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    // A file this device cannot decode is not a reason to stare at a blank
+                    // background for three minutes. Hand the screen to the visualiser.
+                    onFailed()
+                }
+
                 override fun onVideoSizeChanged(videoSize: VideoSize) {
                     if (videoSize.width > 0 && videoSize.height > 0) {
                         aspect = videoSize.width * videoSize.pixelWidthHeightRatio /

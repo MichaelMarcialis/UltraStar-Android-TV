@@ -87,7 +87,6 @@ fun GameplayScreen(
             },
             playerCount = playerCount,
             micThreshold = settings.micThreshold,
-            visualize = videoUri == null,
         )
     }
 
@@ -97,6 +96,11 @@ fun GameplayScreen(
     var scores by remember { mutableStateOf<List<ScoreSnapshot>>(emptyList()) }
     var finished by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
+
+    // A song can name a video that this device cannot decode. Falling back is automatic; there
+    // is nothing to configure per song, and nothing to do when a new song is added.
+    var videoFailed by remember(videoUri) { mutableStateOf(false) }
+    val showVisualizer = videoUri == null || videoFailed
 
     val focus = remember { FocusRequester() }
 
@@ -209,16 +213,19 @@ fun GameplayScreen(
         // Behind everything, at full brightness. Contrast for the UI comes from panels behind
         // the UI, not from dimming the picture. Silent: the mp3 is the audio and the clock, and
         // this only has to look like the song.
-        SongVideo(
-            videoUri = videoUri,
-            videoGapSeconds = song.metadata.videoGapSeconds,
-            songPosition = { session.drawTimeSeconds() },
-            isPlaying = { session.player.isPlaying },
-            modifier = Modifier.fillMaxSize(),
-        )
-
-        // Stands in for the video on the songs that ship without one.
-        SongVisualizer(session.spectrum, modifier = Modifier.fillMaxSize())
+        if (!showVisualizer) {
+            SongVideo(
+                videoUri = videoUri,
+                videoGapSeconds = song.metadata.videoGapSeconds,
+                songPosition = { session.drawTimeSeconds() },
+                isPlaying = { session.player.isPlaying },
+                onFailed = { videoFailed = true },
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            // Stands in whenever there is no picture: no video file, or one that will not play.
+            SongVisualizer(session.spectrum, modifier = Modifier.fillMaxSize())
+        }
 
         Column(modifier = Modifier.fillMaxSize().padding(GameTheme.trackPadding)) {
             TopBar(song, session, scores, notice)

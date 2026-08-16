@@ -76,6 +76,17 @@ class SpectrumTap(val bandCount: Int = 56) : BaseAudioProcessor() {
      */
     private var bandGain = FloatArray(bandCount)
 
+    /**
+     * Whether to actually analyse. False costs nothing but the pass-through.
+     *
+     * The tap has to be installed when the player is built — it lives in the audio pipeline —
+     * but whether anyone is *looking* is not known until then: a song with a video file that
+     * turns out not to decode needs the visualiser after all. So it is always fitted and
+     * switched on by whoever draws it.
+     */
+    @Volatile
+    var enabled: Boolean = false
+
     /** Copies the latest spectrum into [out]. Safe from any thread. */
     fun copyInto(out: FloatArray) {
         val current = published
@@ -97,7 +108,7 @@ class SpectrumTap(val bandCount: Int = 56) : BaseAudioProcessor() {
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
 
-        analyse(inputBuffer)
+        if (enabled) analyse(inputBuffer)
 
         // Pass-through, byte for byte.
         val output = replaceOutputBuffer(remaining)

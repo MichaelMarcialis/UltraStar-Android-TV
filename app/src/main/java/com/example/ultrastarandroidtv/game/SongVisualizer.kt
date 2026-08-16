@@ -2,6 +2,7 @@ package com.example.ultrastarandroidtv.game
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -38,8 +39,13 @@ private const val MAX_STEP_SECONDS = 0.1f
  * the visualiser belongs to the same picture as the arrows rather than looking bolted on.
  */
 @Composable
-fun SongVisualizer(tap: SpectrumTap?, modifier: Modifier = Modifier) {
-    if (tap == null) return
+fun SongVisualizer(tap: SpectrumTap, modifier: Modifier = Modifier) {
+    // The tap is fitted for every song but analyses nothing until asked. Asking here — and
+    // unasking on the way out — means a song with a working video never pays for an FFT.
+    DisposableEffect(tap) {
+        tap.enabled = true
+        onDispose { tap.enabled = false }
+    }
 
     val bands = remember(tap) { FloatArray(tap.bandCount) }
     val peaks = remember(tap) { FloatArray(tap.bandCount) }
