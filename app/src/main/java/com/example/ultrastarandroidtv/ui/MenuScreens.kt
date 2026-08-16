@@ -25,9 +25,15 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.game.GameTheme
 
-/** The first thing on screen. Two choices, both large enough to read from a sofa. */
+/**
+ * The first thing on screen. Three choices, all large enough to read from a sofa.
+ *
+ * "Singers" sits beside Settings rather than inside it: Settings is about the machine — latency,
+ * microphone sensitivity — and is set once by whoever put this together, while the list of people
+ * changes whenever a friend comes round.
+ */
 @Composable
-fun MainMenuScreen(onPlay: () -> Unit, onSettings: () -> Unit) {
+fun MainMenuScreen(onPlay: () -> Unit, onSingers: () -> Unit, onSettings: () -> Unit) {
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
 
@@ -48,6 +54,10 @@ fun MainMenuScreen(onPlay: () -> Unit, onSettings: () -> Unit) {
         Row {
             Button(onClick = onPlay, modifier = Modifier.focusRequester(first)) {
                 Text("Play", fontSize = 28.sp, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp))
+            }
+            Spacer(Modifier.width(24.dp))
+            Button(onClick = onSingers) {
+                Text("Singers", fontSize = 28.sp, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp))
             }
             Spacer(Modifier.width(24.dp))
             Button(onClick = onSettings) {

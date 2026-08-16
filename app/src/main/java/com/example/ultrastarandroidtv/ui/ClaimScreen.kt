@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -33,10 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Button
@@ -47,7 +43,6 @@ import com.example.ultrastarandroidtv.game.GameTheme
 import com.example.ultrastarandroidtv.game.MicClaim
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.settings.GameSettings
-import com.example.ultrastarandroidtv.settings.MAX_NAME_LENGTH
 import com.example.ultrastarandroidtv.settings.Profiles
 import com.example.ultrastarandroidtv.settings.isNameTaken
 import com.example.ultrastarandroidtv.settings.namesAvailable
@@ -153,6 +148,7 @@ fun ClaimScreen(
             NamePicker(
                 colour = GameTheme.playerColors[slot % GameTheme.playerColors.size],
                 profiles = profiles,
+                solo = playerCount == 1,
                 // Whoever has already been named this game. The slot being named is still in
                 // the list with a blank name, so nothing has to be excluded by index.
                 taken = claimed.map { it.name }.filter { it.isNotBlank() }.toSet(),
@@ -170,10 +166,12 @@ fun ClaimScreen(
                 color = GameTheme.lyricActive,
             )
             Text(
-                if (mics.isEmpty()) {
-                    micSession.summary
-                } else {
-                    "Whoever sings first takes the first colour."
+                when {
+                    mics.isEmpty() -> micSession.summary
+                    // On your own there is no colour to race for; the claim is still worth doing,
+                    // because it is what decides which of two identical microphones is yours.
+                    playerCount == 1 -> "Whichever one hears you is the one you will be scored on."
+                    else -> "Whoever sings first takes the first colour."
                 },
                 style = MaterialTheme.typography.bodyLarge,
                 color = GameTheme.lyricIdle,
@@ -295,6 +293,8 @@ private fun MicSlot(
  * unreadable for the whole song. Removed from the list rather than shown and refused: an option
  * that cannot be chosen is only there to be pressed by mistake.
  *
+ * @param solo true when only one person is singing, which changes what there is to say: "the
+ *   first singer" is an answer to a question nobody on their own has asked.
  * @param taken names another singer has already claimed this game, compared without case the
  *   same way [Profiles] does, so "mia" cannot slip past an existing "Mia".
  */
@@ -302,6 +302,7 @@ private fun MicSlot(
 private fun NamePicker(
     colour: Color,
     profiles: Profiles,
+    solo: Boolean,
     taken: Set<String>,
     onPicked: (String) -> Unit,
 ) {
@@ -317,11 +318,20 @@ private fun NamePicker(
     }
 
     Text("Who's singing?", style = MaterialTheme.typography.headlineLarge, color = colour)
-    Text(
-        "This microphone is now ${if (colour == GameTheme.playerColors[0]) "the first" else "the second"} singer.",
-        style = MaterialTheme.typography.bodyLarge,
-        color = GameTheme.lyricIdle,
-    )
+
+    // Dropped once the keyboard is up: it covers the bottom of the screen, and every line left
+    // above the field pushes the Done and Cancel buttons further underneath it.
+    if (!typing) {
+        Text(
+            when {
+                solo -> "That microphone is yours for this song."
+                colour == GameTheme.playerColors[0] -> "This microphone is now the first singer."
+                else -> "This microphone is now the second singer."
+            },
+            style = MaterialTheme.typography.bodyLarge,
+            color = GameTheme.lyricIdle,
+        )
+    }
     Spacer(Modifier.height(32.dp))
 
     if (typing) {
@@ -331,24 +341,12 @@ private fun NamePicker(
         val clash = draft.isNotBlank() && isNameTaken(draft, taken)
         val accept = { if (draft.isNotBlank() && !clash) onPicked(draft) }
 
-        BasicTextField(
+        NameEntry(
             value = draft,
-            onValueChange = { draft = it.take(MAX_NAME_LENGTH) },
-            singleLine = true,
-            textStyle = TextStyle(color = GameTheme.lyricActive, fontSize = 34.sp),
-            cursorBrush = SolidColor(colour),
-            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                onDone = { accept() },
-            ),
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                imeAction = ImeAction.Done,
-            ),
-            modifier = Modifier
-                .focusRequester(first)
-                .width(420.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(GameTheme.trackBackground)
-                .padding(horizontal = 20.dp, vertical = 16.dp),
+            onValueChange = { draft = it },
+            colour = colour,
+            focusRequester = first,
+            onDone = accept,
         )
 
         if (clash) {

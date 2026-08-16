@@ -54,4 +54,32 @@ class ProfileNamesTest {
     fun `nothing is taken when nobody has been named yet`() {
         assertFalse(isNameTaken("Robin", emptySet()))
     }
+
+    // ---- The rules Profiles applies when the list is edited ------------------------------------
+    //
+    // Profiles itself needs a Context, so what is pinned here is the reasoning it uses: whether a
+    // proposed edit collides with an existing name. The rules are stated once and read the same
+    // way from the profiles screen and from the claim screen.
+
+    @Test
+    fun `a rename that only changes capitalisation is not a collision with itself`() {
+        // "robin" -> "Robin" has to be allowed, which is why the check has to exclude the name
+        // being renamed rather than simply asking whether the new one already exists.
+        val others = everyone.filterNot { it.equals("Robin", ignoreCase = true) }.toSet()
+        assertFalse(isNameTaken("ROBIN", others))
+    }
+
+    @Test
+    fun `a rename onto somebody else is a collision`() {
+        val others = everyone.filterNot { it.equals("Robin", ignoreCase = true) }.toSet()
+        assertTrue(isNameTaken("Casey", others))
+        assertTrue(isNameTaken("casey", others))
+    }
+
+    @Test
+    fun `adding a name already on the list is a collision whatever the case`() {
+        assertTrue(isNameTaken("SAM", everyone.toSet()))
+        assertTrue(isNameTaken(" sam ", everyone.toSet()))
+        assertFalse(isNameTaken("Sammy", everyone.toSet()))
+    }
 }

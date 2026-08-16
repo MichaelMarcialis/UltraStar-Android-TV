@@ -44,19 +44,67 @@ class Profiles(context: Context) {
      * quietly creating a second profile that looks identical on screen.
      */
     fun use(name: String) {
-        val trimmed = name.trim().take(MAX_NAME_LENGTH)
+        val trimmed = clean(name)
         if (trimmed.isEmpty()) return
 
         val existing = names.firstOrNull { it.equals(trimmed, ignoreCase = true) }
         val kept = existing ?: trimmed
 
-        names = listOf(kept) + names.filterNot { it.equals(kept, ignoreCase = true) }
-        prefs.edit().putString(KEY_NAMES, names.joinToString(SEPARATOR)).apply()
+        save(listOf(kept) + names.filterNot { it.equals(kept, ignoreCase = true) })
+    }
+
+    /**
+     * Adds [name] without anybody having sung, for setting up before a game.
+     *
+     * Goes to the **front**, not the end. Sorting by recency is a guess at who sings next, and
+     * somebody bothering to type a name in is almost always typing the name of the person about
+     * to pick up a microphone.
+     *
+     * Returns false if the name is blank or already known, so the caller can say why.
+     */
+    fun add(name: String): Boolean {
+        val trimmed = clean(name)
+        if (trimmed.isEmpty() || exists(trimmed)) return false
+        save(listOf(trimmed) + names)
+        return true
+    }
+
+    /**
+     * Renames [from] to [to], **keeping its place in the list** — a correction is not a use, and
+     * fixing a typo should not reorder who is likely to sing next.
+     *
+     * Returns false if the new name is blank, or already belongs to somebody else. Changing only
+     * the capitalisation of a name is allowed and is the reason that check ignores the name being
+     * renamed rather than simply asking whether the new one exists.
+     */
+    fun rename(from: String, to: String): Boolean {
+        val trimmed = clean(to)
+        if (trimmed.isEmpty()) return false
+        if (names.none { it.equals(from, ignoreCase = true) }) return false
+
+        val clashes = names.any {
+            it.equals(trimmed, ignoreCase = true) && !it.equals(from, ignoreCase = true)
+        }
+        if (clashes) return false
+
+        save(names.map { if (it.equals(from, ignoreCase = true)) trimmed else it })
+        return true
+    }
+
+    fun remove(name: String) {
+        save(names.filterNot { it.equals(name.trim(), ignoreCase = true) })
     }
 
     /** True when [name] would land on an existing profile rather than create one. */
     fun exists(name: String): Boolean =
         names.any { it.equals(name.trim(), ignoreCase = true) }
+
+    private fun save(updated: List<String>) {
+        names = updated
+        prefs.edit().putString(KEY_NAMES, updated.joinToString(SEPARATOR)).apply()
+    }
+
+    private fun clean(name: String): String = name.trim().take(MAX_NAME_LENGTH)
 }
 
 /**

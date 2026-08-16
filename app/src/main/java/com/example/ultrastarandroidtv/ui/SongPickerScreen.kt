@@ -59,6 +59,7 @@ import com.example.ultrastarandroidtv.library.CoverLoader
 import com.example.ultrastarandroidtv.library.LibraryLocation
 import com.example.ultrastarandroidtv.library.SafDocumentTree
 import com.example.ultrastarandroidtv.library.ScannedSong
+import com.example.ultrastarandroidtv.library.SongLibraryCache
 import com.example.ultrastarandroidtv.library.SongLibraryScanner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -91,6 +92,8 @@ private const val FALLBACK_PREVIEW_SECONDS = 45.0
 @Composable
 fun SongPickerScreen(
     playerCount: Int,
+    /** Held for the life of the app, so coming back for a second song is instant. */
+    cache: SongLibraryCache,
     onPlay: (ChosenSong) -> Unit,
     /** Back to the microphones and names, which is one step up rather than out. */
     onChangeSingers: () -> Unit,
@@ -100,9 +103,18 @@ fun SongPickerScreen(
     val location = remember { LibraryLocation(context) }
 
     var treeUri by remember { mutableStateOf<Uri?>(location.saved()) }
-    var songs by remember { mutableStateOf<List<ScannedSong>>(emptyList()) }
+    var songs by remember { mutableStateOf(cache.songs) }
     var status by remember { mutableStateOf("Looking for songs…") }
     var focusedIndex by remember { mutableIntStateOf(0) }
+
+    // Scanning is the only state with anything to animate, and the count is the only honest
+    // measure of progress there is — the total is not known until the walk ends.
+    var scanning by remember { mutableStateOf(false) }
+    var counted by remember { mutableIntStateOf(0) }
+
+    // Bumped by Rescan. A session-lived cache cannot go stale on its own, but somebody adding
+    // songs to the card while the app is open is the one case it cannot see.
+    var rescans by remember { mutableIntStateOf(0) }
 
     val first = remember { FocusRequester() }
     BackHandler(onBack = onChangeSingers)
@@ -116,22 +128,45 @@ fun SongPickerScreen(
     ) { picked ->
         when {
             picked == null -> status = "No folder picked."
-            location.remember(picked) -> treeUri = picked
+            location.remember(picked) -> {
+                // A different folder is a different library; the old scan cannot answer for it.
+                cache.clear()
+                treeUri = picked
+            }
             else -> status = "Android would not keep access to that folder. Try another."
         }
     }
 
-    LaunchedEffect(treeUri) {
+    LaunchedEffect(treeUri, rescans) {
         val currentTree = tree ?: run {
             status = "Choose the folder your songs are in."
             return@LaunchedEffect
         }
-        status = "Scanning…"
-        val found = withContext(Dispatchers.IO) { SongLibraryScanner(currentTree).scan() }
+
+        if (cache.holds(treeUri)) {
+            songs = cache.songs
+            status = summarise(songs.size)
+            return@LaunchedEffect
+        }
+
+        scanning = true
+        counted = 0
+        status = "Reading the card…"
+
+        // `onSong` fires per song as the walk finds them, which is what turns a blank wait into
+        // a number going up. The songs themselves are not shown until the end: they arrive in
+        // folder order and the row is sorted by title, so filling it in as they came would have
+        // every card jump sideways the moment the scan finished.
+        val found = withContext(Dispatchers.IO) {
+            SongLibraryScanner(currentTree).scan { counted++ }
+        }
+
         songs = found.songs
             .filter { it.isPlayable }
             .sortedBy { it.song.metadata.title.lowercase() }
-        status = if (songs.isEmpty()) "No playable songs found." else "${songs.size} songs"
+        cache.put(treeUri, songs)
+        scanning = false
+        status = summarise(songs.size)
     }
 
     LaunchedEffect(songs) {
@@ -175,16 +210,25 @@ fun SongPickerScreen(
                 style = MaterialTheme.typography.headlineMedium,
                 color = GameTheme.lyricActive,
             )
-            Text(status, style = MaterialTheme.typography.bodyMedium, color = GameTheme.lyricIdle)
+            Text(
+                if (scanning) "Found $counted so far…" else status,
+                style = MaterialTheme.typography.bodyMedium,
+                color = GameTheme.lyricIdle,
+            )
+
+            if (scanning) {
+                Spacer(Modifier.height(18.dp))
+                LoadingBar()
+            }
 
             if (treeUri == null) {
                 Spacer(Modifier.height(20.dp))
                 Button(onClick = { picker.launch(null) }) { Text("Choose song folder") }
             }
 
-            // The two ways out, spelled out rather than left to the remote's back button. The
-            // singers are already chosen by this point, and the commonest reason to leave this
-            // screen is that the wrong person ended up holding the wrong microphone.
+            // The ways out, spelled out rather than left to the remote's back button. The singers
+            // are already chosen by this point, and the commonest reason to leave this screen is
+            // that the wrong person ended up holding the wrong microphone.
             Spacer(Modifier.height(20.dp))
             Row {
                 Button(onClick = onChangeSingers) {
@@ -193,6 +237,16 @@ fun SongPickerScreen(
                 Spacer(Modifier.width(16.dp))
                 Button(onClick = onMenu) {
                     Text("Main menu", modifier = Modifier.padding(horizontal = 12.dp))
+                }
+                Spacer(Modifier.width(16.dp))
+                // The cache's one blind spot: songs added to the card while the app is running.
+                Button(
+                    onClick = {
+                        cache.clear()
+                        rescans++
+                    },
+                ) {
+                    Text("Rescan", modifier = Modifier.padding(horizontal = 12.dp))
                 }
             }
         }
@@ -230,6 +284,12 @@ fun SongPickerScreen(
             }
         }
     }
+}
+
+private fun summarise(count: Int): String = when (count) {
+    0 -> "No playable songs found."
+    1 -> "1 song"
+    else -> "$count songs"
 }
 
 /** What a badge says, and the colour it says it in. */

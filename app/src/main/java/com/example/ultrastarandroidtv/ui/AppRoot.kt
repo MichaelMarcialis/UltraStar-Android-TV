@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.example.ultrastarandroidtv.game.GameSession
 import com.example.ultrastarandroidtv.game.GameplayScreen
+import com.example.ultrastarandroidtv.library.SongLibraryCache
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.settings.Profiles
@@ -23,7 +24,7 @@ class ChosenSong(
     val videoUri: String?,
 )
 
-private enum class Screen { Menu, Players, Claim, Songs, Settings, Playing }
+private enum class Screen { Menu, Players, Claim, Songs, Singers, Settings, Playing }
 
 /**
  * The whole app, and the order things happen in.
@@ -42,6 +43,10 @@ fun AppRoot() {
     val settings = remember { GameSettings(context) }
     val profiles = remember { Profiles(context) }
 
+    // Scanned once and kept for the session. Reading a fifty-song card over SAF takes seconds,
+    // and the commonest thing anyone does after a song is come straight back for another one.
+    val library = remember { SongLibraryCache() }
+
     // Opened once for the life of the app and handed between screens. Reopening them per screen
     // would repeat the USB permission dance and risk the capture threads racing a teardown.
     val micSession = remember { UsbMicSession(context) }
@@ -58,7 +63,13 @@ fun AppRoot() {
     when (screen) {
         Screen.Menu -> MainMenuScreen(
             onPlay = { screen = Screen.Players },
+            onSingers = { screen = Screen.Singers },
             onSettings = { screen = Screen.Settings },
+        )
+
+        Screen.Singers -> ProfilesScreen(
+            profiles = profiles,
+            onBack = { screen = Screen.Menu },
         )
 
         Screen.Players -> PlayerCountScreen(
@@ -91,6 +102,7 @@ fun AppRoot() {
 
         Screen.Songs -> SongPickerScreen(
             playerCount = playerCount,
+            cache = library,
             onPlay = {
                 chosen = it
                 screen = Screen.Playing
