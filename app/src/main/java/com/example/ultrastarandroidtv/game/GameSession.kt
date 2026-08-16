@@ -1,6 +1,8 @@
 package com.example.ultrastarandroidtv.game
 
 import android.content.Context
+import androidx.media3.common.audio.AudioProcessor
+import com.example.ultrastarandroidtv.audio.SpectrumTap
 import com.example.ultrastarandroidtv.mic.OpenMic
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.pitch.PitchTracker
@@ -22,6 +24,14 @@ private const val TAIL_SECONDS = 2.0
  * slide between notes still looks like one.
  */
 private const val MEDIAN_WINDOW = 5
+
+/**
+ * How close to the end of the audio counts as the end.
+ *
+ * A player's final reported position rarely lands exactly on the duration, and the difference
+ * is not worth leaving anyone staring at a finished song waiting for a score.
+ */
+private const val END_TOLERANCE_SECONDS = 0.3
 
 /**
  * One playthrough: the song, the player, the mics, and a scorer per singer.
@@ -49,9 +59,23 @@ class GameSession(
     val playerCount: Int = 2,
     /** How loud a voice must be to count. See `GameSettings.DEFAULT_MIC_THRESHOLD`. */
     micThreshold: Float = 0.06f,
+    /** True when the song has no video and the spectrum analyser stands in for it. */
+    visualize: Boolean = false,
 ) {
     val beats = BeatTimeConverter(song.metadata)
-    val player = SongPlayer(context)
+
+    /**
+     * Taps the song's audio for the visualiser, and only exists when there is no video to show.
+     *
+     * Building it unconditionally would spend an FFT per audio buffer on something nobody can
+     * see, for the majority of the library that does have a video.
+     */
+    val spectrum: SpectrumTap? = if (visualize) SpectrumTap() else null
+
+    val player = SongPlayer(
+        context,
+        spectrum?.let { arrayOf<AudioProcessor>(it) } ?: emptyArray(),
+    )
 
     /**
      * A song with separate P1/P2 parts *and* two people to sing them.
@@ -194,7 +218,29 @@ class GameSession(
      */
     fun drawTimeSeconds(): Double = calibration.heardSongTimeFor(playerPositionSeconds())
 
-    val isFinished: Boolean get() = playerPositionSeconds() >= songEndSeconds
+    /**
+     * Whether the song is over.
+     *
+     * Both halves are needed. A chart's last note plus its tail can fall *after* the end of the
+     * audio file, and once the audio ends the clock stops advancing — so waiting on the position
+     * alone waits forever, and the results screen never appears. Equally, a file with a long
+     * silent outro would leave everyone staring at an empty track, so the notes running out
+     * counts too.
+     */
+    val isFinished: Boolean
+        get() {
+            if (player.isEnded) return true
+
+            val position = playerPositionSeconds()
+            if (position >= songEndSeconds) return true
+
+            // The chart can outlast the recording. "Steve's Lava Chicken" ends its last note
+            // 0.3 s after the audio stops, and once the audio stops the clock stops with it —
+            // so the position freezes just short of the finish line and the results screen
+            // never appears. Measured, not guessed: the log read `42.5/42.8 s ended=false`.
+            val duration = player.durationSeconds
+            return duration > 0.0 && position >= duration - END_TOLERANCE_SECONDS
+        }
 
     fun start() {
         micSession.start()

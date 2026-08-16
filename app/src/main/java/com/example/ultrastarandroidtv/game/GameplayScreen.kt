@@ -38,6 +38,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.playback.SyncCalibration
@@ -86,6 +87,7 @@ fun GameplayScreen(
             },
             playerCount = playerCount,
             micThreshold = settings.micThreshold,
+            visualize = videoUri == null,
         )
     }
 
@@ -140,10 +142,14 @@ fun GameplayScreen(
             val fresh = session.singers.map { it.snapshot() }
             if (fresh != scores) scores = fresh
 
-            val over = session.isFinished
-            if (over != finished) {
-                finished = over
-                if (over) session.pause()
+            // A latch, not a mirror. Finishing pauses the player, which freezes the clock — and
+            // the frozen position then reads as *not* finished, so tracking the condition both
+            // ways cleared the flag on the very next frame and left the song paused with no
+            // results on screen. That was the missing score screen: it appeared for one frame.
+            // A song that has ended does not un-end; only restarting clears this.
+            if (!finished && session.isFinished) {
+                finished = true
+                session.pause()
             }
 
             if (notice == null) {
@@ -157,10 +163,12 @@ fun GameplayScreen(
 
             // Bring-up trace. Beats keep being *scored* whether or not anyone sings, so this
             // separates "nobody is singing" from "the readings are not arriving at all" —
-            // which look identical on screen.
+            // which look identical on screen. Paced by the wall clock rather than by the song,
+            // because the most interesting moment is the one where the song stops advancing.
             val position = session.playerPositionSeconds()
-            if (position - lastLogged > 2.0) {
-                lastLogged = position
+            val nowMs = System.currentTimeMillis().toDouble()
+            if (nowMs - lastLogged > 2000.0) {
+                lastLogged = nowMs
                 Log.i(
                     TAG,
                     "%.1fs  ".format(position) + session.singers.joinToString("  ") {
@@ -184,14 +192,10 @@ fun GameplayScreen(
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
                     Key.DirectionCenter, Key.Enter -> {
-                        if (finished) {
-                            session.restart()
-                            finished = false
-                        } else if (session.player.isPlaying) {
-                            session.pause()
-                        } else {
-                            session.play()
-                        }
+                        // Once the results are up they own the button; the singers are picking
+                        // between "again" and "another one", not un-pausing anything.
+                        if (finished) return@onPreviewKeyEvent false
+                        if (session.player.isPlaying) session.pause() else session.play()
                         true
                     }
                     Key.Back -> {
@@ -202,8 +206,9 @@ fun GameplayScreen(
                 }
             },
     ) {
-        // Behind everything, and behind its own scrim. Silent: the mp3 is the audio and the
-        // clock, and this only has to look like the song.
+        // Behind everything, at full brightness. Contrast for the UI comes from panels behind
+        // the UI, not from dimming the picture. Silent: the mp3 is the audio and the clock, and
+        // this only has to look like the song.
         SongVideo(
             videoUri = videoUri,
             videoGapSeconds = song.metadata.videoGapSeconds,
@@ -211,6 +216,9 @@ fun GameplayScreen(
             isPlaying = { session.player.isPlaying },
             modifier = Modifier.fillMaxSize(),
         )
+
+        // Stands in for the video on the songs that ship without one.
+        SongVisualizer(session.spectrum, modifier = Modifier.fillMaxSize())
 
         Column(modifier = Modifier.fillMaxSize().padding(GameTheme.trackPadding)) {
             TopBar(song, session, scores, notice)
@@ -231,7 +239,16 @@ fun GameplayScreen(
         }
 
         if (finished) {
-            Results(session, scores, modifier = Modifier.align(Alignment.Center))
+            Results(
+                session = session,
+                scores = scores,
+                onReplay = {
+                    session.restart()
+                    finished = false
+                },
+                onPickAnother = onExit,
+                modifier = Modifier.align(Alignment.Center),
+            )
         }
     }
 }
@@ -244,7 +261,7 @@ private fun TopBar(
     notice: String?,
 ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.panel()) {
             Text(
                 song.metadata.title,
                 style = MaterialTheme.typography.titleLarge,
@@ -260,16 +277,32 @@ private fun TopBar(
             }
         }
 
-        session.singers.forEach { singer ->
-            Spacer(Modifier.width(40.dp))
-            ScoreReadout(
-                name = singer.name,
-                score = scores.getOrNull(singer.index)?.total ?: 0,
-                color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
-            )
+        Spacer(Modifier.weight(1f))
+
+        Row(modifier = Modifier.panel()) {
+            session.singers.forEachIndexed { position, singer ->
+                if (position > 0) Spacer(Modifier.width(36.dp))
+                ScoreReadout(
+                    name = singer.name,
+                    score = scores.getOrNull(singer.index)?.total ?: 0,
+                    color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                )
+            }
         }
     }
 }
+
+/**
+ * A translucent card behind a piece of UI.
+ *
+ * This is where contrast against the video comes from now. Dimming the entire picture to
+ * protect a few lines of text was the first approach and it was backwards — it spent every
+ * pixel of the video on a problem that only exists where the text is.
+ */
+private fun Modifier.panel(): Modifier = this
+    .clip(RoundedCornerShape(14.dp))
+    .background(GameTheme.chipBackground)
+    .padding(horizontal = 18.dp, vertical = 10.dp)
 
 @Composable
 private fun TrackPanel(
@@ -336,8 +369,17 @@ private fun ScoreReadout(name: String, score: Int, color: Color) {
 private fun Results(
     session: GameSession,
     scores: List<ScoreSnapshot>,
+    onReplay: () -> Unit,
+    onPickAnother: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val replay = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        // After a frame, not before one: the button has to exist before it can take focus.
+        withFrameNanos { }
+        runCatching { replay.requestFocus() }
+    }
+
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(20.dp))
@@ -367,6 +409,18 @@ private fun Results(
             Spacer(Modifier.height(16.dp))
         }
 
-        Text("OK to sing it again", style = MaterialTheme.typography.bodySmall, color = GameTheme.lyricIdle)
+        Spacer(Modifier.height(12.dp))
+
+        // Buttons rather than a line of text telling people which remote button does what.
+        // The two things anyone wants here are another go at this song or a different one.
+        Row {
+            Button(onClick = onReplay, modifier = Modifier.focusRequester(replay)) {
+                Text("Sing it again", modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
+            }
+            Spacer(Modifier.width(20.dp))
+            Button(onClick = onPickAnother) {
+                Text("Pick another song", modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
+            }
+        }
     }
 }

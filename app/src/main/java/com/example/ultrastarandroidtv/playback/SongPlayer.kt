@@ -20,9 +20,31 @@ import androidx.media3.exoplayer.ExoPlayer
  * **Main thread only** — ExoPlayer and [Choreographer] both require the thread that created
  * them. [clock] is the exception and is safe to read from anywhere. Call [release] when done.
  */
-class SongPlayer(context: Context) {
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+class SongPlayer(
+    context: Context,
+    /**
+     * Extra stages for the audio pipeline, used to tap the song for the visualiser.
+     *
+     * Anything here sits between the decoder and the speakers on the same path the singers are
+     * scored against, so a processor that alters samples would alter the game. Pass-through
+     * only.
+     */
+    audioProcessors: Array<androidx.media3.common.audio.AudioProcessor> = emptyArray(),
+) {
 
-    private val player: ExoPlayer = ExoPlayer.Builder(context).build().apply {
+    private val player: ExoPlayer = ExoPlayer.Builder(
+        context,
+        object : androidx.media3.exoplayer.DefaultRenderersFactory(context) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean,
+            ) = androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                .setAudioProcessors(audioProcessors)
+                .build()
+        },
+    ).build().apply {
         setAudioAttributes(
             AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
@@ -82,6 +104,25 @@ class SongPlayer(context: Context) {
 
     /** True once the song has buffered enough to start. */
     val isReady: Boolean get() = player.playbackState == Player.STATE_READY
+
+    /**
+     * True once the audio has run out.
+     *
+     * Needed because a song's notes can finish later than its audio: the clock stops advancing
+     * at the end of the file, so waiting for the position to pass the last note plus a tail can
+     * wait forever.
+     */
+    val isEnded: Boolean get() = player.playbackState == Player.STATE_ENDED
+
+    /** Player state as a word, for logs. */
+    val stateName: String
+        get() = when (player.playbackState) {
+            Player.STATE_IDLE -> "idle"
+            Player.STATE_BUFFERING -> "buffering"
+            Player.STATE_READY -> "ready"
+            Player.STATE_ENDED -> "ended"
+            else -> "unknown"
+        }
 
     val isPlaying: Boolean get() = player.isPlaying
 

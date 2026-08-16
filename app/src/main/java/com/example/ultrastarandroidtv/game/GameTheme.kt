@@ -20,18 +20,19 @@ object GameTheme {
     /** Near-black with a slight blue cast; a true black smears on OLED as notes scroll across. */
     val background = Color(0xFF0E0E13)
 
-    /** The track's own panel, lifted just enough to separate it from the page. */
-    val trackBackground = Color(0xFF16171F)
-
     /**
-     * Laid over the song video so the game stays readable on top of it.
+     * The track's own panel.
      *
-     * Heavy, and deliberately so: this has to work over the brightest, busiest video in the
-     * library, not the average one, and the notes and lyrics are thin bright shapes that a
-     * light background destroys. Turn it down only after checking the worst song, not the
-     * prettiest.
+     * Translucent rather than opaque, and this is where the contrast against the video comes
+     * from. Dimming the *whole* video to protect a strip of text at the bottom was the first
+     * approach and it was backwards: it cost every pixel of the picture to fix a problem that
+     * only exists where the text is. Contrast belongs behind the thing that needs it.
      */
-    val videoScrim = Color(0xCC07070B)
+    val trackBackground = Color(0xD90E0F16)
+
+    /** Behind the title and the scores, for the same reason and at the same job. */
+    val chipBackground = Color(0xB30A0B10)
+
 
     /** Faint horizontal rule every octave, so leaps have something to be measured against. */
     val octaveLine = Color(0x14FFFFFF)
