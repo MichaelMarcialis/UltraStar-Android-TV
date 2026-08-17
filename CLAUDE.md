@@ -184,8 +184,27 @@ prints a per-frame difference, and the frames with the largest values are the an
   - **Not one song on this card declares `#VIDEO`**, though several ship an `.mp4` beside the `.txt`. The scanner falls back to any video file in the song's folder — a folder holds one song's media, so a lone video in it is not ambiguous, and requiring the header would have shipped a feature that never fired on the real library.
   - Drift is corrected only past 0.4 s and only every 250 ms. The video is decoration: nobody sees a tenth of a second of lip-sync error on a music video, and every correction is a visible seek, so correcting little and late looks better than tracking well.
   - **Full brightness, with contrast coming from panels behind the UI** (`GameTheme.trackBackground`, `chipBackground`). Dimming the whole video to protect a strip of text was the first attempt and it was backwards: it spent every pixel of the picture on a problem that only exists where the text is.
-  - **Black bars are measured off the picture, not inferred from the aspect ratio.** A 2:1 image encoded into a 16:9 file carries its bars inside the frame and every dimension the player reports still says 16:9 — pixels are the only evidence. `measureLetterbox` samples one 64×36 frame a second in, finds the dark margins and crops them away, refusing to act on an all-black frame (that is a fade, not a letterbox) and never cropping more than 1.5×.
+  - **`Modifier.requiredSize`, never `Modifier.size`.** This is the whole reason cover never worked. `size` is *clamped by the incoming constraints* — that is its documented difference from `requiredSize` — so a view deliberately sized past the screen edge, which is exactly what covering means, silently snapped back to the screen. A `TextureView` stretches its content to whatever bounds it ends up with, so **every video was being squashed to 16:9**: a 4:3 file came out stretched wide, a 2.35:1 file came out tall and thin. The letterbox crop could not work either, since it multiplies a size that was being clamped away. Caught by logging requested vs actual size — `asked=1000.8dp got=1920px` — not by reading the code, which looks right.
+  - **Black bars are measured off the picture, not inferred from the aspect ratio.** A 2:1 image encoded into a 16:9 file carries its bars inside the frame and every dimension the player reports still says 16:9 — pixels are the only evidence. `measureLetterbox` samples the frame at 128×72, finds the dark margins and crops them away, refusing to act on an all-black frame (that is a fade, not a letterbox) and never cropping more than 1.5×.
+  - **Six samples, and the smallest crop wins.** A bar is in every frame of the file, so a real one survives every sample; a dark sky at the top of one shot does not, and taking the first answer would zoom the whole video for the rest of the song on the strength of it. A line counts as bar at **97 % dark rather than 100 %** — compression leaves noise where a bar meets the picture, and one stray bright pixel was enough to hide a band 130 pixels thick.
   - A `TextureView`, not a `SurfaceView`: filling the screen means sizing the view past the screen edge, and a SurfaceView is a separate compositor layer that is not reliably clipped by its parent.
+
+**What is actually in this library's videos** (measured 2026-08-16 with `ffmpeg cropdetect` over 15 of the 46 files, not guessed):
+
+- **Most are 4:3 standard-definition rips** — 640×480, 720×480, one 600×480 — not 16:9. That is why the squashing was so visible: nearly every video was being stretched sideways.
+- **About half carry black bars inside the frame.** Worst cases: 1920×1080 files holding a 1920×804 picture (2.39:1, 138-pixel bands top and bottom), and one holding a 1362×1080 picture (278-pixel bands at the sides). The needed crops are 1.34× and 1.41× — comfortably inside the 1.5× limit, which was chosen before any of this was measured and turns out to be about right.
+- A few have a 2-pixel sliver, which is below what the sampler can see and below what anyone can see.
+
+**To check a video file, pull it off the card and use ffmpeg** — far faster than driving the TV:
+
+```
+adb shell "find /storage/5002-E7C7/UltraStar -type f -iname '*.mp4' -printf '%s\t%p\n'" | tr -d '\r'
+adb pull "<path>" v.mp4
+ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 v.mp4
+ffmpeg -hide_banner -ss 30 -t 20 -i v.mp4 -vf cropdetect=limit=24:round=2:reset=0 -f null -
+```
+
+**`tr -d '\r'` is not optional**: `adb shell` returns CRLF, and a path with a trailing carriage return fails as `No such file or directory` while looking perfectly correct in the error message. Song folders also contain `’` (U+2019), which survives `adb pull` fine once the CR is gone.
 
 - **Spectrum visualiser** (`audio/`, `game/SongVisualizer.kt`) — for the handful of songs with no video. Original radix-2 FFT (`audio/Fft.kt`) fed by a Media3 `AudioProcessor` that taps the song **pass-through**: it is the same audio the singers are scored against and the one thing it must never do is change it. Android's `Visualizer` effect was the alternative and needs `RECORD_AUDIO` — an alarming permission to ask a family for so that bars can wiggle, and unnecessary when the audio already passes through this app.
   - Bands are **log-spaced and tilted upwards** (~+3 dB/octave). Drawn honestly a spectrum is a cliff of bass and a flat line everywhere else, because that is genuinely where music keeps its energy; every visualiser ever built compensates.

@@ -2,7 +2,7 @@ package com.example.ultrastarandroidtv.game
 
 import android.view.TextureView
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -35,12 +35,33 @@ private const val MAX_DRIFT_SECONDS = 0.4
 /** Drift is checked a few times a second rather than every frame; it accumulates slowly. */
 private const val SYNC_INTERVAL_MS = 250L
 
-/** How long to let the picture settle before measuring it, and how many times to try. */
-private const val LETTERBOX_CHECK_MS = 1500L
-private const val LETTERBOX_ATTEMPTS = 4
+/** When the picture is sampled for bars, and how many times. Spread out; see the effect below. */
+private const val LETTERBOX_FIRST_MS = 2000L
+private const val LETTERBOX_INTERVAL_MS = 2000L
+private const val LETTERBOX_SAMPLES = 6
+
+/**
+ * How finely the frame is sampled.
+ *
+ * Each sampled row is one seventy-second of the height, so a bar has to be about 1.5 % of the
+ * picture before it can be seen at all — which is roughly where a bar stops being visible on a
+ * television anyway. The coarser 64x36 this started at could not resolve the 22-pixel bars that
+ * several files in this library actually have.
+ */
+private const val SAMPLE_WIDTH = 128
+private const val SAMPLE_HEIGHT = 72
 
 /** Anything this dark counts as a black bar rather than a dark shot. */
-private const val BAR_LUMA = 14
+private const val BAR_LUMA = 20
+
+/**
+ * How much of a line has to be dark for it to count as bar.
+ *
+ * Not all of it. A bar is black because it was encoded black, but compression leaves noise along
+ * the edge where it meets the picture, and requiring every single pixel means one stray bright
+ * one hides a bar a hundred and thirty pixels thick.
+ */
+private const val BAR_PURITY = 0.97f
 
 /** Refuse to crop more than this; past it, the picture is dark rather than letterboxed. */
 private const val MAX_CROP = 1.5f
@@ -51,16 +72,19 @@ private const val CROP_MARGIN = 1.02f
 /**
  * Works out how much of the picture is black bar, and returns the scale that removes it.
  *
- * Aspect ratio alone cannot answer this. A 2:1 picture encoded into a 16:9 file carries its bars
- * inside the frame, and every dimension the player reports says 16:9 — the only way to know is
- * to look at the pixels. So one frame is sampled, small, once, a second or two in.
+ * Aspect ratio alone cannot answer this, and on this library it is not even close. Measured with
+ * `ffmpeg cropdetect` over a sample of the card: about half the videos carry bars *inside* the
+ * frame — 1920x1080 files holding 2.35:1 pictures with 130-pixel bands top and bottom, and one
+ * holding a 4:3 picture with 278-pixel bands at the sides. Every dimension the player reports for
+ * those files says 16:9. The only evidence is the pixels.
  *
- * Returns 1 when there is nothing to crop, and never more than [MAX_CROP]: a shot that happens
- * to open on black would otherwise be mistaken for a letterbox and the video zoomed to nothing.
+ * Returns 1 when there is nothing to crop, null when the frame is too dark to judge, and never
+ * more than [MAX_CROP] — a shot that opens on black would otherwise be mistaken for a letterbox
+ * and the video zoomed to nothing.
  */
 private fun measureLetterbox(view: TextureView): Float? {
-    val width = 64
-    val height = 36
+    val width = SAMPLE_WIDTH
+    val height = SAMPLE_HEIGHT
     val frame = runCatching { view.getBitmap(width, height) }.getOrNull() ?: return null
 
     fun dark(x: Int, y: Int): Boolean {
@@ -70,8 +94,8 @@ private fun measureLetterbox(view: TextureView): Float? {
         return luma <= BAR_LUMA
     }
 
-    fun rowDark(y: Int) = (0 until width).all { dark(it, y) }
-    fun columnDark(x: Int) = (0 until height).all { dark(x, it) }
+    fun rowDark(y: Int) = (0 until width).count { dark(it, y) } >= width * BAR_PURITY
+    fun columnDark(x: Int) = (0 until height).count { dark(x, it) } >= height * BAR_PURITY
 
     var top = 0
     while (top < height / 2 && rowDark(top)) top++
@@ -91,9 +115,9 @@ private fun measureLetterbox(view: TextureView): Float? {
     val horizontalScale = width.toFloat() / (width - left - right)
     val needed = maxOf(verticalScale, horizontalScale)
 
-    // A hair over what the measurement says. The sample is coarse — 64x36 — so a bar can be a
-    // fraction of a sampled row thicker than it looks, and a sliver of black left at the edge
-    // is far more noticeable than one per cent more crop.
+    // A hair over what the measurement says: a bar can be a fraction of a sampled row thicker
+    // than it looks, and a sliver of black at the edge is far more noticeable than one per cent
+    // more crop.
     return if (needed <= 1.001f) 1f else (needed * CROP_MARGIN).coerceAtMost(MAX_CROP)
 }
 
@@ -207,21 +231,33 @@ fun SongVideo(
                     surface = view
                 }
             },
-            modifier = Modifier.size(width, height).align(Alignment.Center),
+            // requiredSize, not size. `size` is clamped by the incoming constraints, so a view
+            // deliberately sized past the screen edge — which is exactly what covering means —
+            // silently snapped back to the screen, and a TextureView stretches its content to
+            // whatever bounds it ends up with. Every video was being squashed to 16:9, and the
+            // letterbox crop below could never take effect either, since it multiplies a size
+            // that was being clamped away.
+            modifier = Modifier.requiredSize(width, height).align(Alignment.Center),
         )
     }
 
     // Measure the letterbox once the picture is running, and crop it away.
+    //
+    // Several samples, and the **smallest** crop any of them asked for wins. A bar is in every
+    // frame of the file, so a real one survives every sample; a dark sky at the top of one shot
+    // does not, and taking the first answer would have zoomed the whole video for the rest of the
+    // song on the strength of it. Applied as it goes rather than at the end, because bars left up
+    // for twelve seconds while the evidence is gathered is the thing being fixed.
     LaunchedEffect(player) {
-        delay(LETTERBOX_CHECK_MS)
-        repeat(LETTERBOX_ATTEMPTS) {
+        delay(LETTERBOX_FIRST_MS)
+        var smallest = Float.MAX_VALUE
+        repeat(LETTERBOX_SAMPLES) {
             val measured = surface?.let(::measureLetterbox)
-            if (measured != null && measured > 1.001f) {
+            if (measured != null && measured < smallest) {
+                smallest = measured
                 crop = measured
-                return@LaunchedEffect
             }
-            if (measured != null) return@LaunchedEffect
-            delay(LETTERBOX_CHECK_MS)
+            delay(LETTERBOX_INTERVAL_MS)
         }
     }
 }
