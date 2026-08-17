@@ -14,6 +14,22 @@ import kotlin.math.sqrt
 /** Samples per transform. 1024 at 48 kHz is a 21 ms picture, updated about 47 times a second. */
 private const val WINDOW = 1024
 
+/**
+ * Points in the published waveform.
+ *
+ * The window is decimated down to this, which both costs less to draw and looks better: 1024
+ * points across a television is far more detail than a moving line can show, and averaging groups
+ * of four removes the hash without removing the shape.
+ */
+const val WAVE_POINTS = 256
+
+/** Onset needs this much more bass than the recent average, and this much absolutely. */
+private const val BEAT_RATIO = 1.35f
+private const val BEAT_FLOOR = 0.12f
+
+/** Updates to wait after a beat before another can be heard — about 130 ms, so ~450 bpm. */
+private const val BEAT_HOLD_UPDATES = 6
+
 /** Lowest and highest frequency worth drawing. Below and above this there is nothing to see. */
 private const val LOW_HZ = 40.0
 private const val HIGH_HZ = 14_000.0
@@ -63,6 +79,47 @@ class SpectrumTap(val bandCount: Int = 56) : BaseAudioProcessor() {
     @Volatile
     private var published: FloatArray = bandsB
 
+    // ---- Waveform ---------------------------------------------------------------------------
+
+    private val waveA = FloatArray(WAVE_POINTS)
+    private val waveB = FloatArray(WAVE_POINTS)
+
+    /**
+     * The raw shape of the sound, not its spectrum.
+     *
+     * A spectrum says how loud each pitch is; a waveform says what the air is actually doing, and
+     * it is what every visualiser of this kind draws as its line. The two are worth having
+     * separately — the spectrum drives colour and motion, the waveform is the thing on screen.
+     */
+    @Volatile
+    private var publishedWave: FloatArray = waveB
+
+    // ---- Levels and beats -------------------------------------------------------------------
+
+    /** Broad energy in three ranges, smoothed, roughly 0..1. Drives motion rather than shape. */
+    @Volatile
+    var bass: Float = 0f
+        private set
+
+    @Volatile
+    var treble: Float = 0f
+        private set
+
+    /**
+     * Count of onsets heard so far, only ever increasing.
+     *
+     * A counter rather than a flag: a reader running at 60 frames a second and a detector running
+     * at 47 updates a second cannot agree on "is there a beat right now", but they can always
+     * agree on how many there have been, and a reader that missed one can see that it did.
+     */
+    @Volatile
+    var beats: Int = 0
+        private set
+
+    /** Rolling mean of bass energy, for deciding what counts as louder than usual. */
+    private var bassAverage = 0f
+    private var updatesSinceBeat = 0
+
     /** Bin index each band starts at, worked out once per configuration. */
     private var bandStart = IntArray(bandCount + 1)
 
@@ -93,6 +150,12 @@ class SpectrumTap(val bandCount: Int = 56) : BaseAudioProcessor() {
         System.arraycopy(current, 0, out, 0, minOf(out.size, current.size))
     }
 
+    /** Copies the latest waveform into [out], values roughly -1..1. Safe from any thread. */
+    fun copyWaveInto(out: FloatArray) {
+        val current = publishedWave
+        System.arraycopy(current, 0, out, 0, minOf(out.size, current.size))
+    }
+
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) {
             // Anything else and the tap simply does not run; the song still plays.
@@ -120,6 +183,11 @@ class SpectrumTap(val bandCount: Int = 56) : BaseAudioProcessor() {
         filled = 0
         bandsA.fill(0f)
         bandsB.fill(0f)
+        waveA.fill(0f)
+        waveB.fill(0f)
+        bass = 0f
+        treble = 0f
+        bassAverage = 0f
     }
 
     /** Reads without disturbing the caller's buffer — the pass-through still needs it intact. */
@@ -169,7 +237,52 @@ class SpectrumTap(val bandCount: Int = 56) : BaseAudioProcessor() {
         }
 
         published = target
+        updateWave()
+        updateLevels(target)
         writingToA = !writingToA
+    }
+
+    /** Decimates the analysis window into the published waveform, averaging as it goes. */
+    private fun updateWave() {
+        val wave = if (writingToA) waveA else waveB
+        val group = WINDOW / WAVE_POINTS
+
+        for (point in 0 until WAVE_POINTS) {
+            var sum = 0f
+            val from = point * group
+            for (i in from until from + group) sum += samples[i]
+            wave[point] = sum / group
+        }
+        publishedWave = wave
+    }
+
+    /**
+     * Broad energies, and whether this update was an onset.
+     *
+     * A beat is bass that is louder than bass has recently been — a ratio rather than a level,
+     * because a quiet song has quiet beats and a fixed threshold would find none of them. The
+     * average is only allowed to move slowly, so the beat that just happened cannot raise the bar
+     * enough to hide the next one.
+     */
+    private fun updateLevels(bands: FloatArray) {
+        val third = bands.size / 3
+        var low = 0f
+        var high = 0f
+        for (i in 0 until third) low += bands[i]
+        for (i in bands.size - third until bands.size) high += bands[i]
+        low /= third
+        high /= third
+
+        bass = low
+        treble = high
+
+        updatesSinceBeat++
+        val loudEnough = low > BEAT_FLOOR && low > bassAverage * BEAT_RATIO
+        if (loudEnough && updatesSinceBeat >= BEAT_HOLD_UPDATES) {
+            beats++
+            updatesSinceBeat = 0
+        }
+        bassAverage += (low - bassAverage) * 0.05f
     }
 
     /**
