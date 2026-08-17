@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -31,6 +32,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -94,6 +96,8 @@ fun SongPickerScreen(
     playerCount: Int,
     /** Held for the life of the app, so coming back for a second song is instant. */
     cache: SongLibraryCache,
+    /** Document id of the song to open on, or null to start at the beginning. */
+    openAt: String?,
     onPlay: (ChosenSong) -> Unit,
     /** Back to the microphones and names, which is one step up rather than out. */
     onChangeSingers: () -> Unit,
@@ -116,7 +120,12 @@ fun SongPickerScreen(
     // songs to the card while the app is open is the one case it cannot see.
     var rescans by remember { mutableIntStateOf(0) }
 
-    val first = remember { FocusRequester() }
+    // The row is scrolled to this card and it takes the focus. Which card that is only becomes
+    // known once the songs are in, so it starts attached to nothing.
+    val opening = remember { FocusRequester() }
+    var openingIndex by remember { mutableIntStateOf(-1) }
+    val row = rememberLazyListState()
+
     BackHandler(onBack = onChangeSingers)
 
     val tree = remember(treeUri) {
@@ -169,8 +178,23 @@ fun SongPickerScreen(
         status = summarise(songs.size)
     }
 
-    LaunchedEffect(songs) {
-        if (songs.isNotEmpty()) runCatching { first.requestFocus() }
+    // Open on the song that was just sung. Coming back to the top of a fifty-song library after
+    // finishing something is disorientating — the one card anybody has their bearings from is the
+    // one they just chose, and the next song is usually near it.
+    LaunchedEffect(songs, openAt) {
+        if (songs.isEmpty()) return@LaunchedEffect
+
+        val index = openingIndexFor(songs.map { it.textId }, openAt)
+        openingIndex = index
+
+        // A LazyRow does not compose what is off screen, so the card has to be brought into view
+        // before it can be focused, and the focus requester it carries only exists once it has
+        // been composed — hence waiting for frames rather than asking straight away.
+        row.scrollToItem(index)
+        repeat(FOCUS_ATTEMPTS) {
+            withFrameNanos { }
+            if (runCatching { opening.requestFocus() }.isSuccess) return@LaunchedEffect
+        }
     }
 
     // One player for the whole screen, reused as focus moves. Building an ExoPlayer is not
@@ -254,6 +278,7 @@ fun SongPickerScreen(
         Spacer(Modifier.height(28.dp))
 
         LazyRow(
+            state = row,
             modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 56.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -272,6 +297,7 @@ fun SongPickerScreen(
                         preview.stop()
                         onPlay(
                             ChosenSong(
+                                songId = scanned.textId,
                                 song = scanned.song,
                                 audioUri = currentTree.uriFor(audioId).toString(),
                                 videoUri = scanned.videoId
@@ -279,12 +305,29 @@ fun SongPickerScreen(
                             ),
                         )
                     },
-                    modifier = if (index == 0) Modifier.focusRequester(first) else Modifier,
+                    modifier = if (index == openingIndex) {
+                        Modifier.focusRequester(opening)
+                    } else {
+                        Modifier
+                    },
                 )
             }
         }
     }
 }
+
+/** Frames to keep trying for focus while the row settles. A fifth of a second, then give up. */
+private const val FOCUS_ATTEMPTS = 12
+
+/**
+ * Which card the library should open on.
+ *
+ * Falls back to the beginning when the song is not there, which is not a theoretical case: a
+ * rescan between one song and the next can remove the very song that was just sung, and a library
+ * that opened on nothing would be a library that could not be navigated at all.
+ */
+fun openingIndexFor(songIds: List<String>, openAt: String?): Int =
+    songIds.indexOf(openAt).coerceAtLeast(0)
 
 private fun summarise(count: Int): String = when (count) {
     0 -> "No playable songs found."

@@ -18,6 +18,8 @@ import com.example.ultrastarandroidtv.song.UltraStarSong
 
 /** A song that has been picked, with its media resolved to something the players can open. */
 class ChosenSong(
+    /** The song's `.txt` document id — unique per song, and what the library is scrolled back to. */
+    val songId: String,
     val song: UltraStarSong,
     val audioUri: String,
     /** Null when the song ships no video, which is most of the time. */
@@ -103,6 +105,10 @@ fun AppRoot() {
         Screen.Songs -> SongPickerScreen(
             playerCount = playerCount,
             cache = library,
+            // The song just sung, so coming back from one lands where it was left rather than at
+            // the top of the library. `chosen` outlives the game screen, so nothing else is
+            // needed to remember it.
+            openAt = chosen?.songId,
             onPlay = {
                 chosen = it
                 screen = Screen.Playing
