@@ -62,6 +62,28 @@ fun AppRoot() {
     var lineup by remember { mutableStateOf<List<GameSession.SingerSlot>>(emptyList()) }
     var chosen by remember { mutableStateOf<ChosenSong?>(null) }
 
+    /**
+     * The song the library reopens on, or null to start at the top.
+     *
+     * Kept apart from [chosen] because it answers a different question. [chosen] is what is being
+     * played; this is where somebody was, and it is deliberately forgotten at the main menu — see
+     * [toMenu].
+     */
+    var lastPlayed by remember { mutableStateOf<String?>(null) }
+
+    /**
+     * Going out to the main menu, which is also where the library forgets its place.
+     *
+     * Returning to the songs *from a song* should land back where it was; arriving from the main
+     * menu is the start of something new and should begin at the top. The main menu is what
+     * separates those two, so it is the one place that clears it — every other route into the
+     * library is somebody still in the middle of an evening.
+     */
+    val toMenu = {
+        lastPlayed = null
+        screen = Screen.Menu
+    }
+
     when (screen) {
         Screen.Menu -> MainMenuScreen(
             onPlay = { screen = Screen.Players },
@@ -71,7 +93,7 @@ fun AppRoot() {
 
         Screen.Singers -> ProfilesScreen(
             profiles = profiles,
-            onBack = { screen = Screen.Menu },
+            onBack = toMenu,
         )
 
         Screen.Players -> PlayerCountScreen(
@@ -79,7 +101,7 @@ fun AppRoot() {
                 playerCount = it
                 screen = Screen.Claim
             },
-            onBack = { screen = Screen.Menu },
+            onBack = toMenu,
         )
 
         // Who is holding which microphone, and what they are called. Asked every game: the
@@ -94,29 +116,29 @@ fun AppRoot() {
                 screen = Screen.Songs
             },
             onBack = { screen = Screen.Players },
-            onMenu = { screen = Screen.Menu },
+            onMenu = toMenu,
         )
 
         Screen.Settings -> SettingsScreen(
             settings = settings,
-            onBack = { screen = Screen.Menu },
+            onBack = toMenu,
         )
 
         Screen.Songs -> SongPickerScreen(
             playerCount = playerCount,
             cache = library,
-            // The song just sung, so coming back from one lands where it was left rather than at
-            // the top of the library. `chosen` outlives the game screen, so nothing else is
-            // needed to remember it.
-            openAt = chosen?.songId,
+            // Null unless a song has been sung since the last visit to the main menu, so a fresh
+            // start opens at the top and coming back from a song does not.
+            openAt = lastPlayed,
             onPlay = {
                 chosen = it
+                lastPlayed = it.songId
                 screen = Screen.Playing
             },
             // One step up rather than out: whoever is holding which microphone is the thing
             // most likely to be wrong by the time anyone is looking at the songs.
             onChangeSingers = { screen = Screen.Claim },
-            onMenu = { screen = Screen.Menu },
+            onMenu = toMenu,
         )
 
         Screen.Playing -> {
