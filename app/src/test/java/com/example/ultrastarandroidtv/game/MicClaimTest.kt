@@ -1,6 +1,7 @@
 package com.example.ultrastarandroidtv.game
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -69,16 +70,43 @@ class MicClaimTest {
 
     @Test
     fun `a claimed mic cannot be claimed again`() {
-        // The second singer takes the free slot even if the first is still the louder mic.
         val onlySecondFree = booleanArrayOf(false, true)
 
-        assertEquals(1, hold(0.40f, 0.10f, seconds = 0.6, eligible = onlySecondFree))
+        assertEquals(1, hold(0.10f, 0.40f, seconds = 0.6, eligible = onlySecondFree))
+    }
+
+    @Test
+    fun `the first singer's voice cannot claim the second mic for them`() {
+        // The margin has to be measured against every mic, not only the ones still free. Counting
+        // just the free ones left the last slot with nothing to be louder than, so it went to
+        // whoever was already singing — across the room, into a microphone they were not holding.
+        val onlySecondFree = booleanArrayOf(false, true)
+
+        assertNull(hold(0.40f, 0.10f, seconds = 1.0, eligible = onlySecondFree))
     }
 
     @Test
     fun `a single free mic needs no margin, only a voice`() {
         // There is nothing to be louder than.
         assertEquals(1, hold(0.0f, 0.08f, seconds = 0.6, eligible = booleanArrayOf(false, true)))
+    }
+
+    @Test
+    fun `it reports when more than one mic hears a voice`() {
+        // Both children singing at once is the commonest reason nothing happens, and the screen
+        // has to be able to say so rather than looking broken.
+        claim.update(floatArrayOf(0.30f, 0.28f), bothFree, 0.0)
+        assertTrue(claim.contested)
+
+        claim.update(floatArrayOf(0.30f, 0.01f), bothFree, 0.1)
+        assertFalse(claim.contested)
+    }
+
+    @Test
+    fun `one voice loud enough to reach both mics is not contested`() {
+        // Crosstalk below the gate is the normal case, not a problem to announce.
+        claim.update(floatArrayOf(0.30f, 0.04f), bothFree, 0.0)
+        assertFalse(claim.contested)
     }
 
     @Test

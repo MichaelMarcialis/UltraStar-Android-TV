@@ -14,7 +14,13 @@ object WaveStyle {
     /** A spiral wound out from the centre — the busiest of the four. */
     const val SPIRAL = 3
 
-    const val COUNT = 4
+    /** A flower: a ring whose radius rises and falls a fixed number of times around it. */
+    const val ROSE = 4
+
+    /** A woven figure, x and y swinging at different rates — the only path that crosses itself. */
+    const val LISSAJOUS = 5
+
+    const val COUNT = 6
 }
 
 /**
@@ -82,9 +88,15 @@ class Preset(
  * The presets this cycles through.
  *
  * Chosen to be *different from each other* rather than individually clever: a tunnel, a bloom, a
- * churn, a spin. Rotating between eight variations on the same idea would look like one
+ * churn, a spin. Rotating between sixteen variations on the same idea would look like one
  * visualiser having a long think, which is exactly the complaint about a row of bars going up and
  * down.
+ *
+ * **The order matters, because each one melts into the next.** Neighbours are deliberately
+ * unalike — a slow bloom does not sit next to another slow bloom — so the four seconds of
+ * interpolation between them is a transformation rather than a nudge. That is also why the newer
+ * eight are woven in among the original eight rather than appended: appending would have made the
+ * back half of the cycle a distinct second act.
  *
  * Colours are deliberately not the game's cyan and pink. The track and the arrows own those, and
  * a background in the same two colours makes it harder to find the one thing that has to be read.
@@ -109,11 +121,29 @@ object Presets {
             bassZoom = -0.05f, trebleSpin = 0.002f,
         ),
         Preset(
+            // A flower that turns. The rose is the one path whose silhouette changes as it
+            // breathes, so the petals thicken on the beat instead of the whole shape scaling.
+            name = "Kaleidoscope",
+            zoom = 1.008f, rotate = 0.0060f, warp = 0.005f, warpScale = 4f, decay = 0.970f,
+            waveStyle = WaveStyle.ROSE, thickness = 0.005f, amplitude = 0.18f,
+            fromColor = rgb(255, 200, 60), toColor = rgb(140, 70, 255),
+            bassZoom = 0.040f, trebleSpin = 0.009f,
+        ),
+        Preset(
             name = "Churn",
             zoom = 1.006f, rotate = 0.0f, warp = 0.030f, warpScale = 9f, decay = 0.972f,
             waveStyle = WaveStyle.MIRROR, thickness = 0.005f, amplitude = 0.30f,
             fromColor = rgb(120, 255, 170), toColor = rgb(60, 110, 255),
             bassZoom = 0.03f, trebleSpin = -0.006f,
+        ),
+        Preset(
+            // The slowest thing here: almost no drift, the longest trails, and a warp broad
+            // enough that the whole frame leans rather than ripples.
+            name = "Aurora",
+            zoom = 0.996f, rotate = 0.0006f, warp = 0.022f, warpScale = 2.6f, decay = 0.980f,
+            waveStyle = WaveStyle.LINE, thickness = 0.008f, amplitude = 0.30f,
+            fromColor = rgb(120, 255, 190), toColor = rgb(140, 90, 255),
+            bassZoom = -0.020f, trebleSpin = 0.002f,
         ),
         Preset(
             name = "Vortex",
@@ -123,11 +153,29 @@ object Presets {
             bassZoom = 0.05f, trebleSpin = 0.010f,
         ),
         Preset(
+            // Pushes outward instead of pulling in, which turns the trail into something
+            // expanding towards the viewer rather than a tunnel receding from them.
+            name = "Nebula",
+            zoom = 0.978f, rotate = -0.0006f, warp = 0.016f, warpScale = 3.4f, decay = 0.974f,
+            waveStyle = WaveStyle.MIRROR, thickness = 0.011f, amplitude = 0.38f,
+            fromColor = rgb(70, 120, 255), toColor = rgb(255, 255, 255),
+            bassZoom = -0.060f, trebleSpin = 0.001f,
+        ),
+        Preset(
             name = "Slipstream",
             zoom = 1.030f, rotate = -0.0035f, warp = 0.006f, warpScale = 7f, decay = 0.950f,
             waveStyle = WaveStyle.LINE, thickness = 0.012f, amplitude = 0.26f,
             fromColor = rgb(255, 90, 60), toColor = rgb(255, 220, 120),
             bassZoom = 0.07f, trebleSpin = -0.003f,
+        ),
+        Preset(
+            // A small ring under a fine, fast warp: the trail breaks into rings travelling
+            // outward, which is the one thing here that reads as a surface rather than as light.
+            name = "Ripple",
+            zoom = 1.004f, rotate = 0.0f, warp = 0.026f, warpScale = 11f, decay = 0.976f,
+            waveStyle = WaveStyle.CIRCLE, thickness = 0.006f, amplitude = 0.12f,
+            fromColor = rgb(200, 255, 120), toColor = rgb(40, 170, 120),
+            bassZoom = 0.035f, trebleSpin = -0.002f,
         ),
         Preset(
             name = "Lantern",
@@ -137,6 +185,15 @@ object Presets {
             bassZoom = -0.03f, trebleSpin = 0.001f,
         ),
         Preset(
+            // The woven path, spun hard. Because it crosses itself, the additive blend leaves a
+            // bright knot wherever the strands meet, which moves as the shape swings.
+            name = "Helix",
+            zoom = 1.016f, rotate = 0.0070f, warp = 0.007f, warpScale = 5.5f, decay = 0.966f,
+            waveStyle = WaveStyle.LISSAJOUS, thickness = 0.005f, amplitude = 0.24f,
+            fromColor = rgb(255, 120, 40), toColor = rgb(255, 240, 160),
+            bassZoom = 0.050f, trebleSpin = 0.007f,
+        ),
+        Preset(
             name = "Filament",
             zoom = 1.002f, rotate = 0.0f, warp = 0.045f, warpScale = 13f, decay = 0.982f,
             waveStyle = WaveStyle.SPIRAL, thickness = 0.003f, amplitude = 0.40f,
@@ -144,11 +201,38 @@ object Presets {
             bassZoom = 0.02f, trebleSpin = 0.008f,
         ),
         Preset(
+            // The hardest pull inward and the shortest trails, so it burns rather than smears.
+            // The biggest bass response here by some way: this is the one that punches.
+            name = "Ember",
+            zoom = 1.034f, rotate = -0.0050f, warp = 0.010f, warpScale = 6.5f, decay = 0.948f,
+            waveStyle = WaveStyle.SPIRAL, thickness = 0.007f, amplitude = 0.30f,
+            fromColor = rgb(255, 60, 20), toColor = rgb(255, 190, 70),
+            bassZoom = 0.085f, trebleSpin = -0.005f,
+        ),
+        Preset(
             name = "Undertow",
             zoom = 1.010f, rotate = 0.0045f, warp = 0.014f, warpScale = 6f, decay = 0.960f,
             waveStyle = WaveStyle.MIRROR, thickness = 0.007f, amplitude = 0.36f,
             fromColor = rgb(180, 60, 255), toColor = rgb(0, 200, 255),
             bassZoom = 0.055f, trebleSpin = -0.004f,
+        ),
+        Preset(
+            // Barely moves and barely fades: the finest warp at the highest frequency, so the
+            // frame accumulates into a standing mesh instead of flowing anywhere.
+            name = "Lattice",
+            zoom = 1.001f, rotate = 0.0012f, warp = 0.050f, warpScale = 16f, decay = 0.984f,
+            waveStyle = WaveStyle.LINE, thickness = 0.004f, amplitude = 0.44f,
+            fromColor = rgb(255, 255, 255), toColor = rgb(90, 220, 160),
+            bassZoom = 0.015f, trebleSpin = 0.006f,
+        ),
+        Preset(
+            // A rose pushed outward and turning the other way, so the petals unfold off the edge
+            // of the screen rather than winding into the middle.
+            name = "Cascade",
+            zoom = 0.988f, rotate = -0.0025f, warp = 0.012f, warpScale = 8f, decay = 0.958f,
+            waveStyle = WaveStyle.ROSE, thickness = 0.009f, amplitude = 0.26f,
+            fromColor = rgb(170, 110, 255), toColor = rgb(255, 220, 120),
+            bassZoom = -0.040f, trebleSpin = -0.007f,
         ),
     )
 }

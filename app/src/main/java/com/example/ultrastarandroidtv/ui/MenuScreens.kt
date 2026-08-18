@@ -31,11 +31,25 @@ import com.example.ultrastarandroidtv.game.GameTheme
  * "Singers" sits beside Settings rather than inside it: Settings is about the machine — latency,
  * microphone sensitivity — and is set once by whoever put this together, while the list of people
  * changes whenever a friend comes round.
+ *
+ * **Play is refused outright with no microphone attached**, because there is nothing behind it: a
+ * singer would be walked through counting players, claiming a mic and choosing a song before
+ * finding out. Saying so here costs one line and saves four screens. It is honest only because
+ * the mic list is live — plug one in and this enables itself.
  */
 @Composable
-fun MainMenuScreen(onPlay: () -> Unit, onSingers: () -> Unit, onSettings: () -> Unit) {
+fun MainMenuScreen(
+    micCount: Int,
+    onPlay: () -> Unit,
+    onSingers: () -> Unit,
+    onSettings: () -> Unit,
+) {
+    val canPlay = micCount >= 1
     val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+
+    // Focus follows what can actually be pressed. A disabled button cannot take focus, so
+    // requesting it there would leave the screen with no focus at all and no way to move.
+    LaunchedEffect(canPlay) { runCatching { first.requestFocus() } }
 
     Column(
         modifier = Modifier
@@ -52,17 +66,33 @@ fun MainMenuScreen(onPlay: () -> Unit, onSingers: () -> Unit, onSettings: () -> 
         Spacer(Modifier.height(48.dp))
 
         Row {
-            Button(onClick = onPlay, modifier = Modifier.focusRequester(first)) {
+            Button(
+                onClick = onPlay,
+                enabled = canPlay,
+                modifier = if (canPlay) Modifier.focusRequester(first) else Modifier,
+            ) {
                 Text("Play", fontSize = 28.sp, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp))
             }
             Spacer(Modifier.width(24.dp))
-            Button(onClick = onSingers) {
+            Button(
+                onClick = onSingers,
+                modifier = if (canPlay) Modifier else Modifier.focusRequester(first),
+            ) {
                 Text("Singers", fontSize = 28.sp, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp))
             }
             Spacer(Modifier.width(24.dp))
             Button(onClick = onSettings) {
                 Text("Settings", fontSize = 28.sp, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp))
             }
+        }
+
+        if (!canPlay) {
+            Spacer(Modifier.height(28.dp))
+            Text(
+                "Plug in a microphone to play.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = GameTheme.sparkWarm,
+            )
         }
     }
 }
@@ -73,9 +103,14 @@ fun MainMenuScreen(onPlay: () -> Unit, onSingers: () -> Unit, onSettings: () -> 
  * Asked before the song rather than after, because the answer changes what a song *is*: with
  * one singer a duet has a part nobody is covering, so duets are collapsed to a single line and
  * only one microphone is scored.
+ *
+ * Two is refused with one microphone attached, and the reason is on screen. The alternative is
+ * accepting the answer and then quietly scoring one person — which looks like the second
+ * microphone has failed, on hardware where that is a believable thing to conclude.
  */
 @Composable
-fun PlayerCountScreen(onPick: (Int) -> Unit, onBack: () -> Unit) {
+fun PlayerCountScreen(micCount: Int, onPick: (Int) -> Unit, onBack: () -> Unit) {
+    val canPair = micCount >= 2
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
     BackHandler(onBack = onBack)
@@ -99,16 +134,20 @@ fun PlayerCountScreen(onPick: (Int) -> Unit, onBack: () -> Unit) {
                 Text("One", fontSize = 28.sp, modifier = Modifier.padding(horizontal = 40.dp, vertical = 10.dp))
             }
             Spacer(Modifier.width(24.dp))
-            Button(onClick = { onPick(2) }) {
+            Button(onClick = { onPick(2) }, enabled = canPair) {
                 Text("Two", fontSize = 28.sp, modifier = Modifier.padding(horizontal = 40.dp, vertical = 10.dp))
             }
         }
 
         Spacer(Modifier.height(28.dp))
         Text(
-            "One singer uses the first microphone only.",
+            if (canPair) {
+                "On your own, whichever microphone you sing into is the one that's scored."
+            } else {
+                "Two singers needs a second microphone. Only one is plugged in."
+            },
             style = MaterialTheme.typography.bodyMedium,
-            color = GameTheme.lyricIdle,
+            color = if (canPair) GameTheme.lyricIdle else GameTheme.sparkWarm,
         )
     }
 }

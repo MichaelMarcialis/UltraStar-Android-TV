@@ -66,26 +66,39 @@ fun AppRoot() {
      * The song the library reopens on, or null to start at the top.
      *
      * Kept apart from [chosen] because it answers a different question. [chosen] is what is being
-     * played; this is where somebody was, and it is deliberately forgotten at the main menu — see
-     * [toMenu].
+     * played; this is where somebody was, and it survives exactly one journey — see [toMenu] and
+     * [toClaim].
      */
     var lastPlayed by remember { mutableStateOf<String?>(null) }
 
     /**
      * Going out to the main menu, which is also where the library forgets its place.
      *
-     * Returning to the songs *from a song* should land back where it was; arriving from the main
-     * menu is the start of something new and should begin at the top. The main menu is what
-     * separates those two, so it is the one place that clears it — every other route into the
-     * library is somebody still in the middle of an evening.
+     * Returning to the songs *from a song* should land back where it was; arriving any other way
+     * is the start of something new and should begin at the top.
      */
     val toMenu = {
         lastPlayed = null
         screen = Screen.Menu
     }
 
+    /**
+     * Going back to the microphones, which also forgets the library's place.
+     *
+     * Changing who is singing is a new start in the only sense that matters here: the song that
+     * was right for the last singer is not evidence about the next one, and landing halfway down
+     * the row on somebody else's choice is the same disorientation as landing at the top after
+     * finishing a song. Only *finishing a song* earns the row its position back.
+     */
+    val toClaim = {
+        lastPlayed = null
+        screen = Screen.Claim
+    }
+
     when (screen) {
         Screen.Menu -> MainMenuScreen(
+            // Live, so plugging a mic in on this screen enables Play without a relaunch.
+            micCount = micSession.mics.size,
             onPlay = { screen = Screen.Players },
             onSingers = { screen = Screen.Singers },
             onSettings = { screen = Screen.Settings },
@@ -97,6 +110,7 @@ fun AppRoot() {
         )
 
         Screen.Players -> PlayerCountScreen(
+            micCount = micSession.mics.size,
             onPick = {
                 playerCount = it
                 screen = Screen.Claim
@@ -137,7 +151,7 @@ fun AppRoot() {
             },
             // One step up rather than out: whoever is holding which microphone is the thing
             // most likely to be wrong by the time anyone is looking at the songs.
-            onChangeSingers = { screen = Screen.Claim },
+            onChangeSingers = toClaim,
             onMenu = toMenu,
         )
 

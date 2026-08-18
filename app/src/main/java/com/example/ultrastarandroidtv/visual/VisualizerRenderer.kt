@@ -5,6 +5,8 @@ import com.example.ultrastarandroidtv.audio.SpectrumTap
 import com.example.ultrastarandroidtv.audio.WAVE_POINTS
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
+import kotlin.random.Random
 
 /**
  * Height of the feedback buffer. Width follows the surface's aspect.
@@ -22,6 +24,9 @@ private const val BLEND_SECONDS = 4f
 
 /** Longest frame step believed to be real; past this the app was stalled, not slow. */
 private const val MAX_STEP = 0.05f
+
+/** Petals on a [WaveStyle.ROSE]. Odd, so the flower is not also mirror-symmetric. */
+private const val ROSE_PETALS = 5f
 
 private const val VERTEX_PASS = """
 attribute vec2 aPos;
@@ -153,7 +158,15 @@ class VisualizerRenderer(private val tap: SpectrumTap) {
     /** Ribbon vertices: two per waveform point, each (x, y, t). Filled fresh every frame. */
     private val ribbon = GlSupport.buffer(WAVE_POINTS * 2 * 3)
 
-    private var seconds = 0f
+    /**
+     * Starts somewhere random in the cycle rather than at the first preset.
+     *
+     * With sixteen presets a whole pass takes about seven minutes, and a song is three or four —
+     * so always starting at the beginning would mean the back half of the list was never seen by
+     * anybody. Starting on a random one costs a single number and makes every preset as likely
+     * as every other, while keeping the order (and so the deliberately unalike neighbours).
+     */
+    private var seconds = Random.nextInt(Presets.all.size) * (PRESET_SECONDS + BLEND_SECONDS)
     private var presetIndex = 0
     private var lastBeats = 0
     private var flash = 0f
@@ -378,6 +391,27 @@ class VisualizerRenderer(private val tap: SpectrumTap) {
                     y = sin(angle) * radius
                     nx = cos(angle) / aspect
                     ny = sin(angle)
+                }
+                WaveStyle.ROSE -> {
+                    val angle = t * twoPi
+                    val radius = 0.30f + 0.16f * cos(angle * ROSE_PETALS) + value
+                    x = cos(angle) * radius / aspect
+                    y = sin(angle) * radius
+                    nx = cos(angle) / aspect
+                    ny = sin(angle)
+                }
+                WaveStyle.LISSAJOUS -> {
+                    // The only path that crosses itself, so the normal has to come from the
+                    // tangent rather than from the radius — there is no centre to point away from.
+                    val angle = t * twoPi
+                    val radius = 0.44f + value
+                    val dx = cos(angle * 3f) * 3f
+                    val dy = cos(angle * 2f + 1.2f) * 2f
+                    val length = sqrt(dx * dx + dy * dy).coerceAtLeast(1e-4f)
+                    x = sin(angle * 3f) * radius / aspect
+                    y = sin(angle * 2f + 1.2f) * radius
+                    nx = (-dy / length) / aspect
+                    ny = dx / length
                 }
                 WaveStyle.MIRROR -> {
                     // The second half of the strip retraces the first, mirrored, so one draw call
