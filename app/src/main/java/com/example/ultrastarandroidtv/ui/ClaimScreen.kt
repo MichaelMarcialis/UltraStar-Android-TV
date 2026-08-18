@@ -41,6 +41,7 @@ import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.game.GameSession
 import com.example.ultrastarandroidtv.game.GameTheme
 import com.example.ultrastarandroidtv.game.MicClaim
+import com.example.ultrastarandroidtv.game.namesTheMicrophone
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.settings.Profiles
@@ -112,11 +113,11 @@ fun ClaimScreen(
     /**
      * The microphone the screen is asking about, or -1 when it is asking about any of them.
      *
-     * With two singers this is the whole mechanism: exactly one slot is open at a time and it
-     * belongs to a specific device, so two people singing at once cannot produce a wrong answer,
-     * only a pause. On your own there is nothing to disambiguate, so any free mic will do.
+     * Naming one is the mechanism that removes the race — exactly one slot open, bound to a
+     * specific device — but it is only a fair question when every mic must be in somebody's hand.
+     * See [namesTheMicrophone] for why that is a count rather than a mode.
      */
-    val asking = if (playerCount == 1) -1 else free.firstOrNull() ?: -1
+    val asking = if (namesTheMicrophone(mics.size, playerCount)) free.firstOrNull() ?: -1 else -1
 
     // Back undoes the last claim rather than leaving the screen, so a mis-heard microphone costs
     // one press instead of starting the evening again. The same step the button offers.
@@ -209,8 +210,10 @@ fun ClaimScreen(
             Text(
                 when {
                     mics.isEmpty() -> "No microphone"
+                    asking >= 0 -> "Whose microphone is this?"
                     playerCount == 1 -> "Sing into your microphone"
-                    else -> "Whose microphone is this?"
+                    claimed.isEmpty() -> "First singer — sing into your microphone"
+                    else -> "Now the next singer"
                 },
                 style = MaterialTheme.typography.headlineLarge,
                 color = GameTheme.lyricActive,
@@ -223,8 +226,11 @@ fun ClaimScreen(
                     contested -> "Both microphones can hear singing — one voice at a time."
                     // On your own there is no colour to race for; the claim is still worth doing,
                     // because it is what decides which of two identical microphones is yours.
+                    asking >= 0 -> "Sing into the lit-up one. The meter that moves is the one you're holding."
+                    // More mics than singers, so the app cannot name one: some of them are on
+                    // the table and asking about those would have no answer.
                     playerCount == 1 -> "Whichever one hears you is the one you will be scored on."
-                    else -> "Sing into the lit-up one. The meter that moves is the one you're holding."
+                    else -> "There are more microphones than singers, so whichever one hears you is yours."
                 },
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (contested) GameTheme.sparkWarm else GameTheme.lyricIdle,
@@ -244,12 +250,14 @@ fun ClaimScreen(
                         colour = GameTheme.playerColors[
                             when {
                                 slot >= 0 -> slot
-                                playerCount == 1 -> 0
-                                else -> index
+                                // Named: this mic is this player, so show the colour as a preview.
+                                // Discovered: nobody knows yet, so show the colour going spare.
+                                asking >= 0 -> index
+                                else -> claimed.size
                             } % GameTheme.playerColors.size
                         ],
                         name = claimed.getOrNull(slot)?.name,
-                        active = playerCount == 1 || index == asking,
+                        active = if (asking >= 0) index == asking else slot < 0,
                         level = shown.getOrElse(index) { 0f },
                         progress = if (claim.leading == index) claim.progress(tick.toDouble()) else 0f,
                         threshold = settings.micThreshold,
