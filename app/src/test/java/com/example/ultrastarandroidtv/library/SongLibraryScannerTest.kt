@@ -2,12 +2,34 @@ package com.example.ultrastarandroidtv.library
 
 import java.nio.charset.Charset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SongLibraryScannerTest {
+
+    @Test
+    fun `a song whose chart names no audio is found, and is not playable`() {
+        // The signature of a half-finished download: chart and artwork present, music never
+        // fetched. It has to come back from the scan — a song nobody can see is a song nobody
+        // can delete — but it must not reach the picker, where pressing it would do nothing.
+        val tree = tree {
+            dir("David Bowie - Starman") {
+                file("song.txt", songText(title = "Starman", mp3 = null))
+                file("cover.jpg")
+            }
+        }
+
+        val summary = SongLibraryScanner(tree).scan()
+
+        assertEquals(1, summary.songs.size)
+        assertEquals(0, summary.failures.size)
+        assertEquals("Starman", summary.songs.first().song.metadata.title)
+        assertNull(summary.songs.first().audioId)
+        assertFalse(summary.songs.first().isPlayable)
+    }
 
     @Test
     fun `finds a song and ties it to its media`() {
@@ -263,22 +285,26 @@ class SongLibraryScannerTest {
     }
 }
 
+/**
+ * A minimal song. [mp3] may be null, which omits the `#MP3` header entirely — the shape a
+ * download leaves behind when it gets the chart and never gets the music.
+ */
 private fun songText(
     title: String = "Bohemian Rhapsody",
     artist: String = "Queen",
-    mp3: String = "song.mp3",
-): String = """
-    #TITLE:$title
-    #ARTIST:$artist
-    #MP3:$mp3
-    #COVER:cover.jpg
-    #VIDEO:video.avi
-    #BPM:240
-    #GAP:1000
-    : 0 8 0 Is
-    : 8 8 4 this
-    E
-""".trimIndent()
+    mp3: String? = "song.mp3",
+): String = listOfNotNull(
+    "#TITLE:$title",
+    "#ARTIST:$artist",
+    mp3?.let { "#MP3:$it" },
+    "#COVER:cover.jpg",
+    "#VIDEO:video.avi",
+    "#BPM:240",
+    "#GAP:1000",
+    ": 0 8 0 Is",
+    ": 8 8 4 this",
+    "E",
+).joinToString("\n")
 
 // ---- a document tree held in memory, so the scanning rules can be tested without a device ----
 

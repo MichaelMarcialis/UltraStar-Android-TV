@@ -9,7 +9,18 @@ package com.example.ultrastarandroidtv.song
 data class SongMetadata(
     val title: String,
     val artist: String,
-    val mp3: String,
+    /**
+     * The audio file named by `#MP3`, or null when the chart does not name one.
+     *
+     * **Optional on purpose.** A chart with no `#MP3` is not malformed — it is the normal
+     * product of a download whose media step failed, and twenty-two of the seventy-one folders
+     * on this card look exactly like that. Treating it as a parse error made those songs
+     * invisible: they never became songs at all, so nothing could list them, explain them or
+     * remove them, and [com.example.ultrastarandroidtv.library.ScannedSong.isPlayable] could
+     * never actually be false. A missing audio file is a fact about a song, not a reason to
+     * refuse to read it.
+     */
+    val mp3: String?,
     val bpm: Double,
     val gapMs: Double = 0.0,
     /**

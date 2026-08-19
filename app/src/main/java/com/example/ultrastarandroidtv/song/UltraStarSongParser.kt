@@ -112,7 +112,8 @@ object UltraStarSongParser {
         return SongMetadata(
             title = required("TITLE"),
             artist = required("ARTIST"),
-            mp3 = required("MP3"),
+            // Not `required`: a chart with no audio named is incomplete, not invalid.
+            mp3 = rawTags["MP3"],
             bpm = bpm,
             gapMs = rawTags["GAP"]?.let { parseLocaleDouble(it) } ?: 0.0,
             videoGapSeconds = rawTags["VIDEOGAP"]?.let { parseLocaleDouble(it) } ?: 0.0,

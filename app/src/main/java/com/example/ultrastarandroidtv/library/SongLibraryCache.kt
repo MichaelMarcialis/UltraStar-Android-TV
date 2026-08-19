@@ -20,6 +20,10 @@ import androidx.compose.runtime.setValue
  *
  * Keyed on the granted folder, so picking a different one is not answered from the old one's
  * results.
+ *
+ * **Holds every song found, playable or not.** The picker shows only the ones that can be sung,
+ * but a song with no audio is the single most useful thing the Songs screen has to say, and
+ * filtering it out here would mean scanning the card twice to get it back.
  */
 class SongLibraryCache {
 
@@ -27,6 +31,9 @@ class SongLibraryCache {
 
     var songs: List<ScannedSong> by mutableStateOf(emptyList())
         private set
+
+    /** The songs that can actually be sung — what the picker offers. */
+    val playable: List<ScannedSong> get() = songs.filter { it.isPlayable }
 
     private var loaded = false
 
@@ -37,6 +44,16 @@ class SongLibraryCache {
         scannedTree = tree
         songs = found
         loaded = true
+    }
+
+    /** Drops one song, so removing it does not cost a rescan of the whole card. */
+    fun forget(textId: String) {
+        songs = songs.filterNot { it.textId == textId }
+    }
+
+    /** Drops every song in a folder, for when the folder itself was deleted. */
+    fun forgetFolder(folderId: String) {
+        songs = songs.filterNot { it.folderId == folderId }
     }
 
     /** Forgets everything, so the next visit scans. */

@@ -9,6 +9,33 @@ import org.junit.Test
 class UltraStarSongParserTest {
 
     @Test
+    fun `a chart that names no audio still parses`() {
+        // This is not a hypothetical malformed file: it is what a download leaves behind when it
+        // fetches the chart and the artwork and then fails to get the music. Twenty-two of the
+        // seventy-one folders on the real card look exactly like this. Refusing to parse them
+        // made them invisible — not listed, not explained, not removable — so the app could not
+        // tell anybody why a song they could see on the card was not in the game.
+        val song = UltraStarSongParser.parse(
+            """
+            #TITLE:Starman
+            #ARTIST:David Bowie
+            #COVER:cover.jpg
+            #VIDEO:video.mp4
+            #BPM:250.2
+            #GAP:11000
+
+            : 0 4 0 Star-
+            : 4 4 2 man
+            E
+            """.trimIndent(),
+        )
+
+        assertNull(song.metadata.mp3)
+        assertEquals("Starman", song.metadata.title)
+        assertEquals(2, song.voiceParts.first().lines.first().notes.size)
+    }
+
+    @Test
     fun `parses metadata, note types, and line breaks for a solo song`() {
         val song = UltraStarSongParser.parse(
             """
