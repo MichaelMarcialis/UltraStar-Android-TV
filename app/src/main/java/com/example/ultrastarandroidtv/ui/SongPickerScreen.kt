@@ -107,7 +107,7 @@ fun SongPickerScreen(
     val location = remember { LibraryLocation(context) }
 
     var treeUri by remember { mutableStateOf<Uri?>(location.saved()) }
-    var songs by remember { mutableStateOf(cache.songs) }
+    var songs by remember { mutableStateOf(cache.playable) }
     var status by remember { mutableStateOf("Looking for songs…") }
     var focusedIndex by remember { mutableIntStateOf(0) }
 
@@ -115,10 +115,6 @@ fun SongPickerScreen(
     // measure of progress there is — the total is not known until the walk ends.
     var scanning by remember { mutableStateOf(false) }
     var counted by remember { mutableIntStateOf(0) }
-
-    // Bumped by Rescan. A session-lived cache cannot go stale on its own, but somebody adding
-    // songs to the card while the app is open is the one case it cannot see.
-    var rescans by remember { mutableIntStateOf(0) }
 
     // The row is scrolled to this card and it takes the focus. Which card that is only becomes
     // known once the songs are in, so it starts attached to nothing.
@@ -146,14 +142,14 @@ fun SongPickerScreen(
         }
     }
 
-    LaunchedEffect(treeUri, rescans) {
+    LaunchedEffect(treeUri) {
         val currentTree = tree ?: run {
             status = "Choose the folder your songs are in."
             return@LaunchedEffect
         }
 
         if (cache.holds(treeUri)) {
-            songs = cache.songs
+            songs = cache.playable
             status = summarise(songs.size)
             return@LaunchedEffect
         }
@@ -170,10 +166,10 @@ fun SongPickerScreen(
             SongLibraryScanner(currentTree).scan { counted++ }
         }
 
-        songs = found.songs
-            .filter { it.isPlayable }
-            .sortedBy { it.song.metadata.title.lowercase() }
-        cache.put(treeUri, songs)
+        // The cache keeps everything, including songs with no audio: those are what the Songs
+        // screen exists to explain, and re-finding them would mean walking the card again.
+        cache.put(treeUri, found.songs.sortedBy { it.song.metadata.title.lowercase() })
+        songs = cache.playable
         scanning = false
         status = summarise(songs.size)
     }
@@ -261,16 +257,6 @@ fun SongPickerScreen(
                 Spacer(Modifier.width(16.dp))
                 Button(onClick = onMenu) {
                     Text("Main menu", modifier = Modifier.padding(horizontal = 12.dp))
-                }
-                Spacer(Modifier.width(16.dp))
-                // The cache's one blind spot: songs added to the card while the app is running.
-                Button(
-                    onClick = {
-                        cache.clear()
-                        rescans++
-                    },
-                ) {
-                    Text("Rescan", modifier = Modifier.padding(horizontal = 12.dp))
                 }
             }
         }

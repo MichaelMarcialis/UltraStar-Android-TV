@@ -68,4 +68,15 @@ class SafDocumentTree(
     /** The playable URI for a document id — what goes to ExoPlayer or an image loader. */
     fun uriFor(documentId: String): Uri =
         DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
+
+    /**
+     * Removes a document, or a folder and everything in it.
+     *
+     * Returns false rather than throwing, because every reason this fails is one the screen has
+     * to explain rather than crash on: the card was pulled, the grant is read-only because it was
+     * given by a build that only asked for read, or the provider simply refuses.
+     */
+    fun delete(documentId: String): Boolean = runCatching {
+        DocumentsContract.deleteDocument(resolver, uriFor(documentId))
+    }.getOrDefault(false)
 }

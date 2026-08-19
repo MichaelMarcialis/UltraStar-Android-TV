@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.example.ultrastarandroidtv.game.GameSession
 import com.example.ultrastarandroidtv.game.GameplayScreen
+import com.example.ultrastarandroidtv.library.LibraryLocation
 import com.example.ultrastarandroidtv.library.SongLibraryCache
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.settings.GameSettings
@@ -26,7 +27,7 @@ class ChosenSong(
     val videoUri: String?,
 )
 
-private enum class Screen { Menu, Players, Claim, Songs, Singers, Settings, Playing }
+private enum class Screen { Menu, FirstRun, Players, Claim, Picker, Songs, Singers, Settings, Playing }
 
 /**
  * The whole app, and the order things happen in.
@@ -56,6 +57,12 @@ fun AppRoot() {
         micSession.start()
         onDispose { micSession.stop() }
     }
+
+    /**
+     * Whether a song folder has been chosen. Held here rather than read where it is needed,
+     * because choosing one has to enable Play immediately, on the screen already on the TV.
+     */
+    var hasLibrary by remember { mutableStateOf(LibraryLocation(context).saved() != null) }
 
     var screen by remember { mutableStateOf(Screen.Menu) }
     var playerCount by remember { mutableIntStateOf(2) }
@@ -99,9 +106,35 @@ fun AppRoot() {
         Screen.Menu -> MainMenuScreen(
             // Live, so plugging a mic in on this screen enables Play without a relaunch.
             micCount = micSession.mics.size,
-            onPlay = { screen = Screen.Players },
+            // Pressing Play with no folder chosen asks for one and carries on, rather than
+            // refusing: somebody who pressed Play has said what they want, and the folder is a
+            // question they can answer on the spot.
+            onPlay = { screen = if (hasLibrary) Screen.Players else Screen.FirstRun },
+            onSongs = { screen = Screen.Songs },
             onSingers = { screen = Screen.Singers },
             onSettings = { screen = Screen.Settings },
+        )
+
+        // What is on the card and what is wrong with it — the only screen that shows a song
+        // which cannot be sung, and the only one that can remove it.
+        Screen.Songs -> SongsScreen(
+            cache = library,
+            onMenu = {
+                // A folder can be chosen or changed here, which is what unblocks Play.
+                hasLibrary = LibraryLocation(context).saved() != null
+                toMenu()
+            },
+        )
+
+        // Only ever seen with no folder chosen — a first run, or a grant that went away with
+        // the card it described.
+        Screen.FirstRun -> FirstRunScreen(
+            onReady = {
+                hasLibrary = true
+                library.clear()
+                screen = Screen.Players
+            },
+            onMenu = toMenu,
         )
 
         Screen.Singers -> ProfilesScreen(
@@ -127,7 +160,7 @@ fun AppRoot() {
             settings = settings,
             onReady = {
                 lineup = it
-                screen = Screen.Songs
+                screen = Screen.Picker
             },
             onBack = { screen = Screen.Players },
             onMenu = toMenu,
@@ -138,7 +171,7 @@ fun AppRoot() {
             onBack = toMenu,
         )
 
-        Screen.Songs -> SongPickerScreen(
+        Screen.Picker -> SongPickerScreen(
             playerCount = playerCount,
             cache = library,
             // Null unless a song has been sung since the last visit to the main menu, so a fresh
@@ -158,7 +191,7 @@ fun AppRoot() {
         Screen.Playing -> {
             val ready = chosen
             if (ready == null) {
-                screen = Screen.Songs
+                screen = Screen.Picker
             } else {
                 GameplayScreen(
                     song = ready.song,
@@ -169,7 +202,7 @@ fun AppRoot() {
                     lineup = lineup,
                     // Back out to the songs list rather than the menu: the usual next thing
                     // after one song is another song.
-                    onExit = { screen = Screen.Songs },
+                    onExit = { screen = Screen.Picker },
                 )
             }
         }

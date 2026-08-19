@@ -48,7 +48,31 @@ class LibraryLocation(private val context: Context) {
     }
 
     /**
-     * Stores the folder the user picked and asks to keep reading it indefinitely.
+     * True when the remembered folder can also be *written* to, which is what removing a song
+     * needs.
+     *
+     * Read and write are separate grants, and this app asked for read alone until songs could be
+     * deleted. A folder granted by an older build is therefore readable and nothing more, and no
+     * amount of asking at delete time can widen it — the grant is only handed out by the picker.
+     * So this exists to let the screen say "choose the folder again to remove songs" instead of
+     * offering a button that fails.
+     */
+    fun canModify(): Boolean {
+        val stored = prefs.getString(KEY_TREE_URI, null) ?: return false
+        val uri = Uri.parse(stored)
+        return context.contentResolver.persistedUriPermissions.any {
+            it.uri == uri && it.isWritePermission
+        }
+    }
+
+    /**
+     * Stores the folder the user picked and asks to keep reading and writing it indefinitely.
+     *
+     * Write is taken even though playing a song never needs it, because the only moment it can
+     * be taken is this one. `takePersistableUriPermission` can only confirm access the picker
+     * just granted; there is no later prompt that upgrades a read-only grant in place. Asking
+     * for it here costs nothing and is the difference between removing a broken song from the
+     * sofa and fetching a laptop.
      *
      * Returns false if the system refused to make the grant persistable, which means it would
      * be lost on reboot — worth failing visibly rather than appearing to work for one session.
@@ -57,7 +81,7 @@ class LibraryLocation(private val context: Context) {
         return try {
             context.contentResolver.takePersistableUriPermission(
                 uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
             )
             prefs.edit().putString(KEY_TREE_URI, uri.toString()).apply()
             true
