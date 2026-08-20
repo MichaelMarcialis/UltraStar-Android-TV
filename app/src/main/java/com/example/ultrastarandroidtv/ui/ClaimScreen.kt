@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.FloatState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -41,7 +42,6 @@ import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.game.GameSession
 import com.example.ultrastarandroidtv.game.GameTheme
 import com.example.ultrastarandroidtv.game.MicClaim
-import com.example.ultrastarandroidtv.game.namesTheMicrophone
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.settings.Profiles
@@ -57,33 +57,40 @@ private const val LEVEL_DECAY = 0.90f
 /**
  * Where singers take a microphone and say who they are.
  *
- * The problem this solves is not "whose score is that" — a name fixes that. It is "which of
- * these two identical microphones am I holding", which no amount of on-screen labelling can
- * answer, because the label is on the screen and the microphone is in your hand.
+ * The problem this solves is not "whose score is that" — a name fixes that. It is "which of these
+ * two identical microphones am I holding", which no amount of on-screen labelling can answer,
+ * because the label is on the screen and the microphone is in your hand.
  *
- * **With two singers the app names the microphone and the room supplies the person**, one at a
- * time. The first version asked the room for both at once — sing, and the mic that hears you
- * takes the first colour — and with two children that turns into both of them shouting
- * immediately, which is a race, and a race has a winner nobody can see. Asking about one
- * specific microphone removes the race outright: there is only ever one slot open, it is bound
- * to a named device, and the meters say which one your voice is moving.
+ * **One singer is set up at a time, from beginning to end.** Sing, take a microphone, choose a
+ * name, and only then does the next colour open. Two earlier versions asked the room for more
+ * than that at once and both failed the same way in the same room: with two children, the moment
+ * a meter appears they both shout at it, and whatever the app then decides, nobody watching can
+ * tell which of them it decided about.
  *
- * Two things make that legible rather than merely correct. **Every microphone's meter is live**,
- * not just the one being asked about, so a singer whose turn it is not can still see their own
- * voice registering somewhere and wait. And when more than one mic hears a voice the screen
- * *says so* — a claim that will not land because two people are singing looks exactly like
- * broken hardware otherwise.
+ * **The meter belongs to the singer, not to the microphone, and it stays up while they choose a
+ * name.** That is the actual fix, and it is why this screen is a row rather than a column: one
+ * card on the right belongs to the colour being set up, and it does not move, resize or vanish
+ * when the question changes from "sing" to "who are you". So a claim that landed on the wrong
+ * child is *recoverable by singing* — one of them sings, and the meter says whether the name
+ * about to be chosen is theirs. Before, the meters disappeared the instant a claim landed, which
+ * is exactly the moment the room needed one.
  *
- * **On your own it stays the other way round**, and that is not an inconsistency. Alone there is
- * no question about who you are, only about which of two identical microphones you picked up —
- * so the mic has to be discovered rather than named. With two singers both mics are in play and
- * only the people are unknown, so the mic is named and the person discovered. Each flow asks
- * about the thing that is actually in doubt.
+ * **The microphone is always discovered rather than named.** A previous version asked "who is
+ * holding microphone 1?" whenever every attached mic had to be in somebody's hand, on the
+ * grounds that naming one removes the race. It does remove the race, and it still could not
+ * answer the question the room was actually asking. It also quietly assumed the microphone the
+ * app chose was the one the singer had picked up, which stops being true as soon as a third
+ * audio device is plugged in. Singing into the one in your hand proves it works *and* says which
+ * it is, in the same breath.
  *
- * Names are asked every single game rather than remembered against a microphone. In a house
- * with four children the microphone is the one thing that does *not* identify a person: it gets
- * handed to whoever is singing next. Remembering would mean confidently putting last night's
- * name on tonight's singer, which is worse than asking.
+ * When more than one mic hears a voice at once the screen says so, because a claim that will not
+ * land because two people are singing looks exactly like broken hardware otherwise — and on this
+ * device that is a believable conclusion.
+ *
+ * Names are asked every single game rather than remembered against a microphone. In a house with
+ * four children the microphone is the one thing that does *not* identify a person: it gets handed
+ * to whoever is singing next. Remembering would mean confidently putting last night's name on
+ * tonight's singer, which is worse than asking.
  */
 @Composable
 fun ClaimScreen(
@@ -103,27 +110,37 @@ fun ClaimScreen(
     val shown = remember(mics.size) { FloatArray(mics.size) }
     val claim = remember(settings.micThreshold) { MicClaim(minLevel = settings.micThreshold) }
 
-    // Repainted from the frame loop; read inside composition so the meters animate.
-    var tick by remember { mutableFloatStateOf(0f) }
+    // Written by the frame loop and read only inside the meter, so a sixty-times-a-second repaint
+    // invalidates one card rather than the name list and the focus somebody is moving through it.
+    val tick = remember { mutableFloatStateOf(0f) }
     var contested by remember { mutableStateOf(false) }
 
-    /** Mics still to be spoken for, in order. */
+    val target = minOf(playerCount, mics.size)
+
+    /** Mics still to be spoken for. */
     val free = mics.indices.filter { i -> claimed.none { it.portId == mics[i].portId } }
 
     /**
-     * The microphone the screen is asking about, or -1 when it is asking about any of them.
-     *
-     * Naming one is the mechanism that removes the race — exactly one slot open, bound to a
-     * specific device — but it is only a fair question when every mic must be in somebody's hand.
-     * See [namesTheMicrophone] for why that is a count rather than a mode.
+     * The singer being set up: the one choosing a name, or the next one to sing. They are the
+     * same person a moment apart, which is why one index and one colour serve the whole screen.
      */
-    val asking = if (namesTheMicrophone(mics.size, playerCount)) free.firstOrNull() ?: -1 else -1
+    val slot = naming ?: claimed.size
+    val colour = GameTheme.playerColors[slot % GameTheme.playerColors.size]
 
-    // Back undoes the last claim rather than leaving the screen, so a mis-heard microphone costs
-    // one press instead of starting the evening again. The same step the button offers.
+    /** The mic this singer claimed, once they have one. */
+    val claimedMic = naming?.let { s -> mics.indexOfFirst { it.portId == claimed[s].portId } } ?: -1
+
+    // Back undoes the last step rather than leaving the screen, so a microphone that went to the
+    // wrong child costs one press instead of starting the evening again. Backing out of the name
+    // question hands the microphone back to the pool: leaving the claim in place with a blank
+    // name would let the game start with a nameless singer.
     val stepBack: () -> Unit = {
+        val naked = naming
         when {
-            naming != null -> naming = null
+            naked != null -> {
+                claimed.removeAt(naked)
+                naming = null
+            }
             claimed.isNotEmpty() -> claimed.removeAt(claimed.size - 1)
             else -> onBack()
         }
@@ -143,14 +160,16 @@ fun ClaimScreen(
         claimed.retainAll { slot -> mics.any { it.portId == slot.portId } }
 
         var seconds = 0.0
-        while (claimed.size < minOf(playerCount, mics.size)) {
+        // Runs on through the name question, which is what keeps the meter alive while somebody
+        // is being named — the whole reason the meter is still on screen at that point.
+        while (claimed.size < target || naming != null) {
             withFrameNanos { }
             seconds += 1.0 / 60.0
 
             for (i in shown.indices) {
                 shown[i] = maxOf(levels[i], shown[i] * LEVEL_DECAY)
             }
-            tick = seconds.toFloat()
+            tick.floatValue = seconds.toFloat()
 
             // Nobody can claim while a name is being chosen: the room is not quiet, and the
             // singer being named is often still talking.
@@ -160,15 +179,10 @@ fun ClaimScreen(
                 continue
             }
 
-            // Recomputed every frame rather than captured: the target moves on as each mic is
-            // claimed, and a value read once at composition would keep offering the first slot
-            // after it had already been taken.
+            // Recomputed every frame rather than captured: the pool shrinks as each mic is
+            // claimed, and a value read once at composition would keep offering a taken one.
             val open = BooleanArray(mics.size) { index ->
                 claimed.none { it.portId == mics[index].portId }
-            }
-            if (playerCount > 1) {
-                val target = open.indexOfFirst { it }
-                for (i in open.indices) open[i] = i == target
             }
 
             val taken = claim.update(shown, open, seconds)
@@ -181,168 +195,147 @@ fun ClaimScreen(
         }
     }
 
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxSize()
             .background(GameTheme.background)
             .padding(56.dp),
     ) {
-        val slot = naming
-        if (slot != null) {
-            NamePicker(
-                colour = GameTheme.playerColors[slot % GameTheme.playerColors.size],
-                profiles = profiles,
-                solo = playerCount == 1,
-                // The microphone that has just been claimed, named the same way the meters name
-                // it, so the question follows on from the thing that just happened on screen.
-                micNumber = mics.indexOfFirst { it.portId == claimed[slot].portId } + 1,
-                // Whoever has already been named this game. The slot being named is still in
-                // the list with a blank name, so nothing has to be excluded by index.
-                taken = claimed.map { it.name }.filter { it.isNotBlank() }.toSet(),
-                onPicked = { name ->
-                    profiles.use(name)
-                    claimed[slot] = claimed[slot].copy(name = name)
-                    naming = null
-                    if (claimed.size >= minOf(playerCount, mics.size)) onReady(claimed.toList())
-                },
-            )
-        } else {
-            Text(
-                when {
-                    mics.isEmpty() -> "No microphone"
-                    asking >= 0 -> "Whose microphone is this?"
-                    playerCount == 1 -> "Sing into your microphone"
-                    claimed.isEmpty() -> "First singer — sing into your microphone"
-                    else -> "Now the next singer"
-                },
-                style = MaterialTheme.typography.headlineLarge,
-                color = GameTheme.lyricActive,
-            )
-            Text(
-                when {
-                    mics.isEmpty() -> micSession.summary
-                    // Said plainly, because the alternative is a meter that fills and never
-                    // finishes while both children shout at it and conclude it is broken.
-                    contested -> "Both microphones can hear singing — one voice at a time."
-                    // On your own there is no colour to race for; the claim is still worth doing,
-                    // because it is what decides which of two identical microphones is yours.
-                    asking >= 0 -> "Sing into the lit-up one. The meter that moves is the one you're holding."
-                    // More mics than singers, so the app cannot name one: some of them are on
-                    // the table and asking about those would have no answer.
-                    playerCount == 1 -> "Whichever one hears you is the one you will be scored on."
-                    else -> "There are more microphones than singers, so whichever one hears you is yours."
-                },
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (contested) GameTheme.sparkWarm else GameTheme.lyricIdle,
-            )
-            Spacer(Modifier.height(40.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            val beingNamed = naming
+            if (beingNamed != null) {
+                NamePicker(
+                    colour = colour,
+                    profiles = profiles,
+                    solo = playerCount == 1,
+                    // Whoever has already been named this game. The slot being named is still in
+                    // the list with a blank name, so nothing has to be excluded by index.
+                    taken = claimed.map { it.name }.filter { it.isNotBlank() }.toSet(),
+                    onPicked = { name ->
+                        profiles.use(name)
+                        claimed[beingNamed] = claimed[beingNamed].copy(name = name)
+                        naming = null
+                        if (claimed.size >= target) onReady(claimed.toList())
+                    },
+                )
+            } else {
+                Text(
+                    when {
+                        mics.isEmpty() -> "No microphone"
+                        playerCount == 1 -> "Sing into your microphone"
+                        slot == 0 -> "First singer, sing now"
+                        else -> "Second singer, sing now"
+                    },
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = if (mics.isEmpty()) GameTheme.lyricActive else colour,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    when {
+                        mics.isEmpty() -> micSession.summary
+                        // Said plainly, because the alternative is a meter that fills and never
+                        // finishes while both children shout at it and conclude it is broken.
+                        contested -> "More than one microphone can hear singing — one voice at a time."
+                        // Discovering the mic is what proves the one in your hand is the one that
+                        // gets scored, which matters most when there is a spare on the table.
+                        playerCount == 1 -> "Whichever microphone hears you is the one you will be scored on."
+                        else -> "Pick up a microphone and sing. Whichever one hears you is yours."
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (contested) GameTheme.sparkWarm else GameTheme.lyricIdle,
+                )
 
-            @Suppress("UNUSED_EXPRESSION") tick // Read so the meters repaint each frame.
+                Spacer(Modifier.height(48.dp))
 
-            // One meter per actual microphone, not per player slot. Every one of them stays live
-            // even when it is not the one being asked about: seeing your own voice register on
-            // the other meter is what tells you to wait rather than to shout louder.
-            Row {
-                mics.forEachIndexed { index, mic ->
-                    val slot = claimed.indexOfFirst { it.portId == mic.portId }
-                    MicMeter(
-                        title = "Microphone ${index + 1}",
-                        colour = GameTheme.playerColors[
-                            when {
-                                slot >= 0 -> slot
-                                // Named: this mic is this player, so show the colour as a preview.
-                                // Discovered: nobody knows yet, so show the colour going spare.
-                                asking >= 0 -> index
-                                else -> claimed.size
-                            } % GameTheme.playerColors.size
-                        ],
-                        name = claimed.getOrNull(slot)?.name,
-                        active = if (asking >= 0) index == asking else slot < 0,
-                        level = shown.getOrElse(index) { 0f },
-                        progress = if (claim.leading == index) claim.progress(tick.toDouble()) else 0f,
-                        threshold = settings.micThreshold,
-                    )
-                    Spacer(Modifier.width(28.dp))
+                // This screen waits on a voice, so without these there is nothing on it to press
+                // and no visible way out — which matters most in the one case that strands you, a
+                // microphone the room is not loud enough to claim.
+                Row {
+                    Button(onClick = stepBack) {
+                        Text(
+                            if (claimed.isEmpty()) "How many singers" else "Undo last singer",
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    Button(onClick = onMenu) {
+                        Text("Main menu", modifier = Modifier.padding(horizontal = 12.dp))
+                    }
                 }
             }
+        }
 
-            Spacer(Modifier.height(36.dp))
-
-            // This screen waits on a voice, so without these there is nothing on it to press and
-            // no visible way out — which matters most in the one case that strands you, a
-            // microphone the room is not loud enough to claim.
-            Row {
-                Button(onClick = stepBack) {
-                    Text(
-                        if (claimed.isEmpty()) "How many singers" else "Undo last singer",
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                    )
-                }
-                Spacer(Modifier.width(16.dp))
-                Button(onClick = onMenu) {
-                    Text("Main menu", modifier = Modifier.padding(horizontal = 12.dp))
-                }
-            }
+        if (mics.isNotEmpty()) {
+            Spacer(Modifier.width(48.dp))
+            SingerMeter(
+                title = when {
+                    claimedMic >= 0 -> "Microphone ${claimedMic + 1}"
+                    playerCount == 1 -> "Your voice"
+                    slot == 0 -> "First singer"
+                    else -> "Second singer"
+                },
+                caption = when {
+                    // Why it is still here after the claim: it is the only way to settle which of
+                    // two children actually won it. One of them sings, and the meter answers.
+                    claimedMic >= 0 -> "Sing to check this is yours"
+                    else -> "sing now"
+                },
+                name = naming?.let { claimed[it].name }?.takeIf { it.isNotBlank() },
+                colour = colour,
+                threshold = settings.micThreshold,
+                tick = tick,
+                // Before a claim the meter shows whichever free mic is loudest, because which one
+                // the singer picked up is exactly the open question. After it, only their own, so
+                // the next singer's voice cannot move it.
+                level = {
+                    if (claimedMic >= 0) shown.getOrElse(claimedMic) { 0f }
+                    else free.maxOfOrNull { shown.getOrElse(it) { 0f } } ?: 0f
+                },
+                progress = { now -> if (claim.leading >= 0) claim.progress(now) else 0f },
+            )
         }
     }
 }
 
 /**
- * One microphone, with what it is hearing right now.
+ * The singer's own level meter — one card, belonging to a colour rather than to a device.
  *
- * [active] is the difference between "this is the one you are being asked about" and "this one is
- * only here so you can see it is not you" — but an inactive meter still moves, because a singer
- * who cannot see their own voice anywhere assumes the microphone is dead and sings louder, which
- * is the one thing that makes the situation worse.
+ * A meter rather than a spinner, because it shows that the microphone is *alive*, which on this
+ * hardware has never been something to take for granted. It carries a tick at the gate, so "loud
+ * enough" is a target rather than a guess.
+ *
+ * It reads [tick] itself so the frame loop repaints this card alone. Reading it in the parent
+ * would recompose the name list sixty times a second, which is both wasteful and a good way to
+ * lose the focus somebody is moving with a remote.
  */
 @Composable
-private fun MicMeter(
+private fun SingerMeter(
     title: String,
-    colour: Color,
+    caption: String,
     name: String?,
-    active: Boolean,
-    level: Float,
-    progress: Float,
+    colour: Color,
     threshold: Float,
+    tick: FloatState,
+    level: () -> Float,
+    progress: (Double) -> Float,
 ) {
-    val claimedBy = !name.isNullOrBlank()
-    val edge = when {
-        claimedBy -> colour
-        active -> colour.copy(alpha = 0.55f)
-        else -> colour.copy(alpha = 0.12f)
-    }
+    val now = tick.floatValue.toDouble()
+    val loudness = level()
+    val held = progress(now)
 
     Column(
         modifier = Modifier
-            .width(300.dp)
+            .width(320.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(GameTheme.trackBackground)
-            .border(3.dp, edge, RoundedCornerShape(16.dp))
+            .border(3.dp, colour, RoundedCornerShape(16.dp))
             .padding(24.dp),
     ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (active || claimedBy) GameTheme.lyricIdle else GameTheme.lyricIdle.copy(alpha = 0.5f),
-        )
+        Text(title, style = MaterialTheme.typography.bodyMedium, color = GameTheme.lyricIdle)
         Spacer(Modifier.height(6.dp))
-        Text(
-            when {
-                claimedBy -> name!!
-                active -> "sing into this one"
-                else -> "not this one"
-            },
-            style = MaterialTheme.typography.headlineSmall,
-            color = when {
-                claimedBy -> colour
-                active -> GameTheme.lyricActive
-                else -> GameTheme.lyricIdle.copy(alpha = 0.45f)
-            },
-        )
+        Text(name ?: caption, style = MaterialTheme.typography.headlineSmall, color = colour)
         Spacer(Modifier.height(16.dp))
 
-        // A meter rather than a spinner: it shows that the microphone is alive, which on this
-        // hardware has never been something to take for granted.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -350,12 +343,12 @@ private fun MicMeter(
                 .clip(RoundedCornerShape(7.dp))
                 .background(GameTheme.noteIdle),
         ) {
-            val filled = (level / (threshold * 4f)).coerceIn(0f, 1f)
+            val filled = (loudness / (threshold * 4f)).coerceIn(0f, 1f)
             Box(
                 modifier = Modifier
                     .fillMaxWidth(filled)
                     .height(14.dp)
-                    .background(colour.copy(alpha = if (active || claimedBy) 0.85f else 0.4f)),
+                    .background(colour.copy(alpha = 0.85f)),
             )
             // Where "loud enough to count" sits. The meter is scaled to four times the gate, so
             // this lands a quarter of the way along — and it turns the meter from a wiggling bar
@@ -375,11 +368,11 @@ private fun MicMeter(
             }
         }
 
-        if (progress > 0f) {
+        if (held > 0f) {
             Spacer(Modifier.height(10.dp))
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(progress)
+                    .fillMaxWidth(held)
                     .height(5.dp)
                     .clip(RoundedCornerShape(3.dp))
                     .background(colour),
@@ -389,7 +382,7 @@ private fun MicMeter(
 }
 
 /**
- * Picks the name for the microphone that has just been claimed.
+ * Picks the name for the singer who has just claimed a microphone.
  *
  * Recent names first, because with children rotating the best predictor of who is about to sing
  * is who sang last. Typing is the rare path — once per person, ever — and it is deliberately the
@@ -401,11 +394,12 @@ private fun MicMeter(
  * unreadable for the whole song. Removed from the list rather than shown and refused: an option
  * that cannot be chosen is only there to be pressed by mistake.
  *
+ * It asks about the microphone in the room rather than about a player number, and the meter
+ * beside it is still moving while the question is on screen — which is what makes "this one" a
+ * thing anybody can check rather than a thing they have to take on trust.
+ *
  * @param solo true when only one person is singing, which changes what there is to say: "the
  *   first singer" is an answer to a question nobody on their own has asked.
- * @param micNumber which microphone was just claimed, counting from 1. With two singers the
- *   question is asked about the physical object rather than about a player number — "microphone
- *   1" is something you can be holding, and "player 1" is not.
  * @param taken names another singer has already claimed this game, compared without case the
  *   same way [Profiles] does, so "mia" cannot slip past an existing "Mia".
  */
@@ -414,7 +408,6 @@ private fun NamePicker(
     colour: Color,
     profiles: Profiles,
     solo: Boolean,
-    micNumber: Int,
     taken: Set<String>,
     onPicked: (String) -> Unit,
 ) {
@@ -430,7 +423,7 @@ private fun NamePicker(
     }
 
     Text(
-        if (solo) "Who's singing?" else "Who's holding microphone $micNumber?",
+        if (solo) "Who's singing?" else "Who has this microphone?",
         style = MaterialTheme.typography.headlineLarge,
         color = colour,
     )

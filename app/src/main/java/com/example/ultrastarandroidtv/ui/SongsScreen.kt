@@ -102,15 +102,18 @@ fun SongsScreen(
         treeUri?.let { SafDocumentTree(context.contentResolver, it) }
     }
 
-    /** Adopts a drive the user has just granted. */
-    fun adopt(tree: Uri) {
-        if (location.remember(tree)) {
-            cache.clear()
-            treeUri = tree
-            canModify = location.canModify()
-            problem = null
-        } else {
-            problem = "Android would not keep access to that drive. Try another."
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { picked ->
+        when {
+            picked == null -> Unit
+            location.remember(picked) -> {
+                cache.clear()
+                treeUri = picked
+                canModify = location.canModify()
+                problem = null
+            }
+            else -> problem = "Android would not keep access to that folder. Try another."
         }
     }
 
@@ -179,15 +182,21 @@ fun SongsScreen(
                     )
                 }
 
-                Spacer(Modifier.height(24.dp))
-                DriveChoices(
-                    firstFocus = first,
-                    onGranted = ::adopt,
-                    onRefused = { problem = it },
-                )
+                Spacer(Modifier.height(20.dp))
+                PickerHint()
 
                 Spacer(Modifier.height(20.dp))
                 Row {
+                    Button(
+                        onClick = { picker.launch(null) },
+                        modifier = Modifier.focusRequester(first),
+                    ) {
+                        Text(
+                            if (treeUri == null) "Choose song folder" else "Change folder",
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(16.dp))
                     Button(
                         onClick = {
                             cache.clear()

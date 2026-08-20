@@ -137,33 +137,4 @@ class MicClaimTest {
         assertNull(claim.update(floatArrayOf(0.30f, 0.01f), bothFree, 0.5))
         assertTrue(claim.progress(0.5) < 1f)
     }
-
-    @Test
-    fun `it names the microphone when every one of them must be held`() {
-        // Two singers, two mics: each is in somebody's hand, so "who has microphone 1?" always
-        // has an answer, and asking it is what stops the two of them racing.
-        assertTrue(namesTheMicrophone(micCount = 2, playerCount = 2))
-        assertTrue(namesTheMicrophone(micCount = 1, playerCount = 1))
-    }
-
-    @Test
-    fun `it discovers the microphone when there are spares on the table`() {
-        // Asking "who has microphone 1?" when nobody picked it up is a dead end the room cannot
-        // sing its way out of. One singer with two mics is this case, and so is two with three.
-        assertFalse(namesTheMicrophone(micCount = 2, playerCount = 1))
-        assertFalse(namesTheMicrophone(micCount = 3, playerCount = 2))
-        assertFalse(namesTheMicrophone(micCount = 4, playerCount = 2))
-    }
-
-    @Test
-    fun `with no microphones there is nothing to name`() {
-        assertFalse(namesTheMicrophone(micCount = 0, playerCount = 1))
-    }
-
-    @Test
-    fun `fewer microphones than singers still names them`() {
-        // Only reachable by unplugging one mid-flow, since the menu refuses two singers with one
-        // mic. The remaining mic is certainly held, so naming it is still the right question.
-        assertTrue(namesTheMicrophone(micCount = 1, playerCount = 2))
-    }
 }

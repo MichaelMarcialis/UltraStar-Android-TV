@@ -122,26 +122,3 @@ class MicClaim(
         contested = false
     }
 }
-
-/**
- * Whether the screen can *name* the microphone it is asking about, or has to discover it.
- *
- * Naming one — "who has microphone 1?" — is the better question whenever it is answerable,
- * because it removes the race: one slot is open, it belongs to a specific device, and two people
- * singing at once can no longer produce a wrong answer, only a pause. But it is only answerable
- * when **every attached microphone must be in somebody's hand**. Ask "who has microphone 1?" with
- * a spare mic sitting on the table and the honest answer may be "nobody", which is a dead end the
- * room cannot get out of by singing.
- *
- * So the rule is a count. With as many singers as microphones, each one is held by definition and
- * the app names it. With microphones to spare, the app cannot know which ones were picked up, so
- * it asks the person to sing and works out which mic heard them.
- *
- * That single rule covers both awkward cases. **One singer with two mics** discovers, because
- * only the microphone is in doubt. **Two singers with three mics** discovers too, for the same
- * reason rather than as a special case. And discovery is no longer the old free-for-all: the
- * claim lands visibly on one microphone's own meter and the next question names it, so even when
- * two people do sing at once, the answer is something you can see rather than something you have
- * to take on trust.
- */
-fun namesTheMicrophone(micCount: Int, playerCount: Int): Boolean = micCount in 1..playerCount
