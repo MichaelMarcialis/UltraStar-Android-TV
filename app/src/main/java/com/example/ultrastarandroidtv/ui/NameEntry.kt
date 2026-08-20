@@ -16,10 +16,34 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PlatformImeOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ultrastarandroidtv.game.GameTheme
 import com.example.ultrastarandroidtv.settings.MAX_NAME_LENGTH
+
+/**
+ * Asks the keyboard not to offer its dictation button.
+ *
+ * The button cannot work here and never will: it belongs to Gboard, which hands off to
+ * `KatnissRecognitionService` — a separate process that opens its own input through Android's
+ * audio stack, the one this device's USB HAL cannot serve. The singing microphones are not
+ * merely a poor choice for it, they are invisible to it. So the button is an offer the app
+ * cannot honour, which is worse than no offer at all: somebody presses it, holds a microphone
+ * up, and concludes the microphone is broken.
+ *
+ * `privateImeOptions` is the convention AOSP LatinIME reads for this, and Gboard descends from
+ * it. Three spellings are sent because the check has changed shape over the years and the field
+ * is comma-splittable, so listing all of them costs nothing: the bare key, the compat
+ * abbreviation, and the key qualified by the IME's own package, which is the form the current
+ * source builds.
+ *
+ * It is a request rather than a guarantee — a keyboard is free to ignore it, and this one is not
+ * ours. Verified on the device rather than assumed; if a keyboard ever ignores it, the button
+ * comes back and nothing else changes.
+ */
+private const val NO_MICROPHONE =
+    "noMicrophoneKey,nm,com.google.android.inputmethod.latin.noMicrophoneKey"
 
 /**
  * The one place a name is typed, wherever that happens.
@@ -46,7 +70,10 @@ fun NameEntry(
         textStyle = TextStyle(color = GameTheme.lyricActive, fontSize = 34.sp),
         cursorBrush = SolidColor(colour),
         keyboardActions = KeyboardActions(onDone = { onDone() }),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardOptions = KeyboardOptions(
+            imeAction = ImeAction.Done,
+            platformImeOptions = PlatformImeOptions(NO_MICROPHONE),
+        ),
         modifier = modifier
             .focusRequester(focusRequester)
             .width(420.dp)
