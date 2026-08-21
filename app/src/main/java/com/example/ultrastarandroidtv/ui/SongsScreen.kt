@@ -66,6 +66,7 @@ private enum class SongsMode { List, Managing, Confirming }
 @Composable
 fun SongsScreen(
     cache: SongLibraryCache,
+    onAddSongs: () -> Unit,
     onMenu: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -195,6 +196,12 @@ fun SongsScreen(
                             if (treeUri == null) "Choose song folder" else "Change folder",
                             modifier = Modifier.padding(horizontal = 12.dp),
                         )
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    // Downloading needs somewhere to put a song, so it is offered only once a
+                    // folder is chosen -- the same rule Play follows on the main menu.
+                    Button(onClick = onAddSongs, enabled = treeUri != null) {
+                        Text("Add songs", modifier = Modifier.padding(horizontal = 12.dp))
                     }
                     Spacer(Modifier.width(16.dp))
                     Button(

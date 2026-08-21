@@ -22,6 +22,30 @@ private const val TAG = "CoverLoader"
  */
 object CoverLoader {
 
+    /**
+     * Decodes cover bytes already in hand, for artwork that came off the network rather than the
+     * card. Same downscaling, same tolerance of rubbish: a cover that will not decode is a
+     * cosmetic problem.
+     */
+    fun decode(bytes: ByteArray, maxPixels: Int = 512): ImageBitmap? {
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+
+            val longest = maxOf(bounds.outWidth, bounds.outHeight)
+            if (longest <= 0) return null
+
+            var sample = 1
+            while (longest / (sample * 2) >= maxPixels) sample *= 2
+
+            val options = BitmapFactory.Options().apply { inSampleSize = sample }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
+        } catch (error: Exception) {
+            Log.w(TAG, "could not decode a cover of ${bytes.size} bytes", error)
+            null
+        }
+    }
+
     /** Decodes [uri] down to roughly [maxPixels] on its longest edge, or null if it will not load. */
     fun load(resolver: ContentResolver, uri: Uri, maxPixels: Int = 512): ImageBitmap? {
         return try {

@@ -16,7 +16,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.PlatformImeOptions
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ultrastarandroidtv.game.GameTheme
@@ -50,8 +53,13 @@ private const val NO_MICROPHONE =
  *
  * Shared rather than duplicated because typing on a television is the most fragile interaction in
  * the app — it depends on the field taking focus at the right moment for the on-screen keyboard
- * to appear at all — and two copies of it would eventually differ in exactly that detail. The
- * length cap lives here too, so no caller can forget it.
+ * to appear at all — and two copies of it would eventually differ in exactly that detail. That is
+ * why searching USDB and typing a password come through here too rather than growing their own
+ * fields: they are the same fragile interaction wearing different clothes.
+ *
+ * [maxLength] defaults to a singer's name, which is what most callers want and none should have
+ * to remember. [masked] hides what is typed, for a password — and the dictation suppression above
+ * matters most there, since a spoken password on a living-room television is nobody's intention.
  */
 @Composable
 fun NameEntry(
@@ -62,21 +70,26 @@ fun NameEntry(
     focusRequester: FocusRequester,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
+    maxLength: Int = MAX_NAME_LENGTH,
+    masked: Boolean = false,
+    width: Dp = 420.dp,
 ) {
     BasicTextField(
         value = value,
-        onValueChange = { onValueChange(it.take(MAX_NAME_LENGTH)) },
+        onValueChange = { onValueChange(it.take(maxLength)) },
         singleLine = true,
         textStyle = TextStyle(color = GameTheme.lyricActive, fontSize = 34.sp),
         cursorBrush = SolidColor(colour),
         keyboardActions = KeyboardActions(onDone = { onDone() }),
+        visualTransformation =
+            if (masked) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions = KeyboardOptions(
             imeAction = ImeAction.Done,
             platformImeOptions = PlatformImeOptions(NO_MICROPHONE),
         ),
         modifier = modifier
             .focusRequester(focusRequester)
-            .width(420.dp)
+            .width(width)
             .clip(RoundedCornerShape(12.dp))
             .background(GameTheme.trackBackground)
             .padding(horizontal = 20.dp, vertical = 16.dp),

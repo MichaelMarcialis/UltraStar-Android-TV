@@ -115,6 +115,16 @@ class YouTubeAudioTest {
         assertNull(chosen)
     }
 
+    /**
+     * Measured 2026-08-20: the same URL served 31 KB/s plain and 10.1 MB/s with this header.
+     * Google throttles whole-file requests to about playback speed, so without it a four-megabyte
+     * song takes two minutes and looks exactly like a hang. This is not an optimisation.
+     */
+    @Test
+    fun `a stream is fetched with a range header or it crawls`() {
+        assertEquals("bytes=0-", format().fetchHeaders["Range"])
+    }
+
     @Test
     fun `reads the declared codec`() {
         assertEquals("mp4a.40.2", format(mime = """audio/mp4; codecs="mp4a.40.2"""").codec)

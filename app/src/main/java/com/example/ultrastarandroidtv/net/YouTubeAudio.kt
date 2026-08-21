@@ -182,6 +182,21 @@ data class AudioFormat(
     /** File extension to save this as: `m4a`, `webm`, … */
     val container: String get() = containerFor(mimeType)
 
+    /**
+     * Headers this stream must be fetched with.
+     *
+     * **The `Range` header is not an optimisation, it is the difference between working and not.**
+     * Measured on 2026-08-20 against the same URL: a plain `GET` came back at **31 KB/s**, and the
+     * identical request carrying `Range: bytes=0-` came back at **10.1 MB/s**. Google throttles
+     * whole-file requests to roughly playback speed — sensible for a video player, ruinous for a
+     * download — and asking for a range opts out of it. Without this a four-megabyte song takes
+     * about two minutes and looks exactly like a hang.
+     *
+     * `bytes=0-` asks for the whole file, so the reply is a `206` carrying everything; there is no
+     * chunking to reassemble. Do not "simplify" this away.
+     */
+    val fetchHeaders: Map<String, String> get() = mapOf("Range" to "bytes=0-")
+
     /** Codec string YouTube declared, e.g. `mp4a.40.2` or `opus`. Empty when it did not say. */
     val codec: String
         get() = mimeType.substringAfter("codecs=", "").trim('"', ' ').substringBefore('"')

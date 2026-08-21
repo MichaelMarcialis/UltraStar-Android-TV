@@ -27,7 +27,9 @@ class ChosenSong(
     val videoUri: String?,
 )
 
-private enum class Screen { Menu, FirstRun, Players, Claim, Picker, Songs, Singers, Settings, Playing }
+private enum class Screen {
+    Menu, FirstRun, Players, Claim, Picker, Songs, AddSongs, Singers, Settings, Playing
+}
 
 /**
  * The whole app, and the order things happen in.
@@ -119,11 +121,21 @@ fun AppRoot() {
         // which cannot be sung, and the only one that can remove it.
         Screen.Songs -> SongsScreen(
             cache = library,
+            onAddSongs = { screen = Screen.AddSongs },
             onMenu = {
                 // A folder can be chosen or changed here, which is what unblocks Play.
                 hasLibrary = LibraryLocation(context).saved() != null
                 toMenu()
             },
+        )
+
+        // Searching USDB and downloading. Reached from Songs rather than the main menu: it is
+        // library management, and it is the same folder and the same cache that screen owns.
+        Screen.AddSongs -> AddSongsScreen(
+            cache = library,
+            // Back to Songs, which rescans if anything was downloaded -- the cache is cleared on
+            // every successful save, so the new songs are found without anybody pressing Rescan.
+            onBack = { screen = Screen.Songs },
         )
 
         // Only ever seen with no folder chosen — a first run, or a grant that went away with

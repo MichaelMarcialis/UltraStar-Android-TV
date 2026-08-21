@@ -74,6 +74,19 @@ class SongDownloaderTest {
         assertTrue(chart.contains("#MP3:David Bowie - China Girl (1).m4a"))
     }
 
+    /**
+     * Without a Range header Google serves the file at roughly playback speed -- measured at
+     * 31 KB/s against 10.1 MB/s with it. The download still works, so nothing fails; it just
+     * takes two minutes and reads as a hang. That is exactly the kind of thing a later tidy-up
+     * removes as a no-op, so it is pinned here.
+     */
+    @Test
+    fun `asks for the music as a range`() {
+        val net = FakeNet()
+        downloaderFor(net, FakeCard()).download(bowie)
+        assertEquals("bytes=0-", net.audioRequestHeaders["Range"])
+    }
+
     @Test
     fun `waits the time usdb asks for and says so`() {
         val net = FakeNet(waitSeconds = 3)
@@ -309,10 +322,12 @@ class SongDownloaderTest {
         private val coverFails: Boolean = false,
     ) : Http {
         var requests = 0
+        var audioRequestHeaders: Map<String, String> = emptyMap()
 
         override fun send(request: HttpRequest): HttpReply {
             requests++
             val url = request.url
+            if (url.contains("googlevideo")) audioRequestHeaders = request.headers
             return when {
                 url.contains("youtubei/v1/player") -> HttpReply(200, youTubeReply, NO_HEADERS)
                 url.startsWith("https://www.youtube.com/") -> HttpReply(200, YT_HOME, NO_HEADERS)

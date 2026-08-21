@@ -139,7 +139,9 @@ class SongDownloader(
         }
 
         onStage(DownloadStage.DownloadingAudio)
-        val audioBytes = http.getBytes(audio.format.url)
+        // The headers matter: see AudioFormat.fetchHeaders. Without the Range header this is a
+        // two-minute download of a four-megabyte file.
+        val audioBytes = http.getBytes(audio.format.url, audio.format.fetchHeaders)
         if (audioBytes.isEmpty()) {
             return DownloadOutcome.Failed(
                 DownloadProblem.AUDIO_UNAVAILABLE,
