@@ -25,3 +25,26 @@ interface DocumentTree {
     /** Whole contents of [fileId]. Song text files are small; nothing else is read. */
     fun readBytes(fileId: String): ByteArray
 }
+
+/**
+ * Putting things *into* a document tree.
+ *
+ * Separate from [DocumentTree] because almost nothing needs it: scanning, playing and browsing
+ * are all reads, and the scanner being written against a read-only interface is what lets its
+ * rules be tested against an in-memory fake. Only removing a song and downloading one write, and
+ * both are rare, deliberate acts.
+ */
+interface DocumentWriter {
+
+    /**
+     * Makes a folder inside [parentId], returning its document id, or null if it could not be
+     * made — including when a folder of that name is already there.
+     */
+    fun createFolder(parentId: String, name: String): String?
+
+    /** Writes a whole file into [parentId]. Returns its document id, or null on any failure. */
+    fun writeFile(parentId: String, name: String, mimeType: String, bytes: ByteArray): String?
+
+    /** Removes a document, or a folder and everything in it. False rather than throwing. */
+    fun delete(documentId: String): Boolean
+}

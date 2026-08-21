@@ -21,7 +21,7 @@ private const val MAX_TEXT_BYTES = 4 * 1024 * 1024
 class SafDocumentTree(
     private val resolver: ContentResolver,
     private val treeUri: Uri,
-) : DocumentTree {
+) : DocumentTree, DocumentWriter {
 
     override val rootId: String = DocumentsContract.getTreeDocumentId(treeUri)
 
@@ -69,6 +69,47 @@ class SafDocumentTree(
     fun uriFor(documentId: String): Uri =
         DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
 
+    override fun createFolder(parentId: String, name: String): String? = runCatching {
+        DocumentsContract.createDocument(
+            resolver,
+            uriFor(parentId),
+            DocumentsContract.Document.MIME_TYPE_DIR,
+            name,
+        )?.let(DocumentsContract::getDocumentId)
+    }.getOrNull()
+
+    /**
+     * Creates the file and writes it in one go.
+     *
+     * The provider picks the final name — it may add a suffix to avoid a clash, or change the
+     * extension to match the MIME type — so the id it hands back is the only reliable handle to
+     * what was actually created. A caller that assumed [name] survived would be reading a
+     * different file than it wrote.
+     *
+     * Cleans up after itself: a document that was created but could not be filled is deleted
+     * rather than left as an empty file that looks like a song.
+     */
+    override fun writeFile(
+        parentId: String,
+        name: String,
+        mimeType: String,
+        bytes: ByteArray,
+    ): String? {
+        val created = runCatching {
+            DocumentsContract.createDocument(resolver, uriFor(parentId), mimeType, name)
+        }.getOrNull() ?: return null
+
+        val written = runCatching {
+            resolver.openOutputStream(created)?.use { it.write(bytes) } != null
+        }.getOrDefault(false)
+
+        if (!written) {
+            runCatching { DocumentsContract.deleteDocument(resolver, created) }
+            return null
+        }
+        return DocumentsContract.getDocumentId(created)
+    }
+
     /**
      * Removes a document, or a folder and everything in it.
      *
@@ -76,7 +117,7 @@ class SafDocumentTree(
      * to explain rather than crash on: the card was pulled, the grant is read-only because it was
      * given by a build that only asked for read, or the provider simply refuses.
      */
-    fun delete(documentId: String): Boolean = runCatching {
+    override fun delete(documentId: String): Boolean = runCatching {
         DocumentsContract.deleteDocument(resolver, uriFor(documentId))
     }.getOrDefault(false)
 }

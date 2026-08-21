@@ -14,12 +14,24 @@ import java.net.URLEncoder
  */
 class HttpFailure(message: String, val status: Int = 0) : IOException(message)
 
-/** What came back. Header names are matched without regard to case, as HTTP requires. */
+/**
+ * What came back. Header names are matched without regard to case, as HTTP requires.
+ *
+ * Carries **bytes**, with [body] a text view of them, because the same client fetches HTML pages
+ * and MP4 audio. Decoding every reply to text up front would corrupt the audio; keeping two
+ * parallel methods would let a caller pick the wrong one.
+ */
 class HttpReply(
     val status: Int,
-    val body: String,
+    val bytes: ByteArray,
     headers: Map<String, List<String>>,
 ) {
+    constructor(status: Int, body: String, headers: Map<String, List<String>>) :
+        this(status, body.toByteArray(Charsets.UTF_8), headers)
+
+    /** The reply decoded as UTF-8 text. Meaningless for media, which is what [bytes] is for. */
+    val body: String by lazy(LazyThreadSafetyMode.NONE) { bytes.decodeToString() }
+
     private val byLowerName: Map<String, List<String>> =
         headers.entries.associate { (name, values) -> name.lowercase() to values }
 
@@ -52,8 +64,10 @@ class HttpRequest(
  * a network, a device, or a website to be having a good day in order to be tested. Against this
  * interface those decisions are ordinary logic over canned replies.
  *
- * Text only. Downloading the media itself streams to disk with progress and belongs to the
- * download layer, not here.
+ * Whole bodies, held in memory. Songs are a few megabytes and [UrlHttp] refuses anything much
+ * larger, so streaming to disk would buy nothing but a partly-written file to clean up after —
+ * and the download layer wants all-or-nothing anyway, since a half-downloaded song is exactly
+ * the broken-folder problem this feature exists to stop making worse.
  */
 interface Http {
 
@@ -75,6 +89,10 @@ interface Http {
                 contentType = "application/json",
             ),
         ).orThrow(url).body
+
+    /** Whole body of a GET as bytes, for media. Throws [HttpFailure] on a non-2xx status. */
+    fun getBytes(url: String, headers: Map<String, String> = emptyMap()): ByteArray =
+        send(HttpRequest(url, headers = headers)).orThrow(url).bytes
 
     /**
      * POSTs [fields] as an HTML form. Returns the whole reply rather than the body, because the
@@ -128,7 +146,31 @@ private fun hostOf(url: String): String = runCatching { URL(url).host }.getOrNul
 class UrlHttp(
     private val connectTimeoutMs: Int = 15_000,
     private val readTimeoutMs: Int = 30_000,
+    /** Refuse a body larger than this. Generous for a song, far below anything alarming. */
+    private val maxBytes: Long = 64L * 1024 * 1024,
 ) : Http {
+
+    /**
+     * Reads a whole body, refusing anything past [maxBytes].
+     *
+     * A cap rather than trust: a redirect to something enormous, or a stream URL that turns out
+     * to be a video, would otherwise fill a card quietly. Songs run to a few megabytes.
+     */
+    private fun readCapped(stream: java.io.InputStream, url: String): ByteArray {
+        val out = java.io.ByteArrayOutputStream(DEFAULT_BUFFER_SIZE)
+        val buffer = ByteArray(64 * 1024)
+        var total = 0L
+        while (true) {
+            val read = stream.read(buffer)
+            if (read < 0) break
+            total += read
+            if (total > maxBytes) {
+                throw HttpFailure("Reply from ${hostOf(url)} is larger than ${maxBytes / (1024 * 1024)} MB")
+            }
+            out.write(buffer, 0, read)
+        }
+        return out.toByteArray()
+    }
 
     override fun send(request: HttpRequest): HttpReply {
         val connection = try {
@@ -158,8 +200,8 @@ class UrlHttp(
             // The error stream carries the server's own explanation, which is a better thing to
             // put in front of somebody than a bare status number.
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val body = stream?.use { it.readBytes() }?.decodeToString().orEmpty()
-            return HttpReply(status, body, connection.headerFields.orEmpty().filterKeys { it != null })
+            val bytes = stream?.use { readCapped(it, request.url) } ?: ByteArray(0)
+            return HttpReply(status, bytes, connection.headerFields.orEmpty().filterKeys { it != null })
         } finally {
             connection.disconnect()
         }
