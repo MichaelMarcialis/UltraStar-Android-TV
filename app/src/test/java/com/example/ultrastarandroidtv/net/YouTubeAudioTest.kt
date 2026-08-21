@@ -378,16 +378,15 @@ class YouTubeAudioTest {
         var postCount = 0
         var lastHeaders: Map<String, String> = emptyMap()
 
-        override fun getText(url: String, headers: Map<String, String>): String {
-            homeRequests++
-            return home
-        }
-
-        override fun postJson(url: String, body: String, headers: Map<String, String>): String {
-            lastHeaders = headers
+        override fun send(request: HttpRequest): HttpReply {
+            if (request.method != "POST") {
+                homeRequests++
+                return HttpReply(200, home, emptyMap())
+            }
+            lastHeaders = request.headers
             val reply = replies[minOf(postCount, replies.lastIndex)]
             postCount++
-            return reply
+            return HttpReply(200, reply, emptyMap())
         }
     }
 
