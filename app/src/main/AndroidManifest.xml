@@ -6,6 +6,11 @@
          because this Shield's USB audio HAL cannot open these devices at all. -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
+    <!-- Fetching song media. The only network this app does is downloading songs the user
+         asked for; nothing is uploaded and nothing phones home. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"

@@ -52,6 +52,11 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.material)
     testImplementation(libs.junit)
+    // org.json is in the Android framework, so the app itself needs no JSON dependency -- but the
+    // framework copy is stubbed in JVM unit tests. This is that same AOSP implementation extracted
+    // from the SDK (Apache-2.0, Maven Central), test-only, so the tests parse exactly what the
+    // device parses without adding a runtime dependency.
+    testImplementation(libs.android.json)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
 
