@@ -3,14 +3,20 @@ package com.example.ultrastarandroidtv.download
 import com.example.ultrastarandroidtv.library.DocumentTree
 import com.example.ultrastarandroidtv.library.DocumentWriter
 import com.example.ultrastarandroidtv.net.Http
+import com.example.ultrastarandroidtv.net.HttpStream
 import com.example.ultrastarandroidtv.net.HttpFailure
 import com.example.ultrastarandroidtv.net.AudioLookup
 import com.example.ultrastarandroidtv.net.RefusalKind
 import com.example.ultrastarandroidtv.net.YouTubeAudio
 import com.example.ultrastarandroidtv.usdb.ChartFetch
+import com.example.ultrastarandroidtv.net.ITunesArtwork
+import com.example.ultrastarandroidtv.net.ResolvedMedia
+import com.example.ultrastarandroidtv.net.VideoFormat
 import com.example.ultrastarandroidtv.usdb.UsdbCharts
+import com.example.ultrastarandroidtv.usdb.UsdbDetails
 import com.example.ultrastarandroidtv.usdb.UsdbSong
 import com.example.ultrastarandroidtv.usdb.metaTagsOf
+import java.io.OutputStream
 
 /** Where a download has got to, for a screen that has to be honest about a slow thing. */
 sealed interface DownloadStage {
@@ -26,6 +32,16 @@ sealed interface DownloadStage {
     data object DownloadingAudio : DownloadStage
     data object FetchingArtwork : DownloadStage
     data object Saving : DownloadStage
+
+    /**
+     * Last, and after the song is already playable — see [SongDownloader.saveVideo].
+     *
+     * Carries a percentage because this is the slowest stage by a distance: YouTube serves a
+     * video at roughly the rate it plays, so a three-minute song takes around a hundred seconds
+     * however small a format is chosen. A hundred seconds of "Downloading the video…" reads as a
+     * hang, for the same reason USDB's wait counts down out loud rather than spinning.
+     */
+    data class DownloadingVideo(val percent: Int) : DownloadStage
 }
 
 /** Why a download did not happen, in terms a screen can turn into a sentence. */
@@ -46,6 +62,7 @@ sealed interface DownloadOutcome {
         val audioFile: String,
         val audioBytes: Int,
         val coverSaved: Boolean,
+        val videoSaved: Boolean,
     ) : DownloadOutcome
 
     data class Failed(val problem: DownloadProblem, val message: String) : DownloadOutcome
@@ -73,10 +90,32 @@ sealed interface DownloadOutcome {
  * type. So the files are written, their *actual* names are read back, and the chart's `#MP3:` and
  * `#COVER:` are then pointed at those. Writing the chart first would mean guessing, and a chart
  * whose `#MP3:` is off by one character is a song that silently will not play.
+ *
+ * ## The music is checked before the wait, not after
+ *
+ * USDB's chart is what names the YouTube video, and getting a chart costs a 24-second throttle. So
+ * the obvious order — chart, then check the video — means a song whose video has been removed takes
+ * **twenty-seven seconds to say no**. The song's *detail* page names the same video with no wait
+ * attached (see [UsdbDetails]), so it is asked first and a doomed download is refused in about two
+ * seconds.
+ *
+ * The chart is still authoritative. Once it arrives its own id is compared with the one that was
+ * pre-checked, and the lookup is only skipped when they agree — so a page that ever disagreed with
+ * its chart would cost a redundant request, never a wrong answer.
+ *
+ * ## The music video comes last, because it is allowed to fail
+ *
+ * A song is finished — folder, audio, cover, chart — before the video is even asked for. It is the
+ * same YouTube video the sound came from, so it costs no extra lookup, and a song without one
+ * simply gets the visualiser instead. Downloading it earlier would mean a failed video could
+ * discard a perfectly good song, which is the exact inversion of the rule above. It is also the
+ * only thing here that is *streamed* to the card rather than held in memory; see [saveVideo].
  */
 class SongDownloader(
     private val charts: UsdbCharts,
+    private val details: UsdbDetails,
     private val youTube: YouTubeAudio,
+    private val artwork: ITunesArtwork,
     private val http: Http,
     private val tree: DocumentTree,
     private val writer: DocumentWriter,
@@ -117,6 +156,20 @@ class SongDownloader(
         folderName: String,
         onStage: (DownloadStage) -> Unit,
     ): DownloadOutcome {
+        // Before the throttle, not after: a removed video should cost two seconds, not twenty-seven.
+        onStage(DownloadStage.FindingAudio)
+        val previewId = runCatching { details.fetch(song.songId).videoId }.getOrNull()
+        var preflight: ResolvedMedia? = null
+        if (previewId != null) {
+            when (val lookup = youTube.resolve(previewId)) {
+                is AudioLookup.Found -> preflight = lookup.media
+                is AudioLookup.Refused -> return DownloadOutcome.Failed(
+                    DownloadProblem.AUDIO_UNAVAILABLE,
+                    explain(lookup),
+                )
+            }
+        }
+
         val chart = fetchChart(song.songId, onStage)
             ?: return DownloadOutcome.Failed(
                 DownloadProblem.USDB_REFUSED,
@@ -129,13 +182,16 @@ class SongDownloader(
                 "That song file does not say where its music comes from.",
             )
 
-        onStage(DownloadStage.FindingAudio)
-        val audio = when (val lookup = youTube.resolve(videoId)) {
-            is AudioLookup.Found -> lookup.audio
-            is AudioLookup.Refused -> return DownloadOutcome.Failed(
-                DownloadProblem.AUDIO_UNAVAILABLE,
-                explain(lookup),
-            )
+        // The chart has the last word. Reuse the pre-check only when it was about the same video.
+        val audio = preflight?.takeIf { videoId == previewId } ?: run {
+            onStage(DownloadStage.FindingAudio)
+            when (val lookup = youTube.resolve(videoId)) {
+                is AudioLookup.Found -> lookup.media
+                is AudioLookup.Refused -> return DownloadOutcome.Failed(
+                    DownloadProblem.AUDIO_UNAVAILABLE,
+                    explain(lookup),
+                )
+            }
         }
 
         onStage(DownloadStage.DownloadingAudio)
@@ -152,11 +208,44 @@ class SongDownloader(
         // Artwork is a nicety: a song with no cover still plays, so a failure here must not throw
         // away a good download.
         onStage(DownloadStage.FetchingArtwork)
-        val coverBytes = song.coverUrl?.let { url -> runCatching { http.getBytes(url) }.getOrNull() }
-            ?.takeIf { it.isNotEmpty() }
+        val coverBytes = fetchCover(song, chart)
 
         onStage(DownloadStage.Saving)
-        return save(folderName, chart, audio.format.container, audioBytes, coverBytes)
+        return save(
+            folderName = folderName,
+            chart = chart,
+            audioExtension = audio.format.container,
+            audioBytes = audioBytes,
+            coverBytes = coverBytes,
+            video = audio.video,
+            onStage = onStage,
+        )
+    }
+
+    /**
+     * The best cover anybody offers for this song, or null.
+     *
+     * Three sources, best first, and the sequence is lazy so a later one is only asked for when
+     * the one before it had nothing. USDB's own thumbnail is last because it is **200x200** — fine
+     * as a row icon, visibly soft as a card on a television, and softer than the rest of a library
+     * whose covers the desktop tool fetched at 1000x1000.
+     *
+     * A cover is a nicety, so every source is allowed to fail quietly; the song is downloaded
+     * either way.
+     */
+    private fun fetchCover(song: UsdbSong, chart: String): ByteArray? =
+        coverSources(song, chart).firstNotNullOfOrNull { url ->
+            runCatching { http.getBytes(url) }.getOrNull()?.takeIf { it.isNotEmpty() }
+        }
+
+    private fun coverSources(song: UsdbSong, chart: String): Sequence<String> = sequence {
+        // What the chart's author chose, when they named somewhere it can actually be fetched
+        // from. Bare filenames here are fanart.tv, which no plain HTTP client can reach.
+        metaTagsOf(chart).coverFile
+            ?.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }
+            ?.let { yield(it) }
+        artwork.find(song.artist, song.title)?.let { yield(it) }
+        song.coverUrl?.let { yield(it) }
     }
 
     /** Runs USDB's countdown, reporting each second, then collects the chart. */
@@ -181,6 +270,8 @@ class SongDownloader(
         audioExtension: String,
         audioBytes: ByteArray,
         coverBytes: ByteArray?,
+        video: VideoFormat?,
+        onStage: (DownloadStage) -> Unit,
     ): DownloadOutcome {
         val folderId = writer.createFolder(tree.rootId, folderName)
             ?: return DownloadOutcome.Failed(
@@ -218,13 +309,86 @@ class SongDownloader(
             bytes = retargetChart(chart, audioName, coverName).toByteArray(Charsets.UTF_8),
         ) ?: return giveUp("The song file could not be saved to the card.")
 
+        // Everything above this line is the song. The video is added afterwards on purpose: it is
+        // the one part that may fail without spoiling anything, so it is fetched once there is
+        // already something worth keeping.
+        val videoSaved = video != null && saveVideo(folderId, folderName, video, onStage)
+
         return DownloadOutcome.Saved(
             folderName = folderName,
             chartFile = names[chartId] ?: "$folderName.txt",
             audioFile = audioName,
             audioBytes = audioBytes.size,
             coverSaved = coverName != null,
+            videoSaved = videoSaved,
         )
+    }
+
+    /**
+     * Saves the music video beside the song, streaming it rather than holding it.
+     *
+     * **Streamed, not buffered.** A 1080p video runs to 60-70 MB and this app's heap is capped at
+     * 192 MB, so a single allocation that size — next to Compose, a decoder and the audio already
+     * in hand — is how an out-of-memory kill happens. The bytes go straight from the socket to the
+     * card and nothing holds them.
+     *
+     * **`#VIDEO:` is not touched, and does not need to be.** That header carries USDB's meta tags
+     * recording where the media came from, and the scanner already falls back to any video file
+     * sitting in a song's folder — which is how every video in this library is found, since not
+     * one chart on the card declares the header. So the file simply being there is enough.
+     *
+     * Returns whether it landed. Every failure is quiet: the song is already complete and
+     * playable, and a song with no video gets the visualiser instead, which is not a downgrade
+     * worth reporting as an error.
+     */
+    private fun saveVideo(
+        folderId: String,
+        folderName: String,
+        video: VideoFormat,
+        onStage: (DownloadStage) -> Unit,
+    ): Boolean {
+        onStage(DownloadStage.DownloadingVideo(0))
+        return runCatching {
+            http.openStream(video.url, video.fetchHeaders).use { source ->
+                writer.writeStream(
+                    parentId = folderId,
+                    name = "$folderName.${video.container}",
+                    mimeType = mimeForVideo(video.container),
+                ) { out -> copyReporting(source, out, video.contentLength, onStage) }
+            }
+        }.getOrNull() != null
+    }
+
+    /**
+     * Copies the picture across, saying how far along it is.
+     *
+     * Reports only when the whole number of percent changes, so a screen is woken about a hundred
+     * times over the whole download rather than once per buffer. Falls back to the length YouTube
+     * declared when the server does not repeat it in the reply, and simply says nothing when
+     * neither is known — a wrong percentage would be worse than none.
+     */
+    private fun copyReporting(
+        source: HttpStream,
+        out: OutputStream,
+        declared: Long,
+        onStage: (DownloadStage) -> Unit,
+    ) {
+        val total = if (source.declaredLength > 0) source.declaredLength else declared
+        val buffer = ByteArray(COPY_BUFFER_BYTES)
+        var written = 0L
+        var reported = 0
+        while (true) {
+            val read = source.stream.read(buffer)
+            if (read < 0) break
+            out.write(buffer, 0, read)
+            written += read
+            if (total <= 0) continue
+            val percent = ((written * 100) / total).toInt().coerceIn(0, 100)
+            if (percent != reported) {
+                reported = percent
+                onStage(DownloadStage.DownloadingVideo(percent))
+            }
+        }
     }
 
     private fun alreadyHave(folderName: String): Boolean =
@@ -242,6 +406,10 @@ fun explain(refusal: AudioLookup.Refused): String {
         RefusalKind.UNAVAILABLE ->
             "$name cannot be downloaded — it is private, removed, or restricted. " +
                 "Try another version of the song."
+        // Alive, and blocked here. Different advice from a dead link: waiting will not help, and
+        // another upload of the same song usually works.
+        RefusalKind.REGION_BLOCKED ->
+            "$name is blocked in your country. Try another version of the song."
         RefusalKind.AGE_RESTRICTED -> "$name is age-restricted and cannot be downloaded."
         RefusalKind.LIVE -> "$name is a live stream, so there is no file to download."
         RefusalKind.NEEDS_SIGN_IN, RefusalKind.NO_AUDIO_STREAM ->
@@ -249,6 +417,12 @@ fun explain(refusal: AudioLookup.Refused): String {
                 "the app needs updating."
         RefusalKind.UNKNOWN -> "The music could not be fetched: ${refusal.reason}"
     }
+}
+
+private fun mimeForVideo(extension: String): String = when (extension.lowercase()) {
+    "mp4", "m4v" -> "video/mp4"
+    "webm" -> "video/webm"
+    else -> "application/octet-stream"
 }
 
 private fun mimeForAudio(extension: String): String = when (extension.lowercase()) {
@@ -280,6 +454,9 @@ fun safeFileName(name: String): String =
         .trimEnd('.', ' ')
         .take(MAX_NAME_CHARS)
         .trimEnd('.', ' ')
+
+/** Big enough that a slow 60 MB video is not also a million tiny writes to an SD card. */
+private const val COPY_BUFFER_BYTES = 64 * 1024
 
 private const val MAX_NAME_CHARS = 120
 private val FORBIDDEN = charArrayOf(':', '*', '?', '"', '<', '>', '|')

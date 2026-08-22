@@ -139,12 +139,12 @@ class YouTubeAudioTest {
     fun `reads a playable response`() {
         when (val answer = readPlayerResponse("yebNIHKAC4A", OK_RESPONSE)) {
             is AudioLookup.Found -> {
-                assertEquals("yebNIHKAC4A", answer.audio.videoId)
-                assertEquals("\"Golden\" Official Lyric Video", answer.audio.title)
-                assertEquals(199, answer.audio.durationSeconds)
-                assertEquals(140, answer.audio.format.itag)
-                assertEquals("m4a", answer.audio.format.container)
-                assertEquals(3_247_881L, answer.audio.format.contentLength)
+                assertEquals("yebNIHKAC4A", answer.media.videoId)
+                assertEquals("\"Golden\" Official Lyric Video", answer.media.title)
+                assertEquals(199, answer.media.durationSeconds)
+                assertEquals(140, answer.media.format.itag)
+                assertEquals("m4a", answer.media.format.container)
+                assertEquals(3_247_881L, answer.media.format.contentLength)
             }
             is AudioLookup.Refused -> fail("expected Found, got $answer")
         }
@@ -238,7 +238,7 @@ class YouTubeAudioTest {
                {"itag":140,"url":"https://x/","mimeType":"audio/mp4","bitrate":130669}]}}
         """.trimIndent()
         val found = readPlayerResponse("x", json) as AudioLookup.Found
-        assertEquals(-1L, found.audio.format.contentLength)
+        assertEquals(-1L, found.media.format.contentLength)
     }
 
     @Test
@@ -283,7 +283,7 @@ class YouTubeAudioTest {
     fun `resolves a video`() {
         val http = FakeHttp(home = HOME_PAGE, replies = listOf(OK_RESPONSE))
         val answer = YouTubeAudio(http).resolve("yebNIHKAC4A")
-        assertEquals(140, (answer as AudioLookup.Found).audio.format.itag)
+        assertEquals(140, (answer as AudioLookup.Found).media.format.itag)
     }
 
     /** The token is per-session, so a bulk download must not re-fetch the homepage for every song. */
@@ -422,4 +422,174 @@ class YouTubeAudioTest {
                              "lengthSeconds":"156","isLiveContent":false}}
         """.trimIndent()
     }
+
+    // -----------------------------------------------------------------------------------------
+    // Choosing a picture stream
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * The one rule that cannot be got wrong. The Shield's Tegra X1+ has no AV1 decoder, so an AV1
+     * stream would be unpacked on the CPU during a song that is already scoring two microphones —
+     * and AV1 is usually the *smallest* file at each height, which makes it exactly what a
+     * well-meant "take the smallest" would choose.
+     */
+    @Test
+    fun `never takes an AV1 stream, however small`() {
+        val chosen = pickVideo(
+            listOf(
+                video(399, "video/mp4; codecs=\"av01.0.08M.08\"", height = 1080, bytes = 27_000),
+                video(136, "video/mp4; codecs=\"avc1.4d401f\"", height = 720, bytes = 41_000),
+            ),
+        )
+        assertEquals(136, chosen?.itag)
+    }
+
+    @Test
+    fun `takes h264 over VP9 at the same height`() {
+        val chosen = pickVideo(
+            listOf(
+                video(248, "video/webm; codecs=\"vp9\"", height = 1080, bytes = 33_000),
+                video(137, "video/mp4; codecs=\"avc1.640028\"", height = 1080, bytes = 58_000),
+            ),
+        )
+        assertEquals(137, chosen?.itag)
+        assertEquals("mp4", chosen?.container)
+    }
+
+    /** VP9 is the fallback rather than the default: it is still hardware-decoded on this device. */
+    @Test
+    fun `falls back to VP9 when h264 is not offered`() {
+        val chosen = pickVideo(
+            listOf(
+                video(394, "video/mp4; codecs=\"av01.0.00M.08\"", height = 1080, bytes = 20_000),
+                video(248, "video/webm; codecs=\"vp9\"", height = 1080, bytes = 33_000),
+            ),
+        )
+        assertEquals(248, chosen?.itag)
+        assertEquals("webm", chosen?.container)
+    }
+
+    @Test
+    fun `takes the tallest picture within the cap`() {
+        val chosen = pickVideo(
+            listOf(
+                video(134, "video/mp4; codecs=\"avc1.4d401e\"", height = 360, bytes = 7_000),
+                video(137, "video/mp4; codecs=\"avc1.640028\"", height = 1080, bytes = 58_000),
+                video(135, "video/mp4; codecs=\"avc1.4d401e\"", height = 480, bytes = 13_000),
+            ),
+        )
+        assertEquals(137, chosen?.itag)
+    }
+
+    @Test
+    fun `refuses anything taller than the cap`() {
+        val chosen = pickVideo(
+            listOf(
+                video(315, "video/webm; codecs=\"vp9\"", height = 2160, bytes = 900_000),
+                video(136, "video/mp4; codecs=\"avc1.4d401f\"", height = 720, bytes = 41_000),
+            ),
+        )
+        assertEquals(136, chosen?.itag)
+    }
+
+    /** No picture is a perfectly good answer: the visualiser draws instead. */
+    @Test
+    fun `no usable picture is null rather than a guess`() {
+        assertNull(pickVideo(emptyList()))
+        assertNull(
+            pickVideo(listOf(video(399, "video/mp4; codecs=\"av01.0.08M.08\"", 1080, 27_000))),
+        )
+        assertNull(
+            pickVideo(listOf(video(140, "audio/mp4; codecs=\"mp4a.40.2\"", 0, 4_000))),
+        )
+    }
+
+    /** A stream with no url needs signature work this client cannot do, so it is not a stream. */
+    @Test
+    fun `skips a picture with no url`() {
+        val chosen = pickVideo(
+            listOf(
+                VideoFormat(137, "", "video/mp4; codecs=\"avc1.640028\"", 1080, 58_000),
+                video(136, "video/mp4; codecs=\"avc1.4d401f\"", height = 720, bytes = 41_000),
+            ),
+        )
+        assertEquals(136, chosen?.itag)
+    }
+
+    @Test
+    fun `a picture is fetched with the same Range header the audio needs`() {
+        assertEquals(
+            "bytes=0-",
+            video(136, "video/mp4; codecs=\"avc1.4d401f\"", 720, 41_000).fetchHeaders["Range"],
+        )
+    }
+
+    /** Read from the same response the sound came from, so a video costs no extra request. */
+    @Test
+    fun `a playable video reports its picture alongside its sound`() {
+        val json = """
+            {"playabilityStatus":{"status":"OK"},
+             "videoDetails":{"title":"Golden","lengthSeconds":"199"},
+             "streamingData":{"adaptiveFormats":[
+               {"itag":140,"url":"https://rr1.googlevideo.com/a","mimeType":"audio/mp4; codecs=\"mp4a.40.2\"","bitrate":130669,"contentLength":"3000000"},
+               {"itag":137,"url":"https://rr1.googlevideo.com/v","mimeType":"video/mp4; codecs=\"avc1.640028\"","height":1080,"contentLength":"58000000"}]}}
+        """.trimIndent()
+        val found = readPlayerResponse("abc", json) as AudioLookup.Found
+        assertEquals(140, found.media.format.itag)
+        assertEquals(137, found.media.video?.itag)
+        assertEquals(1080, found.media.video?.height)
+    }
+
+    @Test
+    fun `a video with no picture stream is still found`() {
+        val json = """
+            {"playabilityStatus":{"status":"OK"},
+             "videoDetails":{"title":"Golden","lengthSeconds":"199"},
+             "streamingData":{"adaptiveFormats":[
+               {"itag":140,"url":"https://rr1.googlevideo.com/a","mimeType":"audio/mp4; codecs=\"mp4a.40.2\"","bitrate":130669,"contentLength":"3000000"}]}}
+        """.trimIndent()
+        val found = readPlayerResponse("abc", json) as AudioLookup.Found
+        assertNull(found.media.video)
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Telling a blocked video from a dead one
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * Measured on Kelly Clarkson's "Since U Been Gone" (R7UrFYvl5TE), which is alive, popular and
+     * answers `UNPLAYABLE` — the same status as a deleted video. The sentence is the only thing
+     * that separates them, and the advice differs: waiting will not help, another upload usually
+     * does.
+     */
+    @Test
+    fun `a geographic block is not read as a dead video`() {
+        assertEquals(
+            RefusalKind.REGION_BLOCKED,
+            refusalKindFor(
+                "UNPLAYABLE",
+                "The uploader has not made this video available in your country",
+            ),
+        )
+    }
+
+    @Test
+    fun `an ordinary unplayable video stays unavailable`() {
+        assertEquals(RefusalKind.UNAVAILABLE, refusalKindFor("UNPLAYABLE", "Video unavailable"))
+        assertEquals(RefusalKind.UNAVAILABLE, refusalKindFor("UNPLAYABLE"))
+    }
+
+    /** The sentence may only narrow the answer, never widen it: it is localised prose. */
+    @Test
+    fun `a reason mentioning a country cannot override a different status`() {
+        assertEquals(
+            RefusalKind.NEEDS_SIGN_IN,
+            refusalKindFor("LOGIN_REQUIRED", "not available in your country"),
+        )
+        assertEquals(RefusalKind.LIVE, refusalKindFor("LIVE_STREAM_OFFLINE", "in your region"))
+    }
+
+    private fun video(itag: Int, mimeType: String, height: Int, bytes: Long) =
+        VideoFormat(itag, "https://rr1.googlevideo.com/videoplayback?i=$itag", mimeType, height, bytes)
+
 }

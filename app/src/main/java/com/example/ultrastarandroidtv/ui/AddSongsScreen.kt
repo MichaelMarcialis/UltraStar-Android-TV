@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,6 +38,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.MediaItem
@@ -50,18 +54,21 @@ import com.example.ultrastarandroidtv.download.QueueStatus
 import com.example.ultrastarandroidtv.download.SongDownloader
 import com.example.ultrastarandroidtv.download.queueSummary
 import com.example.ultrastarandroidtv.download.safeFileName
-import com.example.ultrastarandroidtv.download.statusLabel
+import com.example.ultrastarandroidtv.download.shortStatusLabel
 import com.example.ultrastarandroidtv.game.GameTheme
 import com.example.ultrastarandroidtv.library.CoverLoader
 import com.example.ultrastarandroidtv.library.LibraryLocation
 import com.example.ultrastarandroidtv.library.SafDocumentTree
 import com.example.ultrastarandroidtv.library.SongLibraryCache
+import com.example.ultrastarandroidtv.net.AudioLookup
+import com.example.ultrastarandroidtv.net.ITunesArtwork
 import com.example.ultrastarandroidtv.net.UrlHttp
 import com.example.ultrastarandroidtv.net.YouTubeAudio
 import com.example.ultrastarandroidtv.usdb.SignIn
 import com.example.ultrastarandroidtv.usdb.SongFilter
 import com.example.ultrastarandroidtv.usdb.UsdbAccount
 import com.example.ultrastarandroidtv.usdb.UsdbCharts
+import com.example.ultrastarandroidtv.usdb.UsdbDetails
 import com.example.ultrastarandroidtv.usdb.UsdbSearch
 import com.example.ultrastarandroidtv.usdb.UsdbSession
 import com.example.ultrastarandroidtv.usdb.UsdbSong
@@ -71,6 +78,14 @@ import kotlinx.coroutines.withContext
 
 /** How long a result must stay focused before its sample plays, matching the song picker. */
 private const val PREVIEW_DELAY_MS = 450L
+
+/**
+ * How long a result must stay focused before its availability is checked.
+ *
+ * Longer than the preview delay: hearing a song is the point of pausing on it, whereas this is a
+ * background question whose answer only matters if somebody is actually considering the song.
+ */
+private const val AVAILABILITY_DELAY_MS = 900L
 
 /** Frames to keep asking for focus on the first result while the list composes. */
 private const val RESULT_FOCUS_ATTEMPTS = 30
@@ -109,6 +124,9 @@ fun AddSongsScreen(
     val http = remember { UrlHttp() }
     val session = remember { UsdbSession(http) }
     val search = remember { UsdbSearch(session) }
+    val details = remember { UsdbDetails(session) }
+    val youTube = remember { YouTubeAudio(http) }
+    val artwork = remember { ITunesArtwork(http) }
     val queue = remember { DownloadQueue() }
 
     val treeUri = remember { location.saved() }
@@ -121,8 +139,7 @@ fun AddSongsScreen(
     var signingIn by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
 
-    var artist by remember { mutableStateOf("") }
-    var title by remember { mutableStateOf("") }
+    var keyword by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<UsdbSong>>(emptyList()) }
     var resultNote by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
@@ -132,6 +149,32 @@ fun AddSongsScreen(
     var focused by remember { mutableStateOf<UsdbSong?>(null) }
 
     val covers = remember { mutableStateMapOf<Int, ImageBitmap?>() }
+
+    /**
+     * Whether a song's music can actually be fetched — checked for whatever is focused.
+     *
+     * USDB's detail page names the YouTube video with no throttle attached, so this costs about a
+     * second and can be done while somebody is simply looking at a song. Knowing early matters
+     * because the alternative is finding out after a 24-second wait, and the answer is usually
+     * "try a different version of this song" — advice worth having *before* choosing.
+     *
+     * Only the focused song, and only once each: checking all thirty results would be sixty
+     * requests for a page nobody has read yet. A check that fails for any other reason records
+     * nothing, because a network blip must not label a perfectly good song as broken.
+     */
+    val downloadable = remember { mutableStateMapOf<Int, Boolean>() }
+    LaunchedEffect(focused) {
+        val song = focused ?: return@LaunchedEffect
+        if (downloadable.containsKey(song.songId)) return@LaunchedEffect
+        delay(AVAILABILITY_DELAY_MS)
+        val verdict = withContext(Dispatchers.IO) {
+            runCatching {
+                val videoId = details.fetch(song.songId).videoId ?: return@runCatching null
+                youTube.resolve(videoId) is AudioLookup.Found
+            }.getOrNull()
+        }
+        if (verdict != null) downloadable[song.songId] = verdict
+    }
 
     /**
      * Folder names already on the card, so a song you have is marked rather than offered again.
@@ -239,7 +282,7 @@ fun AddSongsScreen(
         problem = null
         val outcome = runCatching {
             withContext(Dispatchers.IO) {
-                search.search(SongFilter(artist = artist, title = title), page)
+                search.search(SongFilter(keyword = keyword), page)
             }
         }
         searching = false
@@ -275,7 +318,9 @@ fun AddSongsScreen(
         if (!canWrite) return@LaunchedEffect
         val downloader = SongDownloader(
             charts = UsdbCharts(session),
-            youTube = YouTubeAudio(http),
+            details = details,
+            youTube = youTube,
+            artwork = artwork,
             http = http,
             tree = card,
             writer = card,
@@ -339,11 +384,11 @@ fun AddSongsScreen(
 
             AddMode.Browse -> BrowsePanel(
                 account = account,
-                artist = artist,
-                title = title,
+                keyword = keyword,
                 results = results,
                 covers = covers,
                 owned = owned,
+                downloadable = downloadable,
                 queue = queue,
                 note = resultNote,
                 problem = problem,
@@ -354,8 +399,7 @@ fun AddSongsScreen(
                 first = first,
                 firstResult = firstResult,
                 focusIndex = focusIndex,
-                onArtist = { artist = it },
-                onTitle = { title = it },
+                onKeyword = { keyword = it },
                 onSearch = {
                     page = 0
                     searchToken++
@@ -482,11 +526,11 @@ private fun SignInPanel(
 @Composable
 private fun BrowsePanel(
     account: UsdbAccount,
-    artist: String,
-    title: String,
+    keyword: String,
     results: List<UsdbSong>,
     covers: Map<Int, ImageBitmap?>,
     owned: List<String>,
+    downloadable: Map<Int, Boolean>,
     queue: DownloadQueue,
     note: String,
     problem: String?,
@@ -497,8 +541,7 @@ private fun BrowsePanel(
     first: FocusRequester,
     firstResult: FocusRequester,
     focusIndex: Int,
-    onArtist: (String) -> Unit,
-    onTitle: (String) -> Unit,
+    onKeyword: (String) -> Unit,
     onSearch: () -> Unit,
     onMore: () -> Unit,
     onFocusSong: (UsdbSong?) -> Unit,
@@ -551,32 +594,30 @@ private fun BrowsePanel(
     }
 
     Spacer(Modifier.height(20.dp))
+    // One box rather than an Artist box and a Title box.
+    //
+    // Two fields ask somebody to know which half of the answer they have before they type, and on
+    // a remote each one costs a trip through the on-screen keyboard. Nobody looking for a song
+    // thinks in fields -- they think "kelly clarkson" or "since u been gone" and expect either to
+    // work. USDB has no field spanning both, so [UsdbSearch] runs the word as an artist *and* as a
+    // title and folds the answers together; the cost is one extra request, and searching is the
+    // part of USDB that is not throttled.
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column {
-            Text("Artist", style = MaterialTheme.typography.bodySmall, color = GameTheme.lyricIdle)
+            Text(
+                "Artist or song",
+                style = MaterialTheme.typography.bodySmall,
+                color = GameTheme.lyricIdle,
+            )
             Spacer(Modifier.height(4.dp))
             NameEntry(
-                value = artist,
-                onValueChange = onArtist,
+                value = keyword,
+                onValueChange = onKeyword,
                 colour = GameTheme.playerColors[0],
                 focusRequester = first,
                 onDone = onSearch,
                 maxLength = 60,
-                width = 320.dp,
-            )
-        }
-        Spacer(Modifier.width(16.dp))
-        Column {
-            Text("Title", style = MaterialTheme.typography.bodySmall, color = GameTheme.lyricIdle)
-            Spacer(Modifier.height(4.dp))
-            NameEntry(
-                value = title,
-                onValueChange = onTitle,
-                colour = GameTheme.playerColors[1],
-                focusRequester = remember { FocusRequester() },
-                onDone = onSearch,
-                maxLength = 60,
-                width = 320.dp,
+                width = 620.dp,
             )
         }
         Spacer(Modifier.width(16.dp))
@@ -620,6 +661,7 @@ private fun BrowsePanel(
                 cover = covers[song.songId],
                 alreadyOnCard = safeFileName(song.folderName).lowercase() in owned,
                 state = queued?.status,
+                unavailable = downloadable[song.songId] == false,
                 enabled = canWrite,
                 onFocus = { onFocusSong(song) },
                 onPick = { onPick(song) },
@@ -642,6 +684,7 @@ private fun ResultRow(
     cover: ImageBitmap?,
     alreadyOnCard: Boolean,
     state: QueueStatus?,
+    unavailable: Boolean,
     enabled: Boolean,
     onFocus: () -> Unit,
     onPick: () -> Unit,
@@ -658,6 +701,9 @@ private fun ResultRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                // A floor, so a row carrying a two-line reason and a row carrying none sit at
+                // roughly the same height and the list does not jump as downloads progress.
+                .heightIn(min = 58.dp)
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -679,31 +725,63 @@ private fun ResultRow(
             Spacer(Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(song.title, fontSize = 19.sp, fontWeight = FontWeight.Medium)
                 Text(
-                    listOfNotNull(
-                        song.artist.ifBlank { null },
-                        song.year.ifBlank { null },
-                        song.language.ifBlank { null },
-                        if (song.hasGoldenNotes) "golden notes" else null,
-                    ).joinToString(" · "),
+                    song.title,
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                // A failure explains itself here rather than in the slot on the right: this is
+                // where there is room for a sentence. Capped at two lines so it can never push
+                // the row taller than a couple of lines of text.
+                Text(
+                    if (state is QueueStatus.Failed) {
+                        state.message
+                    } else {
+                        listOfNotNull(
+                            song.artist.ifBlank { null },
+                            song.year.ifBlank { null },
+                            song.language.ifBlank { null },
+                            if (song.hasGoldenNotes) "golden notes" else null,
+                        ).joinToString(" · ")
+                    },
                     fontSize = 14.sp,
-                    color = GameTheme.lyricIdle,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    color = if (state is QueueStatus.Failed) {
+                        GameTheme.sparkWarm
+                    } else {
+                        GameTheme.lyricIdle
+                    },
                 )
             }
 
             Spacer(Modifier.width(12.dp))
+            // A fixed slot, and it has to stay fixed. Without the width cap this text is measured
+            // before the weighted column beside it, so a long one takes the whole row and leaves
+            // the title nothing -- see shortStatusLabel for what that looked like on the TV.
             Text(
                 when {
-                    state != null -> statusLabel(state)
+                    state != null -> shortStatusLabel(state)
                     alreadyOnCard -> "Already yours"
+                    // Said before it is pressed rather than after a wait. Deliberately still
+                    // pressable: this row has the focus, and disabling what is focused strands a
+                    // remote with nowhere to go. Pressing now costs about two seconds, not
+                    // twenty-seven, and answers with the reason.
+                    unavailable -> "Music unavailable"
                     else -> "Add"
                 },
                 fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.End,
+                modifier = Modifier.widthIn(max = 250.dp),
                 color = when {
                     alreadyOnCard -> GameTheme.noteIdle
                     state is QueueStatus.Failed -> GameTheme.sparkWarm
                     state is QueueStatus.Done -> GameTheme.playerColors[0]
+                    unavailable -> GameTheme.sparkWarm
                     else -> GameTheme.lyricIdle
                 },
             )

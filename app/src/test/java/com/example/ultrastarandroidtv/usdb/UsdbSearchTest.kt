@@ -242,4 +242,132 @@ class UsdbSearchTest {
                 cell.replace(row.value) { if (dropped++ < 2) "" else it.value }
             }
     }
+
+    // -----------------------------------------------------------------------------------------
+    // One box that searches both fields
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * USDB's form has no field spanning artist and title, so one keyword has to become two
+     * searches. Measured on the live site: `interpret=gone` finds one song on the whole of USDB
+     * and `title=gone` finds fifty-nine, so running only one of them loses most of the answer.
+     */
+    @Test
+    fun `one keyword becomes an artist search and a title search`() {
+        val (byArtist, byTitle) = keywordSearches(SongFilter(keyword = "gone"))
+
+        assertEquals("gone", byArtist.artist)
+        assertEquals("", byArtist.title)
+        assertEquals("gone", byTitle.title)
+        assertEquals("", byTitle.artist)
+    }
+
+    /** Neither half may keep the keyword, or the second search would run it a third time. */
+    @Test
+    fun `the keyword is spent once it has been split`() {
+        keywordSearches(SongFilter(keyword = "abba")).forEach {
+            assertEquals("", it.keyword)
+        }
+    }
+
+    @Test
+    fun `everything else about the search is carried across unchanged`() {
+        val filter = SongFilter(
+            keyword = "queen",
+            language = "English",
+            goldenNotesOnly = true,
+            order = SongOrder.TITLE,
+            ascending = false,
+            pageSize = 50,
+        )
+        keywordSearches(filter).forEach {
+            assertEquals("English", it.language)
+            assertTrue(it.goldenNotesOnly)
+            assertEquals(SongOrder.TITLE, it.order)
+            assertFalse(it.ascending)
+            assertEquals(50, it.pageSize)
+        }
+    }
+
+    @Test
+    fun `a keyword counts as having searched for something`() {
+        assertFalse(SongFilter(keyword = "abba").isEmpty)
+        assertTrue(SongFilter().isEmpty)
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Folding the two answers into one list
+    // -----------------------------------------------------------------------------------------
+
+    @Test
+    fun `artist matches come first, then title matches`() {
+        val merged = mergePages(
+            page(listOf(song(1), song(2)), total = 2),
+            page(listOf(song(3)), total = 1),
+            page = 0,
+        )
+        assertEquals(listOf(1, 2, 3), merged.songs.map { it.songId })
+    }
+
+    /** A song matching on both halves is one song, and must be counted once. */
+    @Test
+    fun `a song found by both searches appears once and is counted once`() {
+        val merged = mergePages(
+            page(listOf(song(1), song(2)), total = 2),
+            page(listOf(song(2), song(3)), total = 2),
+            page = 0,
+        )
+        assertEquals(listOf(1, 2, 3), merged.songs.map { it.songId })
+        assertEquals(3, merged.totalResults)
+    }
+
+    @Test
+    fun `the count can never be smaller than what is on screen`() {
+        val merged = mergePages(
+            page(listOf(song(1), song(2)), total = 0),
+            page(emptyList(), total = 0),
+            page = 0,
+        )
+        assertEquals(2, merged.totalResults)
+    }
+
+    /** More to see on either side means there is more to see. */
+    @Test
+    fun `there is more to come while either search has more pages`() {
+        val merged = mergePages(
+            page(listOf(song(1)), total = 1, pages = 1),
+            page(listOf(song(2)), total = 90, pages = 3),
+            page = 0,
+        )
+        assertTrue(merged.hasMore)
+        assertEquals(3, merged.totalPages)
+    }
+
+    @Test
+    fun `nothing on either side is nothing at all`() {
+        val merged = mergePages(page(emptyList(), 0, 0), page(emptyList(), 0, 0), page = 0)
+        assertTrue(merged.songs.isEmpty())
+        assertEquals(0, merged.totalResults)
+        assertFalse(merged.hasMore)
+    }
+
+    private fun page(songs: List<UsdbSong>, total: Int, pages: Int = 1) =
+        SearchPage(songs = songs, totalResults = total, totalPages = pages, page = 0)
+
+    private fun song(id: Int) = UsdbSong(
+        songId = id,
+        artist = "Artist $id",
+        title = "Title $id",
+        genre = "",
+        year = "",
+        edition = "",
+        hasGoldenNotes = false,
+        language = "",
+        creator = "",
+        rating = 0,
+        views = 0,
+        coverUrl = null,
+        sampleUrl = null,
+    )
+
 }

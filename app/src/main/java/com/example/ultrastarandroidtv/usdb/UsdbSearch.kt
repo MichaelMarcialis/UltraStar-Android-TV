@@ -25,6 +25,12 @@ enum class SongOrder(val field: String) {
  * thing to browse.
  */
 data class SongFilter(
+    /**
+     * One box that searches artist *and* title — what somebody actually types when they want a
+     * song. USDB has no field that spans both, so this becomes two searches; see [UsdbSearch].
+     * Set alongside [artist] or [title] it simply adds to them.
+     */
+    val keyword: String = "",
     val artist: String = "",
     val title: String = "",
     val edition: String = "",
@@ -39,8 +45,9 @@ data class SongFilter(
 ) {
     /** True when nothing has been narrowed down — useful for deciding what to show on arrival. */
     val isEmpty: Boolean
-        get() = artist.isBlank() && title.isBlank() && edition.isBlank() && language.isBlank() &&
-            genre.isBlank() && year.isBlank() && creator.isBlank() && !goldenNotesOnly
+        get() = keyword.isBlank() && artist.isBlank() && title.isBlank() && edition.isBlank() &&
+            language.isBlank() && genre.isBlank() && year.isBlank() && creator.isBlank() &&
+            !goldenNotesOnly
 }
 
 /**
@@ -101,12 +108,61 @@ data class SearchPage(
  */
 class UsdbSearch(private val session: UsdbSession) {
 
-    /** Fetches one page of results. [page] is zero-based. */
+    /**
+     * Fetches one page of results. [page] is zero-based.
+     *
+     * A [SongFilter.keyword] costs **two** requests rather than one, because USDB's search form
+     * has no field that looks at both artist and title — measured against the live form, which
+     * offers `interpret` and `title` and nothing spanning them. Each field does match on any part
+     * of the value, and the two answers genuinely differ: `interpret=gone` finds one song on the
+     * whole site while `title=gone` finds fifty-nine, so running only one of them would quietly
+     * lose most of what somebody meant. Searching is not throttled, unlike fetching a chart.
+     *
+     * Artist matches come first. That is the order somebody typing a band's name expects, and it
+     * makes paging predictable: page two continues both lists rather than reshuffling them.
+     */
     fun search(filter: SongFilter, page: Int = 0): SearchPage {
         require(page >= 0) { "page must not be negative" }
-        val html = session.postForm("?link=list", searchFields(filter, page))
-        return parseSearchPage(html, page)
+        if (filter.keyword.isBlank()) return onePage(filter, page)
+        val (byArtist, byTitle) = keywordSearches(filter)
+        return mergePages(onePage(byArtist, page), onePage(byTitle, page), page)
     }
+
+    private fun onePage(filter: SongFilter, page: Int): SearchPage =
+        parseSearchPage(session.postForm("?link=list", searchFields(filter, page)), page)
+}
+
+/** The two searches one keyword becomes: the same word as an artist, and as a title. */
+fun keywordSearches(filter: SongFilter): List<SongFilter> {
+    val word = filter.keyword.trim()
+    return listOf(
+        filter.copy(keyword = "", artist = joinTerms(filter.artist, word)),
+        filter.copy(keyword = "", title = joinTerms(filter.title, word)),
+    )
+}
+
+private fun joinTerms(existing: String, word: String): String =
+    if (existing.isBlank()) word else existing.trim()
+
+/**
+ * Folds two result pages into one, keeping the first page's order and dropping repeats.
+ *
+ * A song can match on both halves — "Coldplay" as an artist and inside somebody's title — so the
+ * count has to lose those or it overstates what is there. It is exact for everything actually
+ * loaded and can only overstate the tail, where a repeat has not been seen yet; that needs a song
+ * whose artist *and* title both contain the same word, which is rare enough to be worth a simpler
+ * rule than a second pass over the whole site would be.
+ */
+fun mergePages(first: SearchPage, second: SearchPage, page: Int): SearchPage {
+    val seen = mutableSetOf<Int>()
+    val songs = (first.songs + second.songs).filter { seen.add(it.songId) }
+    val repeats = first.songs.size + second.songs.size - songs.size
+    return SearchPage(
+        songs = songs,
+        totalResults = (first.totalResults + second.totalResults - repeats).coerceAtLeast(songs.size),
+        totalPages = maxOf(first.totalPages, second.totalPages),
+        page = page,
+    )
 }
 
 /** Builds the form USDB's search expects. */

@@ -1,6 +1,9 @@
 package com.example.ultrastarandroidtv.net
 
+import java.io.ByteArrayInputStream
+import java.io.Closeable
 import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -42,6 +45,25 @@ class HttpReply(
     val ok: Boolean get() = status in 200..299
 }
 
+/**
+ * A body being read as it arrives rather than held whole.
+ *
+ * [declaredLength] is the `Content-Length` the server gave, or `-1` when it gave none — worth
+ * having so a caller can refuse something absurd before spending the bandwidth rather than after.
+ * Closing this closes the connection underneath it.
+ */
+class HttpStream(
+    val stream: InputStream,
+    val declaredLength: Long,
+    private val onClose: () -> Unit = {},
+) : Closeable {
+
+    override fun close() {
+        runCatching { stream.close() }
+        onClose()
+    }
+}
+
 /** One request. [body] is already encoded; [contentType] says how. */
 class HttpRequest(
     val url: String,
@@ -64,10 +86,15 @@ class HttpRequest(
  * a network, a device, or a website to be having a good day in order to be tested. Against this
  * interface those decisions are ordinary logic over canned replies.
  *
- * Whole bodies, held in memory. Songs are a few megabytes and [UrlHttp] refuses anything much
- * larger, so streaming to disk would buy nothing but a partly-written file to clean up after —
- * and the download layer wants all-or-nothing anyway, since a half-downloaded song is exactly
- * the broken-folder problem this feature exists to stop making worse.
+ * Bodies come back whole and in memory, which is right for everything that has to be
+ * all-or-nothing: a song is a few megabytes, [UrlHttp] refuses anything much larger, and a
+ * half-written chart is exactly the broken-folder problem this feature exists to stop making.
+ *
+ * [openStream] is the exception, and it exists for one reason: **a music video does not fit that
+ * rule.** This app's heap is capped at 192 MB (`dalvik.vm.heapgrowthlimit` on the Shield), and a
+ * three-minute 1080p video runs to 60-70 MB — a single allocation of that size, next to Compose
+ * and a decoder, is how an out-of-memory kill happens. A video is also a nicety rather than part
+ * of the song, so a failed one costs nothing and a partly-written one is simply deleted.
  */
 interface Http {
 
@@ -95,6 +122,18 @@ interface Http {
         send(HttpRequest(url, headers = headers)).orThrow(url).bytes
 
     /**
+     * A GET whose body is read as it arrives, for something too big to hold. Close the result.
+     *
+     * The default here simply fetches the whole body first, which is what a test fake wants and
+     * is why implementing [send] is still enough to be an [Http]. [UrlHttp] overrides it with a
+     * connection that stays open, which is the version that actually saves the memory.
+     */
+    fun openStream(url: String, headers: Map<String, String> = emptyMap()): HttpStream {
+        val bytes = getBytes(url, headers)
+        return HttpStream(ByteArrayInputStream(bytes), bytes.size.toLong())
+    }
+
+    /**
      * POSTs [fields] as an HTML form. Returns the whole reply rather than the body, because the
      * sites this talks to report a sign-in through a redirect and a cookie rather than through
      * the page they hand back.
@@ -118,7 +157,7 @@ interface Http {
 
 private fun HttpReply.orThrow(url: String): HttpReply {
     if (!ok) {
-        val detail = body.take(400).trim()
+        val detail = summarise(body)
         throw HttpFailure(
             "HTTP $status from ${hostOf(url)}" + if (detail.isEmpty()) "" else ": $detail",
             status,
@@ -126,6 +165,31 @@ private fun HttpReply.orThrow(url: String): HttpReply {
     }
     return this
 }
+
+/**
+ * A server's own explanation, cut down to something that can be shown to a person.
+ *
+ * This message ends up on a television, inside a list row, and the raw version is unusable there:
+ * an error page is mostly markup, and 400 characters of it once stretched a single row of the
+ * download list to the full height of the screen. Tags go, runs of whitespace collapse, and what
+ * is left is capped at a sentence's worth — enough to say what went wrong, never enough to break
+ * a layout.
+ */
+internal fun summarise(body: String): String =
+    body.replace(SCRIPT_OR_STYLE, " ")
+        .replace(HTML_TAG, " ")
+        .replace(WHITESPACE_RUN, " ")
+        .trim()
+        .take(MAX_DETAIL_CHARS)
+        .trim()
+
+private const val MAX_DETAIL_CHARS = 120
+private val SCRIPT_OR_STYLE = Regex(
+    """<(?:script|style)\b[^>]*>.*?</(?:script|style)>""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+)
+private val HTML_TAG = Regex("""<[^>]*>""")
+private val WHITESPACE_RUN = Regex("""\s+""")
 
 /** Percent-encodes [fields] the way a browser posts a form. */
 fun formEncode(fields: Map<String, String>): String =
@@ -170,6 +234,45 @@ class UrlHttp(
             out.write(buffer, 0, read)
         }
         return out.toByteArray()
+    }
+
+    /**
+     * Opens a GET and hands back the live stream, leaving the connection open until it is closed.
+     *
+     * Deliberately does not go through [send], which reads the whole body and disconnects in a
+     * `finally` — the two things this method exists to avoid.
+     */
+    override fun openStream(url: String, headers: Map<String, String>): HttpStream {
+        val connection = try {
+            (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+                headers.forEach { (name, value) -> setRequestProperty(name, value) }
+            }
+        } catch (e: IOException) {
+            throw HttpFailure("Could not reach ${hostOf(url)}: ${e.message}")
+        }
+
+        val status = try {
+            connection.responseCode
+        } catch (e: IOException) {
+            connection.disconnect()
+            throw HttpFailure("Could not reach ${hostOf(url)}: ${e.message}")
+        }
+
+        // A partial reply is the *expected* success here: every media URL is asked for with a
+        // Range header, and the answer to that is 206 rather than 200.
+        if (status !in 200..299) {
+            connection.disconnect()
+            throw HttpFailure("HTTP $status from ${hostOf(url)}", status)
+        }
+
+        val stream = connection.inputStream
+            ?: run {
+                connection.disconnect()
+                throw HttpFailure("${hostOf(url)} sent no body.")
+            }
+        return HttpStream(stream, connection.contentLengthLong) { connection.disconnect() }
     }
 
     override fun send(request: HttpRequest): HttpReply {

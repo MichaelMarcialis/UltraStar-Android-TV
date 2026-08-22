@@ -207,6 +207,89 @@ class DownloadQueueTest {
 
     // -----------------------------------------------------------------------------------------
 
+    // -----------------------------------------------------------------------------------------
+    // The short label, and the bug it exists to prevent
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * The regression this function was extracted for.
+     *
+     * A failure's own sentence runs to a couple of hundred characters, and one network error
+     * carried four hundred characters of an HTML error page. Drawn into the row's trailing slot,
+     * which had no width limit, that text took the whole row and left the song's title none -- so
+     * the title wrapped to one character per line and a single result grew to the full height of
+     * the television. Reported from the sofa, reproduced from a recording of the screen.
+     */
+    @Test
+    fun `a failure's sentence never appears in the short label`() {
+        val message = "\"Kelly Clarkson - Since U Been Gone\" is blocked in your country. " +
+            "Try another version of the song."
+        val short = shortStatusLabel(QueueStatus.Failed(DownloadProblem.AUDIO_UNAVAILABLE, message))
+
+        assertFalse("the sentence belongs on the second line, not here", short.contains("blocked"))
+        assertTrue("must still invite a retry", short.contains("Try again"))
+    }
+
+    /** Whatever a failure says, the short label is short. */
+    @Test
+    fun `the short label stays short however long the reason is`() {
+        val enormous = "x".repeat(400)
+        val short = shortStatusLabel(QueueStatus.Failed(DownloadProblem.NETWORK, enormous))
+        assertTrue("was ${short.length} characters", short.length <= 30)
+    }
+
+    /** The countdown does belong here: it is the one thing worth watching on a slow row. */
+    @Test
+    fun `the short label still counts USDB's wait down`() {
+        val short = shortStatusLabel(QueueStatus.Working(DownloadStage.WaitingForUsdb(18)))
+        assertTrue(short.contains("USDB"))
+        assertTrue(short.contains("18"))
+    }
+
+    @Test
+    fun `every short label is short enough for a fixed slot`() {
+        val labels = listOf(
+            shortStatusLabel(QueueStatus.Queued),
+            shortStatusLabel(QueueStatus.Done("A - B")),
+            shortStatusLabel(QueueStatus.Failed(DownloadProblem.NETWORK, "anything at all")),
+        ) + DownloadStage::class.let {
+            listOf(
+                DownloadStage.FetchingChart,
+                DownloadStage.FindingAudio,
+                DownloadStage.DownloadingAudio,
+                DownloadStage.FetchingArtwork,
+                DownloadStage.Saving,
+                DownloadStage.DownloadingVideo(42),
+                DownloadStage.WaitingForUsdb(24),
+            ).map { stage -> shortStatusLabel(QueueStatus.Working(stage)) }
+        }
+        labels.forEach { assertTrue("too long for the slot: $it", it.length <= 30) }
+    }
+
+    /** The long form is still what the second line shows, so it must still carry the reason. */
+    @Test
+    fun `the long label still carries the whole reason`() {
+        val message = "That video is blocked in your country. Try another version of the song."
+        assertEquals(
+            message,
+            statusLabel(QueueStatus.Failed(DownloadProblem.AUDIO_UNAVAILABLE, message)),
+        )
+    }
+
+    /**
+     * The slowest stage of all -- YouTube serves a video at about the rate it plays, so this runs
+     * for a hundred seconds. A number that moves is the difference between that and a hang.
+     */
+    @Test
+    fun `the video says how far along it is`() {
+        assertTrue(stageLabel(DownloadStage.DownloadingVideo(42)).contains("42"))
+        assertTrue(stageLabel(DownloadStage.DownloadingVideo(42)).contains("Video"))
+        assertFalse(
+            "must not read the same as downloading the music",
+            stageLabel(DownloadStage.DownloadingVideo(0)) == stageLabel(DownloadStage.DownloadingAudio),
+        )
+    }
+
     private fun song(id: Int, title: String) = UsdbSong(
         songId = id,
         artist = "An Artist",

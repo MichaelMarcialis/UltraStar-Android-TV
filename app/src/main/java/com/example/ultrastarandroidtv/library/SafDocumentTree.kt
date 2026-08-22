@@ -3,7 +3,9 @@ package com.example.ultrastarandroidtv.library
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.DocumentsContract
+import java.io.BufferedOutputStream
 import java.io.FileNotFoundException
+import java.io.OutputStream
 
 /** A song text file this big is not a song text file. Guards against reading a stray blob. */
 private const val MAX_TEXT_BYTES = 4 * 1024 * 1024
@@ -94,13 +96,32 @@ class SafDocumentTree(
         name: String,
         mimeType: String,
         bytes: ByteArray,
+    ): String? = writeStream(parentId, name, mimeType) { it.write(bytes) }
+
+    /**
+     * The same thing for something too big to hold in memory — a music video.
+     *
+     * Everything above applies unchanged; the only difference is that the bytes arrive through
+     * [write] as they are fetched instead of being handed over whole. That matters because this
+     * app's heap is capped at 192 MB and a 1080p video runs to 60-70 MB of it.
+     */
+    override fun writeStream(
+        parentId: String,
+        name: String,
+        mimeType: String,
+        write: (OutputStream) -> Unit,
     ): String? {
         val created = runCatching {
             DocumentsContract.createDocument(resolver, uriFor(parentId), mimeType, name)
         }.getOrNull() ?: return null
 
         val written = runCatching {
-            resolver.openOutputStream(created)?.use { it.write(bytes) } != null
+            resolver.openOutputStream(created)?.use { out ->
+                BufferedOutputStream(out).let { buffered ->
+                    write(buffered)
+                    buffered.flush()
+                }
+            } != null
         }.getOrDefault(false)
 
         if (!written) {

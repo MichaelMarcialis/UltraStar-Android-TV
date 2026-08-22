@@ -4,10 +4,12 @@ import com.example.ultrastarandroidtv.library.DocumentTree
 import com.example.ultrastarandroidtv.library.DocumentWriter
 import com.example.ultrastarandroidtv.library.TreeEntry
 import com.example.ultrastarandroidtv.net.Http
+import com.example.ultrastarandroidtv.net.ITunesArtwork
 import com.example.ultrastarandroidtv.net.HttpReply
 import com.example.ultrastarandroidtv.net.HttpRequest
 import com.example.ultrastarandroidtv.net.YouTubeAudio
 import com.example.ultrastarandroidtv.usdb.UsdbCharts
+import com.example.ultrastarandroidtv.usdb.UsdbDetails
 import com.example.ultrastarandroidtv.usdb.UsdbSession
 import com.example.ultrastarandroidtv.usdb.UsdbSong
 import org.junit.Assert.assertEquals
@@ -96,7 +98,9 @@ class SongDownloaderTest {
 
         SongDownloader(
             charts = UsdbCharts(UsdbSession(net, BASE)),
+            details = UsdbDetails(UsdbSession(net, BASE)),
             youTube = YouTubeAudio(net),
+            artwork = ITunesArtwork(net),
             http = net,
             tree = card,
             writer = card,
@@ -307,12 +311,192 @@ class SongDownloaderTest {
 
     private fun downloaderFor(net: FakeNet, card: FakeCard) = SongDownloader(
         charts = UsdbCharts(UsdbSession(net, BASE)),
+        details = UsdbDetails(UsdbSession(net, BASE)),
         youTube = YouTubeAudio(net),
+        artwork = ITunesArtwork(net),
         http = net,
         tree = card,
         writer = card,
         sleepMillis = { },
     )
+
+
+    // -----------------------------------------------------------------------------------------
+    // The pre-check: refusing before USDB's throttle rather than after it
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * The whole point of the pre-check. Twenty-four seconds is a long time to wait to be told no,
+     * and the detail page answers the same question for free.
+     */
+    @Test
+    fun `a song whose video is gone never reaches USDB's wait`() {
+        val net = FakeNet(youTubeReply = UNPLAYABLE)
+        val card = FakeCard()
+        val slept = mutableListOf<Long>()
+
+        val outcome = SongDownloader(
+            charts = UsdbCharts(UsdbSession(net, BASE)),
+            details = UsdbDetails(UsdbSession(net, BASE)),
+            youTube = YouTubeAudio(net),
+            artwork = ITunesArtwork(net),
+            http = net,
+            tree = card,
+            writer = card,
+            sleepMillis = { slept += it },
+        ).download(bowie)
+
+        assertTrue(outcome is DownloadOutcome.Failed)
+        assertEquals(DownloadProblem.AUDIO_UNAVAILABLE, (outcome as DownloadOutcome.Failed).problem)
+        assertTrue("must not have waited on USDB", slept.isEmpty())
+        assertTrue("must leave nothing behind", card.isEmpty)
+    }
+
+    /**
+     * The chart has the last word, and this is the failure that rule guards against: if the page
+     * ever named a different video than the chart, trusting the page would refuse a good song --
+     * or worse, download the wrong music.
+     */
+    @Test
+    fun `a chart naming a different video is looked up again rather than trusted`() {
+        val net = FakeNet(chart = CHART.replace("v=_YC3sTbAPcU", "v=DIFFERENT01x"))
+        val card = FakeCard()
+
+        val outcome = downloaderFor(net, card).download(bowie)
+
+        assertTrue(outcome is DownloadOutcome.Saved)
+        assertEquals(
+            "the page's id first, then the chart's own",
+            listOf("_YC3sTbAPcU", "DIFFERENT01x"),
+            net.playerVideoIds,
+        )
+    }
+
+    @Test
+    fun `a video both agree on is only looked up once`() {
+        val net = FakeNet()
+        downloaderFor(net, FakeCard()).download(bowie)
+        assertEquals(listOf("_YC3sTbAPcU"), net.playerVideoIds)
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The music video
+    // -----------------------------------------------------------------------------------------
+
+    @Test
+    fun `saves the music video beside the song`() {
+        val net = FakeNet(youTubeReply = PLAYABLE_WITH_VIDEO)
+        val card = FakeCard()
+
+        val outcome = downloaderFor(net, card).download(bowie) as DownloadOutcome.Saved
+
+        assertTrue(outcome.videoSaved)
+        assertTrue(
+            "the scanner finds a video by its extension, so the name is what matters",
+            "David Bowie - China Girl.mp4" in card.namesIn("David Bowie - China Girl"),
+        )
+    }
+
+    /** A video is a nicety. Losing one must not cost a song that is otherwise complete. */
+    @Test
+    fun `a video that will not download still leaves a complete song`() {
+        val net = FakeNet(youTubeReply = PLAYABLE_WITH_VIDEO, videoFails = true)
+        val card = FakeCard()
+
+        val outcome = downloaderFor(net, card).download(bowie) as DownloadOutcome.Saved
+
+        assertFalse(outcome.videoSaved)
+        val names = card.namesIn("David Bowie - China Girl")
+        assertTrue("David Bowie - China Girl.m4a" in names)
+        assertTrue("David Bowie - China Girl.txt" in names)
+        assertTrue("no half-written video left behind", names.none { it.endsWith(".mp4") })
+    }
+
+    /**
+     * `#VIDEO:` keeps USDB's meta tags, which record where the media came from. The scanner finds
+     * the file by looking in the folder, so there is nothing to rewrite and a good reason not to.
+     */
+    @Test
+    fun `saving a video does not rewrite the VIDEO header`() {
+        val net = FakeNet(youTubeReply = PLAYABLE_WITH_VIDEO)
+        val card = FakeCard()
+
+        downloaderFor(net, card).download(bowie)
+
+        val text = card.textOf("David Bowie - China Girl", "David Bowie - China Girl.txt")
+        assertTrue(text.contains("#VIDEO:v=_YC3sTbAPcU,co=china-girl.jpg"))
+    }
+
+    @Test
+    fun `the video is fetched with the Range header too`() {
+        val net = FakeNet(youTubeReply = PLAYABLE_WITH_VIDEO)
+        downloaderFor(net, FakeCard()).download(bowie)
+        assertEquals("bytes=0-", net.videoRequestHeaders["Range"])
+    }
+
+
+    /**
+     * A hundred seconds of silence reads as a hang. Measured: YouTube serves a video at about the
+     * rate it plays, so this stage runs for roughly the length of the song whatever quality is
+     * chosen -- by far the longest part of a download once USDB's wait is over.
+     */
+    @Test
+    fun `the video reports how far along it is`() {
+        val net = FakeNet(youTubeReply = PLAYABLE_WITH_VIDEO)
+        val stages = mutableListOf<DownloadStage>()
+
+        downloaderFor(net, FakeCard()).download(bowie) { stages += it }
+
+        val reported = stages.filterIsInstance<DownloadStage.DownloadingVideo>().map { it.percent }
+        assertEquals("must start at nothing", 0, reported.first())
+        assertEquals("must finish at everything", 100, reported.last())
+        assertEquals("must never go backwards", reported.sorted(), reported)
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Where the cover comes from
+    // -----------------------------------------------------------------------------------------
+
+    /** The chart's author picked it, and it is a full-size original rather than a thumbnail. */
+    @Test
+    fun `prefers the cover the chart names over anything else`() {
+        val net = FakeNet(chart = CHART.replace("co=china-girl.jpg", "co=https://covers.test/a.jpg"))
+        val card = FakeCard()
+
+        val outcome = downloaderFor(net, card).download(bowie) as DownloadOutcome.Saved
+
+        assertTrue(outcome.coverSaved)
+        assertEquals(CHART_COVER_BYTE, card.bytesOf("David Bowie - China Girl", "David Bowie - China Girl [CO].jpg")[0])
+        assertEquals("iTunes should not have been asked", 0, net.itunesRequests)
+    }
+
+    /**
+     * The ordinary case: 57 of the 68 charts on this card name a bare fanart.tv filename, which
+     * no plain HTTP client can fetch, so the chart offers nothing usable and iTunes answers.
+     */
+    @Test
+    fun `falls back to iTunes when the chart names no fetchable cover`() {
+        val net = FakeNet()
+        val card = FakeCard()
+
+        val outcome = downloaderFor(net, card).download(bowie) as DownloadOutcome.Saved
+
+        assertTrue(outcome.coverSaved)
+        assertEquals(1, net.itunesRequests)
+        assertEquals(ITUNES_COVER_BYTE, card.bytesOf("David Bowie - China Girl", "David Bowie - China Girl [CO].jpg")[0])
+    }
+
+    /** USDB's own 200x200 is the last resort rather than the first, but it is still a resort. */
+    @Test
+    fun `falls back to USDB's thumbnail when iTunes has nothing`() {
+        val net = FakeNet(itunesFinds = false)
+        val card = FakeCard()
+
+        val outcome = downloaderFor(net, card).download(bowie) as DownloadOutcome.Saved
+
+        assertTrue(outcome.coverSaved)
+        assertEquals(USDB_COVER_BYTE, card.bytesOf("David Bowie - China Girl", "David Bowie - China Girl [CO].jpg")[0])
+    }
 
     /** Serves USDB, YouTube and a CDN off one fake, dispatching on the URL like the real net does. */
     private class FakeNet(
@@ -320,21 +504,52 @@ class SongDownloaderTest {
         private val chart: String = CHART,
         private val youTubeReply: String = PLAYABLE,
         private val coverFails: Boolean = false,
+        private val videoFails: Boolean = false,
+        private val itunesFinds: Boolean = true,
     ) : Http {
         var requests = 0
+        var itunesRequests = 0
         var audioRequestHeaders: Map<String, String> = emptyMap()
+        var videoRequestHeaders: Map<String, String> = emptyMap()
+
+        /** Every video the player API was asked about, in order. */
+        val playerVideoIds = mutableListOf<String>()
 
         override fun send(request: HttpRequest): HttpReply {
             requests++
             val url = request.url
-            if (url.contains("googlevideo")) audioRequestHeaders = request.headers
+            val isVideoStream = url.contains("googlevideo") && url.contains("vid=1")
+            if (url.contains("googlevideo")) {
+                if (isVideoStream) videoRequestHeaders = request.headers
+                else audioRequestHeaders = request.headers
+            }
+            if (url.contains("youtubei/v1/player")) {
+                videoIdIn(request.body?.decodeToString().orEmpty())
+                    ?.let { playerVideoIds += it }
+            }
+            if (url.startsWith(ITUNES)) itunesRequests++
             return when {
                 url.contains("youtubei/v1/player") -> HttpReply(200, youTubeReply, NO_HEADERS)
                 url.startsWith("https://www.youtube.com/") -> HttpReply(200, YT_HOME, NO_HEADERS)
+                isVideoStream ->
+                    if (videoFails) HttpReply(500, "", NO_HEADERS)
+                    else HttpReply(200, ByteArray(4096) { 9 }, NO_HEADERS)
                 url.contains("googlevideo") -> HttpReply(200, ByteArray(2048) { 7 }, NO_HEADERS)
+                url.startsWith(ITUNES) ->
+                    HttpReply(200, if (itunesFinds) ITUNES_HIT else ITUNES_MISS, NO_HEADERS)
+                // coverFails turns off *every* source, not just USDB's: with three of them, a
+                // single one failing no longer means the song ends up without a cover.
+                url.startsWith("https://covers.test") ->
+                    if (coverFails) HttpReply(500, "", NO_HEADERS)
+                    else HttpReply(200, ByteArray(96) { CHART_COVER_BYTE }, NO_HEADERS)
+                url.startsWith("https://is1-ssl.mzstatic.com") ->
+                    if (coverFails) HttpReply(500, "", NO_HEADERS)
+                    else HttpReply(200, ByteArray(128) { ITUNES_COVER_BYTE }, NO_HEADERS)
                 url.contains("data/cover") ->
                     if (coverFails) HttpReply(500, "", NO_HEADERS)
-                    else HttpReply(200, ByteArray(64) { 1 }, NO_HEADERS)
+                    else HttpReply(200, ByteArray(64) { USDB_COVER_BYTE }, NO_HEADERS)
+                url.contains("link=detail") ->
+                    HttpReply(200, DETAIL_PAGE, NO_HEADERS)
                 url.contains("link=gettxt") ->
                     if (request.method == "POST") HttpReply(200, chartPage(chart), NO_HEADERS)
                     else HttpReply(200, waitPage(waitSeconds), NO_HEADERS)
@@ -396,6 +611,12 @@ class SongDownloaderTest {
             return children[id]!!.map { it.name }
         }
 
+        fun bytesOf(folder: String, file: String): ByteArray {
+            val folderId = children["root"]!!.first { it.name == folder }.id
+            val fileId = children[folderId]!!.first { it.name == file }.id
+            return contents[fileId]!!
+        }
+
         fun textOf(folder: String, file: String): String {
             val folderId = children["root"]!!.first { it.name == folder }.id
             val fileId = children[folderId]!!.first { it.name == file }.id
@@ -410,6 +631,9 @@ class SongDownloaderTest {
         const val CHART = "#ARTIST:David Bowie\n#TITLE:China Girl\n" +
             "#MP3:David Bowie - China Girl.mp3\n#BPM:269.14\n#GAP:11030\n" +
             "#VIDEO:v=_YC3sTbAPcU,co=china-girl.jpg\n: 0 3 31 Oh, \n- 40\nE"
+
+        const val DETAIL_PAGE =
+            """<html><a href="https://www.youtube.com/embed/_YC3sTbAPcU">Youtube-Link</a></html>"""
 
         const val YT_HOME = """<script>ytcfg.set({"visitorData":"TOKEN"});</script>"""
 
@@ -432,6 +656,42 @@ class SongDownloaderTest {
             <form id="timeform" method="post"><input type="hidden" name="wd" value="1"></form>
             <script>time = $seconds;
             function wait() { }</script></body></html>
+        """.trimIndent()
+
+        const val ITUNES = "https://itunes.apple.com/search"
+
+        /** Which byte each cover source fills its file with, so a test can say where one came from. */
+        const val CHART_COVER_BYTE: Byte = 11
+        const val ITUNES_COVER_BYTE: Byte = 22
+        const val USDB_COVER_BYTE: Byte = 33
+
+        /** Pulls the id out of a player request body without needing a regex full of escapes. */
+        fun videoIdIn(body: String): String? = body
+            .substringAfter("\"videoId\"", "")
+            .substringAfter('"', "")
+            .substringBefore('"', "")
+            .takeIf { it.isNotBlank() }
+
+        val ITUNES_HIT = """
+            {"resultCount":1,"results":[{"artistName":"David Bowie","trackName":"China Girl",
+             "artworkUrl100":"https://is1-ssl.mzstatic.com/image/thumb/a/b/100x100bb.jpg"}]}
+        """.trimIndent()
+
+        val ITUNES_MISS = """{"resultCount":0,"results":[]}"""
+
+        val PLAYABLE_WITH_VIDEO = """
+            {"playabilityStatus":{"status":"OK"},
+             "videoDetails":{"title":"China Girl","lengthSeconds":"310"},
+             "streamingData":{"adaptiveFormats":[
+               {"itag":140,"url":"https://rr1.googlevideo.com/videoplayback?a=1",
+                "mimeType":"audio/mp4; codecs=\"mp4a.40.2\"","bitrate":130669,
+                "contentLength":"2048"},
+               {"itag":399,"url":"https://rr1.googlevideo.com/videoplayback?vid=1&av1=1",
+                "mimeType":"video/mp4; codecs=\"av01.0.08M.08\"","height":1080,
+                "contentLength":"27000"},
+               {"itag":136,"url":"https://rr1.googlevideo.com/videoplayback?vid=1",
+                "mimeType":"video/mp4; codecs=\"avc1.4d401f\"","height":720,
+                "contentLength":"4096"}]}}
         """.trimIndent()
 
         fun chartPage(chart: String) = "<html><textarea name=\"txt\">$chart</textarea></html>"

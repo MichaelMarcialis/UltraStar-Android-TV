@@ -202,13 +202,36 @@ data class AudioFormat(
         get() = mimeType.substringAfter("codecs=", "").trim('"', ' ').substringBefore('"')
 }
 
-/** A video whose audio can be fetched. */
-data class ResolvedAudio(
+/** One downloadable picture stream, carrying no sound of its own — see [pickVideo]. */
+data class VideoFormat(
+    val itag: Int,
+    val url: String,
+    /** As YouTube reports it, e.g. `video/mp4; codecs="avc1.4d401f"`. */
+    val mimeType: String,
+    /** Picture height in pixels, or `0` when YouTube did not say. */
+    val height: Int,
+    /** Bytes, or `-1` when YouTube did not say. */
+    val contentLength: Long,
+) {
+    /** File extension to save this as: `mp4`, `webm`. */
+    val container: String get() = containerFor(mimeType)
+
+    /** The same header for the same measured reason — see [AudioFormat.fetchHeaders]. */
+    val fetchHeaders: Map<String, String> get() = mapOf("Range" to "bytes=0-")
+
+    /** Codec string YouTube declared, e.g. `avc1.4d401f` or `vp9`. Empty when it did not say. */
+    val codec: String
+        get() = mimeType.substringAfter("codecs=", "").trim('"', ' ').substringBefore('"')
+}
+
+/** A video whose media can be fetched. [video] is null when there is no picture worth taking. */
+data class ResolvedMedia(
     val videoId: String,
     val title: String,
     /** From YouTube, so it is the *video's* length — which is not always the song's. */
     val durationSeconds: Int,
     val format: AudioFormat,
+    val video: VideoFormat? = null,
 )
 
 /** Why a video could not be fetched, in terms a screen can act on without reading YouTube's prose. */
@@ -225,6 +248,13 @@ enum class RefusalKind {
     /** A live stream, which has no fixed file to download. */
     LIVE,
 
+    /**
+     * Alive and playable, just not here. Worth its own kind because the advice differs: this is
+     * not a broken link and trying again will not help, but another upload of the same song very
+     * often works. Seen on this library with Kelly Clarkson's "Since U Been Gone".
+     */
+    REGION_BLOCKED,
+
     /** Playable, but every audio stream came back needing signature work this client cannot do. */
     NO_AUDIO_STREAM,
 
@@ -234,7 +264,7 @@ enum class RefusalKind {
 /** The answer to "can this video's audio be fetched". */
 sealed interface AudioLookup {
 
-    data class Found(val audio: ResolvedAudio) : AudioLookup
+    data class Found(val media: ResolvedMedia) : AudioLookup
 
     /**
      * [title] and [durationSeconds] are populated whenever YouTube volunteered them, which it
@@ -302,7 +332,49 @@ fun pickAudio(formats: List<AudioFormat>): AudioFormat? {
     return (if (aac.isNotEmpty()) aac else usable).maxByOrNull { it.bitrate }
 }
 
-/** Builds the InnerTube player request. */
+/**
+ * Chooses which picture stream to take, or none.
+ *
+ * **Never AV1.** The Shield's Tegra X1+ decodes h264 and VP9 in hardware and has no AV1 decoder at
+ * all, so an AV1 stream would be unpacked on the CPU during a song that is already scoring two
+ * microphones. YouTube offers AV1 at every rung and it is usually the smallest file, which makes
+ * "take the smallest" exactly the wrong rule here.
+ *
+ * h264 wins over VP9 when both are offered, even though VP9 is roughly half the size at the same
+ * height (measured: 1080p h264 58 MB against VP9 33 MB). Every video already on the card is h264,
+ * so it is the path this device is known to play; VP9 is the fallback rather than the default, and
+ * is where to look first if space ever becomes the problem.
+ *
+ * **A smaller video does not download any faster**, which is worth knowing before anyone tries to
+ * economise here. YouTube serves a stream at roughly the rate it plays, so the throttle scales
+ * with the bitrate and every format takes about the same wall-clock time. Measured on one song
+ * (2026-08-21): 1080p h264 58 MB at 0.58 MB/s, 720p h264 22 MB at 0.22 MB/s, 1080p VP9 33 MB at
+ * 0.33 MB/s, 480p h264 14 MB at 0.14 MB/s — **100 seconds each, within a second of each other**.
+ * Dropping quality therefore costs picture and saves nothing but card space, of which there is a
+ * terabyte. So take the best, and cap it only where the decoder stops being certain.
+ *
+ * [MAX_VIDEO_HEIGHT] is that cap: this is a background behind a HUD rather than the thing being
+ * watched, and 4K would be a decode budget spent where nobody is looking.
+ *
+ * These are picture-only streams, which is exactly right: [com.example.ultrastarandroidtv.game
+ * .SongVideo] plays the video muted, since the mp3 is the single source of both sound and timing.
+ */
+fun pickVideo(formats: List<VideoFormat>, maxHeight: Int = MAX_VIDEO_HEIGHT): VideoFormat? {
+    val usable = formats.filter {
+        it.mimeType.startsWith("video/") &&
+            it.url.isNotBlank() &&
+            it.height in 1..maxHeight &&
+            !it.codec.startsWith("av01")
+    }
+    if (usable.isEmpty()) return null
+    val h264 = usable.filter { it.codec.startsWith("avc1") }
+    return (if (h264.isNotEmpty()) h264 else usable).maxByOrNull { it.height }
+}
+
+/** Tallest picture worth downloading. See [pickVideo] for why there is a ceiling at all. */
+const val MAX_VIDEO_HEIGHT = 1080
+
+/** Builds the InnerTube request. */
 fun playerRequestBody(
     client: InnertubeClient,
     videoId: String,
@@ -365,7 +437,7 @@ fun readPlayerResponse(videoId: String, json: String): AudioLookup {
         durationSeconds = duration,
     )
 
-    if (status != "OK") return refuse(refusalKindFor(status))
+    if (status != "OK") return refuse(refusalKindFor(status, reason))
 
     val formats = adaptiveFormatsFrom(root)
     val best = pickAudio(formats)
@@ -375,23 +447,42 @@ fun readPlayerResponse(videoId: String, json: String): AudioLookup {
         )
 
     return AudioLookup.Found(
-        ResolvedAudio(
+        ResolvedMedia(
             videoId = videoId,
             title = title ?: videoId,
             durationSeconds = duration ?: 0,
             format = best,
+            // A missing picture is not a refusal: the song still plays, and the visualiser draws
+            // in its place. Only the sound is worth failing over.
+            video = pickVideo(adaptiveVideosFrom(root)),
         ),
     )
 }
 
-/** Maps YouTube's `playabilityStatus.status` onto something a screen can branch on. */
-fun refusalKindFor(status: String): RefusalKind = when (status.uppercase()) {
-    "UNPLAYABLE", "ERROR" -> RefusalKind.UNAVAILABLE
-    "LOGIN_REQUIRED" -> RefusalKind.NEEDS_SIGN_IN
-    "AGE_CHECK_REQUIRED", "CONTENT_CHECK_REQUIRED" -> RefusalKind.AGE_RESTRICTED
-    "LIVE_STREAM_OFFLINE" -> RefusalKind.LIVE
-    else -> RefusalKind.UNKNOWN
+/**
+ * Maps YouTube's `playabilityStatus.status` onto something a screen can branch on.
+ *
+ * [reason] only ever narrows the answer. YouTube reports a geographic block as plain `UNPLAYABLE`
+ * — the same status as a deleted video — and the two want opposite advice, so the sentence is the
+ * only thing that separates them. It is localised prose and will drift, which is why it can add a
+ * distinction but never take one away: an unrecognised sentence falls back to the status.
+ */
+fun refusalKindFor(status: String, reason: String = ""): RefusalKind {
+    val fromStatus = when (status.uppercase()) {
+        "UNPLAYABLE", "ERROR" -> RefusalKind.UNAVAILABLE
+        "LOGIN_REQUIRED" -> RefusalKind.NEEDS_SIGN_IN
+        "AGE_CHECK_REQUIRED", "CONTENT_CHECK_REQUIRED" -> RefusalKind.AGE_RESTRICTED
+        "LIVE_STREAM_OFFLINE" -> RefusalKind.LIVE
+        else -> RefusalKind.UNKNOWN
+    }
+    return if (fromStatus == RefusalKind.UNAVAILABLE && GEOGRAPHIC.containsMatchIn(reason)) {
+        RefusalKind.REGION_BLOCKED
+    } else {
+        fromStatus
+    }
 }
+
+private val GEOGRAPHIC = Regex("""\b(country|countries|region|territory)\b""", RegexOption.IGNORE_CASE)
 
 /**
  * Reads `streamingData.adaptiveFormats`.
@@ -399,11 +490,14 @@ fun refusalKindFor(status: String): RefusalKind = when (status.uppercase()) {
  * Only the adaptive list: the legacy `formats` list holds muxed audio+video, so taking one would
  * download a whole video to keep its soundtrack.
  */
-private fun adaptiveFormatsFrom(root: JSONObject): List<AudioFormat> {
+private fun adaptiveEntries(root: JSONObject): List<JSONObject> {
     val streaming = root.optJSONObject("streamingData") ?: return emptyList()
     val adaptive: JSONArray = streaming.optJSONArray("adaptiveFormats") ?: return emptyList()
-    return (0 until adaptive.length()).mapNotNull { index ->
-        val entry = adaptive.optJSONObject(index) ?: return@mapNotNull null
+    return (0 until adaptive.length()).mapNotNull { adaptive.optJSONObject(it) }
+}
+
+private fun adaptiveFormatsFrom(root: JSONObject): List<AudioFormat> =
+    adaptiveEntries(root).map { entry ->
         AudioFormat(
             itag = entry.optInt("itag", -1),
             url = entry.optString("url").orEmpty(),
@@ -413,7 +507,17 @@ private fun adaptiveFormatsFrom(root: JSONObject): List<AudioFormat> {
             contentLength = entry.optString("contentLength").toLongOrNull() ?: -1L,
         )
     }
-}
+
+private fun adaptiveVideosFrom(root: JSONObject): List<VideoFormat> =
+    adaptiveEntries(root).map { entry ->
+        VideoFormat(
+            itag = entry.optInt("itag", -1),
+            url = entry.optString("url").orEmpty(),
+            mimeType = entry.optString("mimeType").orEmpty(),
+            height = entry.optInt("height", 0),
+            contentLength = entry.optString("contentLength").toLongOrNull() ?: -1L,
+        )
+    }
 
 /**
  * Undoes JSON string escaping on a value lifted out of a page by regex.

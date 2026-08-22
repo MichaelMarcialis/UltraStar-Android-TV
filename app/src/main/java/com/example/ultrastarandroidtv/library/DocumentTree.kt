@@ -1,5 +1,8 @@
 package com.example.ultrastarandroidtv.library
 
+import java.io.ByteArrayOutputStream
+import java.io.OutputStream
+
 /** One child of a folder. [id] is opaque and only means something to the tree that produced it. */
 data class TreeEntry(
     val id: String,
@@ -44,6 +47,29 @@ interface DocumentWriter {
 
     /** Writes a whole file into [parentId]. Returns its document id, or null on any failure. */
     fun writeFile(parentId: String, name: String, mimeType: String, bytes: ByteArray): String?
+
+    /**
+     * Writes a file whose contents arrive as they are read, for something too big to hold whole.
+     *
+     * [write] is handed the open stream and should fill it; throwing from it fails the write, and
+     * the half-made document is removed rather than left looking like a file.
+     *
+     * The default buffers everything and calls [writeFile], which is what an in-memory fake wants
+     * and keeps [writeFile] the only method an implementation must provide. The SAF version
+     * overrides it and is the one that actually saves the memory.
+     */
+    fun writeStream(
+        parentId: String,
+        name: String,
+        mimeType: String,
+        write: (OutputStream) -> Unit,
+    ): String? {
+        val buffer = ByteArrayOutputStream()
+        return runCatching {
+            write(buffer)
+            writeFile(parentId, name, mimeType, buffer.toByteArray())
+        }.getOrNull()
+    }
 
     /** Removes a document, or a folder and everything in it. False rather than throwing. */
     fun delete(documentId: String): Boolean

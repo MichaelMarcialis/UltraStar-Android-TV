@@ -109,14 +109,36 @@ fun stageLabel(stage: DownloadStage): String = when (stage) {
     DownloadStage.DownloadingAudio -> "Downloading the music…"
     DownloadStage.FetchingArtwork -> "Getting the artwork…"
     DownloadStage.Saving -> "Saving to the card…"
+    is DownloadStage.DownloadingVideo -> "Video ${stage.percent}%"
 }
 
-/** One queued song's state, in the same voice. */
+/** One queued song's state, in the same voice. Failures speak for themselves, at length. */
 fun statusLabel(status: QueueStatus): String = when (status) {
     QueueStatus.Queued -> "Waiting its turn"
     is QueueStatus.Working -> stageLabel(status.stage)
     is QueueStatus.Done -> "Added to your songs"
     is QueueStatus.Failed -> status.message
+}
+
+/**
+ * The same state in a few words, for a fixed slot at the end of a row.
+ *
+ * **A failure's own sentence must not go here**, which is the whole point of this existing next to
+ * [statusLabel]. Those sentences run to a couple of hundred characters -- and a network error once
+ * carried four hundred characters of an HTML error page -- while the slot they were being drawn
+ * in had no width limit. The long text took the row's whole width, the song's title was left with
+ * none, and the title then wrapped to *one character per line*: a single result grew to the full
+ * height of the television, shaped like a dome, with the reason unreadable inside it. Reported
+ * from the sofa, and reproduced from a recording of the screen.
+ *
+ * So the row says "Try again" here and puts the reason where a sentence fits: on the second line,
+ * in place of the song's details, where it has the width of the row and a two-line cap.
+ */
+fun shortStatusLabel(status: QueueStatus): String = when (status) {
+    QueueStatus.Queued -> "Waiting its turn"
+    is QueueStatus.Working -> stageLabel(status.stage)
+    is QueueStatus.Done -> "Added"
+    is QueueStatus.Failed -> "Try again"
 }
 
 /**
