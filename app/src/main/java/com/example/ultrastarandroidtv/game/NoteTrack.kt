@@ -13,6 +13,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
@@ -387,8 +388,20 @@ private fun DrawScope.drawArrows(
         // One solid shape and nothing behind it. There was a soft halo here to help the arrow
         // stand out against the notes; two arrows of different weights read as two things, and
         // the sparks now do the standing-out.
+        //
+        // Tilted about the tip, so the point stays where the pitch is and only the tail swings.
+        // Sing under the note and it angles up, over it and it angles down — the same
+        // information as the vertical gap, in a form that can be read without first finding
+        // which bar it belongs to. Level means right.
         buildArrowHead(path, tipX, y, arrowWidth, halfHeight)
-        drawPath(path, trace.color.copy(alpha = alpha))
+        val tilt = tiltDegrees(midi, active?.let { geometry.placements[it].midi })
+        if (tilt == 0f) {
+            drawPath(path, trace.color.copy(alpha = alpha))
+        } else {
+            rotate(degrees = tilt, pivot = Offset(tipX, y)) {
+                drawPath(path, trace.color.copy(alpha = alpha))
+            }
+        }
     }
 }
 
@@ -462,6 +475,25 @@ private fun buildArrowHead(path: Path, tipX: Float, y: Float, width: Float, half
     path.lineTo(tipX - width * 0.62f, y)
     path.lineTo(tipX - width, y + halfHeight)
     path.close()
+}
+
+/**
+ * How far to tilt the arrow, in degrees, given where the singer is and where they should be.
+ *
+ * Positive turns the arrow clockwise on screen, which points it **down** — the answer to singing
+ * sharp. Flat gets a negative angle and points up. Proportional to the error rather than a
+ * three-way flat/right/sharp indicator, because the useful question during a note is not whether
+ * you are off but whether you are getting closer.
+ *
+ * Level during a rest: with no note under the arrow there is nothing to be off *from*, and a
+ * tilt held over from the last note would be advice about a note that has gone.
+ */
+internal fun tiltDegrees(sungMidi: Float, targetMidi: Int?): Float {
+    if (sungMidi.isNaN() || targetMidi == null) return 0f
+    val error = sungMidi - targetMidi.toFloat()
+    val full = GameTheme.arrowFullTiltSemitones
+    val max = GameTheme.arrowMaxTiltDegrees
+    return ((error / full) * max).coerceIn(-max, max)
 }
 
 /** The visible note closest in time to [nowSeconds], for keeping the arrow's octave sensible. */

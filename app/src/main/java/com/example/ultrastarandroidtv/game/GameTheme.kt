@@ -102,6 +102,29 @@ object GameTheme {
     /** Clearance between the arrow's tip and the sing line, so the two never merge. */
     val arrowGap = 7.dp
 
+    /**
+     * How far the arrow tilts when the singer is a long way off the note, in degrees.
+     *
+     * The arrow pivots about its **tip**, so the tail swings and the point stays put: it keeps
+     * saying "your pitch is here" while starting to say "and it needs to go that way". Flat means
+     * right, which is the same reading as the vertical gap and costs nothing to learn.
+     *
+     * Borrowed from Karaoke Revolution, and worth having because the vertical gap alone is
+     * ambiguous at a glance — an arrow below a bar and an arrow below the bar *above* look
+     * identical until you find the note it belongs to. A tilt is legible without reference to
+     * anything else on screen.
+     */
+    val arrowMaxTiltDegrees = 34f
+
+    /**
+     * How far off the note the tilt reaches [arrowMaxTiltDegrees].
+     *
+     * Three semitones rather than the scoring tolerance, so the tilt is still growing across the
+     * range a singer actually corrects over. Tied to the tolerance it would be at full deflection
+     * the moment a note was missed, which says "wrong" and not "wrong by this much".
+     */
+    val arrowFullTiltSemitones = 3f
+
     // ---- Sparks -----------------------------------------------------------------------------
 
     /**
