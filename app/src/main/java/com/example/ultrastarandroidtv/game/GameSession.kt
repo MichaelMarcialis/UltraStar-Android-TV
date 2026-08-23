@@ -19,21 +19,20 @@ import java.nio.ByteBuffer
 private const val TAIL_SECONDS = 2.0
 
 /**
- * Readings behind the arrow's median filter. **One means no filter at all**, which is what it is
- * set to: the arrow draws exactly what the detector reported, with nothing in between.
+ * Readings behind the arrow's median filter.
  *
- * The history is worth keeping because the direction of travel is the point. Five was chosen as
- * a touch over a tenth of a second of history, which is a fine amount of history and an
- * expensive amount of *delay* — a median of N only follows a step once (N+1)/2 of its samples
- * are new, so five of them cost 64 ms before the arrow began to move. Three halved that. One
- * removes it, and removes the last thing standing between the reading and the drawing.
+ * Three, and it is the only smoothing the arrow has left. A median of N follows a step once
+ * (N+1)/2 of its samples are new, so five cost 64 ms before the arrow began to move at all and
+ * three costs 21 ms — one reading.
  *
- * What that costs is real and known: this filter existed to swallow the lone wild reading, and
- * without it a single bad one throws the arrow across the track for a frame. It is set to one so
- * the game can be judged with nothing artificial in the way *first*, and any smoothing put back
- * afterwards can be argued for against what was actually seen rather than against a worry.
+ * **A median rather than the easing, because the fault it fixes is spikes.** Both were taken off
+ * to see the detector unadorned, and the arrow jittered. Easing is the cheaper of the two in lag
+ * (17 ms against 33 ms measured end to end) and it cannot fix this: it only slows a wild reading
+ * down, still travelling most of the way towards it before turning back. A median discards the
+ * outlier outright — and being a median rather than a mean it does not drag a held note off its
+ * pitch at all, which an average would.
  */
-private const val MEDIAN_WINDOW = 1
+private const val MEDIAN_WINDOW = 3
 
 /**
  * Delay the median filter itself adds, in seconds.
@@ -135,14 +134,11 @@ class GameSession(
          * while the pitch arrow has to answer "where is this voice this instant" — including
          * between notes and during rests, where there is no beat to attach it to.
          *
-         * **Unfiltered, deliberately, for now.** This went through a median of the last few
-         * readings — raw YIN on a real voice is honest rather than tidy, and a lone wild reading
-         * drawn literally makes the detector look unsure when it is not. It was removed along
-         * with the arrow's easing and fade so the game can be judged with nothing interposed
-         * between what was heard and what is drawn. [MEDIAN_WINDOW] puts it back.
-         *
-         * Scoring never sees this: [PlayerScorer] is fed the raw reading, so the filter cannot
-         * quietly change what a performance is worth.
+         * **Median-filtered, and only for display.** Raw YIN on a real voice is honest rather
+         * than tidy, and a lone wild reading drawn literally makes the detector look unsure when
+         * it is not. The scorer is still fed the raw reading, so the filter cannot quietly change
+         * what a performance is worth — the arrow and the score are allowed to disagree by one
+         * reading, and never by more.
          *
          * Written on the capture thread, read by the draw pass. A single 32-bit field, so a
          * frame can be one reading behind but never sees a value that was never produced.

@@ -42,11 +42,15 @@ import com.example.ultrastarandroidtv.settings.SettingsRange
 import kotlin.math.roundToInt
 
 /**
- * The three numbers worth exposing, and nothing else.
+ * The few numbers worth exposing, and nothing else.
  *
  * Every one of them is here because it can only be decided in the room: how far behind this TV
  * shows a frame, how much song a person wants to read ahead, and how close a mouth has to be to
- * a microphone in this house with these voices. None can be derived, so all three are dials.
+ * a microphone in this house with these voices. None can be derived, so all of them are dials.
+ *
+ * Microphone sensitivity is asked twice because singing alone and singing with somebody else are
+ * different acoustic problems, and a single value tuned for one is wrong for the other. Asking
+ * twice is what stops it having to be *changed* twice, every time the number of singers changes.
  */
 @Composable
 fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
@@ -96,19 +100,34 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
             onChange = settings::updateWindow,
         )
 
+        // Two of them, because the two modes are different acoustic problems. On your own the
+        // only competition is the television; with two people each microphone also hears the
+        // other singer. Splitting them is what stops anyone having to remember to change it.
         SettingRow(
-            label = "Microphone sensitivity",
-            explanation = "How loud a voice must be to count as singing. Lower it if one " +
-                "singer's microphone is scoring the other singer or the television; raise it if " +
-                "someone quiet is scoring nothing. It sets how loudly a phrase must *begin* — " +
-                "once a singer has started, they keep counting as they soften.",
+            label = "Microphone sensitivity — one singer",
+            explanation = "How loud a voice must be to count when you are singing alone. It can " +
+                "sit high: nobody else is singing, so the only thing to keep out is the song " +
+                "itself coming back off the television.",
             // Sensitivity, not the underlying gate: a sensitive microphone picks up more, and a
             // slider labelled this way has to move that way.
-            value = settings.micSensitivity.toDouble(),
+            value = settings.soloMicSensitivity.toDouble(),
             range = 0.0..1.0,
             step = 0.05,
             format = { "%d%%".format((it * 100).roundToInt()) },
-            onChange = { settings.updateMicSensitivity(it.toFloat()) },
+            onChange = { settings.updateSoloMicSensitivity(it.toFloat()) },
+        )
+
+        SettingRow(
+            label = "Microphone sensitivity — two singers",
+            explanation = "The same, with two people in the room. Lower than the setting above, " +
+                "because each microphone now hears the other singer too, and how loud a voice " +
+                "is is the only clue to which mouth is nearest. Raise it if someone quiet is " +
+                "scoring nothing; lower it if one singer is scoring the other.",
+            value = settings.duetMicSensitivity.toDouble(),
+            range = 0.0..1.0,
+            step = 0.05,
+            format = { "%d%%".format((it * 100).roundToInt()) },
+            onChange = { settings.updateDuetMicSensitivity(it.toFloat()) },
         )
 
         Spacer(Modifier.height(24.dp))
@@ -197,7 +216,18 @@ private fun SettingRow(
             }
         }
 
-        Spacer(Modifier.height(8.dp))
-        Text(explanation, style = MaterialTheme.typography.bodySmall, color = GameTheme.lyricIdle)
+        // Only the dial being adjusted explains itself. Four settings with a paragraph each ran
+        // off the bottom of the television and took the footer with them — which is exactly the
+        // fault that made UltraStar Play unusable, and not one to reproduce. An explanation for a
+        // control nobody is touching is noise, and showing one at a time keeps the whole screen
+        // at a constant height however many settings there eventually are.
+        if (focused) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                explanation,
+                style = MaterialTheme.typography.bodySmall,
+                color = GameTheme.lyricIdle,
+            )
+        }
     }
 }

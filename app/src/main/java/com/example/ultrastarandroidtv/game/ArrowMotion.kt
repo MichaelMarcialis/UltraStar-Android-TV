@@ -18,27 +18,29 @@ private const val MAX_STEP_SECONDS = 0.05
  *
  * Readings arrive about 47 times a second and are honest rather than tidy: a steady note still
  * wanders, and the detector occasionally throws a single wild reading. Drawn literally that
- * becomes a twitching arrow that looks like the detector is unsure when it is not. (The worst
- * of those outliers are already gone by here — `GameSession.Singer` medians them first — and
- * this eases what is left.)
+ * becomes a twitching arrow that looks like the detector is unsure when it is not. The worst of
+ * those outliers are already gone by here — `GameSession.Singer` medians them first.
  *
- * **Both smoothings are off by default, and that is a deliberate position rather than an
- * oversight.** The scorer reads the raw pitch while the arrow read a smoothed one, so the arrow
- * arrived on a note *after* the game had already paid for it — measured at 83 ms, which is one
- * and a half beats of a song like Space Oddity. A note lighting up while the arrow is still
- * visibly climbing towards it makes the game look like it is guessing, and it makes any
- * judgement about whether scoring is fair impossible, because you cannot tell what the app
- * actually heard from what the animation did to it. Nothing is now interposed between the
- * reading and the drawing.
+ * **The easing is off by default, and that is a deliberate position rather than an oversight.**
+ * The scorer reads the raw pitch while the arrow read a smoothed one, so the arrow arrived on a
+ * note *after* the game had already paid for it — measured at 83 ms, which is one and a half
+ * beats of a song like Space Oddity. A note lighting up while the arrow is still visibly
+ * climbing towards it makes the game look like it is guessing, and it makes any judgement about
+ * whether scoring is fair impossible, because you cannot tell what the app actually heard from
+ * what the animation did to it. What smoothing the arrow does have is a median of three readings
+ * in `GameSession.Singer`, which removes a spike outright instead of gliding through it.
  *
  * The easing remains available and is still tested, because the argument for it was real: raw
  * YIN on a real voice is honest rather than tidy, and drawn literally a held note wanders. If it
  * comes back it should come back as a *small* number — the history here is 150 ms, then 83 ms,
  * then none, each because the previous one was felt from the sofa.
  *
- * [alpha] switches outright for the same reason. Fading it was gentler to watch — a voice stops
- * and starts constantly, between syllables and between breaths — but a half-faded arrow is
- * another thing on screen that is not quite what was heard.
+ * **[alpha] still fades, because presence is not placement.** A voice stops and starts
+ * constantly — between syllables, between breaths — and an arrow that blinks in and out on every
+ * one of those is exhausting to watch. Measured with the easing off and on, fading costs the
+ * arrow's *position* nothing: it decides only whether the arrow is drawn, never where. It was
+ * taken off with everything else to get a clean baseline and put back once that showed it was
+ * not part of the problem.
  *
  * Coming back from a *short* gap eases from where the arrow was, since that is usually the same
  * phrase continuing; coming back from a long one snaps, since the singer has almost certainly
@@ -53,7 +55,7 @@ class ArrowMotion(
     /** A silence longer than this is treated as a fresh start rather than a continuation. */
     private val snapAfterSilenceSeconds: Double = 0.35,
     /** Roughly how long the arrow takes to fade in or out. Zero switches the arrow outright. */
-    private val fadeSeconds: Double = 0.0,
+    private val fadeSeconds: Double = 0.12,
 ) {
     private var shown = Float.NaN
     private var lastNowSeconds = Double.NaN
@@ -115,8 +117,8 @@ class ArrowMotion(
     /**
      * Frame-rate independent easing: the same journey takes the same time whatever the fps.
      *
-     * A time constant of zero means arrive immediately, which is how both smoothings are turned
-     * off — and is what the defaults now do.
+     * A time constant of zero means arrive immediately, which is how the position easing is
+     * turned off — and is what [secondsToSettle] now defaults to.
      */
     private fun approach(step: Double, timeConstant: Double): Float =
         if (timeConstant <= 0.0) 1f else (1.0 - exp(-step / timeConstant)).toFloat()

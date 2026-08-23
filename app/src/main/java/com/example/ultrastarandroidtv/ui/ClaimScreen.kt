@@ -108,7 +108,10 @@ fun ClaimScreen(
 
     val levels = remember(mics.size) { FloatArray(mics.size) }
     val shown = remember(mics.size) { FloatArray(mics.size) }
-    val claim = remember(settings.micThreshold) { MicClaim(minLevel = settings.micThreshold) }
+    // The gate that this game will actually be scored with, so the claim is decided on the
+    // same terms as the singing: a duet's higher bar is part of what identifies the right mic.
+    val micGate = settings.micThresholdFor(playerCount)
+    val claim = remember(micGate) { MicClaim(minLevel = micGate) }
 
     // Written by the frame loop and read only inside the meter, so a sixty-times-a-second repaint
     // invalidates one card rather than the name list and the focus somebody is moving through it.
@@ -282,7 +285,7 @@ fun ClaimScreen(
                 },
                 name = naming?.let { claimed[it].name }?.takeIf { it.isNotBlank() },
                 colour = colour,
-                threshold = settings.micThreshold,
+                threshold = micGate,
                 tick = tick,
                 // Before a claim the meter shows whichever free mic is loudest, because which one
                 // the singer picked up is exactly the open question. After it, only their own, so

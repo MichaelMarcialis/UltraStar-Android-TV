@@ -98,7 +98,7 @@ fun GameplayScreen(
             },
             micSession = micSession,
             lineup = lineup,
-            micThreshold = settings.micThreshold,
+            micThreshold = settings.micThresholdFor(lineup.size),
         )
     }
 
@@ -161,7 +161,7 @@ fun GameplayScreen(
             "settings in effect: lead=%.0fms window=%.2fs micGate=%.3f -> arrowLag=%.0fms".format(
                 session.calibration.displayLeadSeconds * 1000,
                 settings.windowSeconds,
-                settings.micThreshold,
+                settings.micThresholdFor(lineup.size),
                 session.arrowLagSeconds * 1000,
             ),
         )
@@ -209,7 +209,7 @@ fun GameplayScreen(
                 session.singers.forEach { singer ->
                     Log.i(
                         TAG,
-                        "${singer.name}: ${missBreakdown(singer.scorer.noteScores, session.scoring, settings.micThreshold)
+                        "${singer.name}: ${missBreakdown(singer.scorer.noteScores, session.scoring, settings.micThresholdFor(lineup.size))
                             .summary()}",
                     )
                 }
