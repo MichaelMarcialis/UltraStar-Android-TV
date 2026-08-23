@@ -19,20 +19,21 @@ import java.nio.ByteBuffer
 private const val TAIL_SECONDS = 2.0
 
 /**
- * Readings behind the arrow's median filter.
+ * Readings behind the arrow's median filter. **One means no filter**, which is what it is set to:
+ * the smoothing the arrow has is `ArrowMotion`'s easing, and this is not in the way of it.
  *
- * Three, and it is the only smoothing the arrow has left. A median of N follows a step once
- * (N+1)/2 of its samples are new, so five cost 64 ms before the arrow began to move at all and
- * three costs 21 ms — one reading.
+ * Both were tried alone. The median discards a wild reading outright where the easing only slows
+ * it down, which is the better argument on paper — but on the television the median still read as
+ * glitchy, because what it does to a *step* is hold the old value for a whole reading and then
+ * jump. Easing at a sixtieth of a second never jumps.
  *
- * **A median rather than the easing, because the fault it fixes is spikes.** Both were taken off
- * to see the detector unadorned, and the arrow jittered. Easing is the cheaper of the two in lag
- * (17 ms against 33 ms measured end to end) and it cannot fix this: it only slows a wild reading
- * down, still travelling most of the way towards it before turning back. A median discards the
- * outlier outright — and being a median rather than a mean it does not drag a held note off its
- * pitch at all, which an average would.
+ * **Zero here also lines the arrow up exactly with the scoring front**, which is not a
+ * coincidence but arithmetic: the arrow is drawn at `drawTime - arrowLagSeconds`, which works out
+ * as `playerPosition - totalLatency - MEDIAN_LAG_SECONDS`, and the scorer's cursor sits at
+ * `playerPosition - totalLatency`. Any median at all puts the fill ahead of the arrow that is
+ * supposed to be earning it.
  */
-private const val MEDIAN_WINDOW = 3
+private const val MEDIAN_WINDOW = 1
 
 /**
  * Delay the median filter itself adds, in seconds.

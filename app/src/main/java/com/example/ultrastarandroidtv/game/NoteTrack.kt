@@ -165,7 +165,10 @@ private fun DrawScope.drawTrack(
 
     if (!visible.isEmpty()) {
         drawNotes(geometry, visible, active, nowSeconds, width, noteArea, noteHeight, low, high)
-        drawHits(geometry, traces, visible, nowSeconds, width, noteArea, noteHeight, low, high)
+        drawHits(
+            geometry, traces, visible, nowSeconds, arrowNowSeconds,
+            width, noteArea, noteHeight, low, high,
+        )
         drawLyrics(geometry, syllables, lyrics, visible, active, nowSeconds, width, lyricLane)
     }
 
@@ -252,6 +255,7 @@ private fun DrawScope.drawHits(
     traces: List<Trace>,
     visible: IntRange,
     nowSeconds: Double,
+    arrowNowSeconds: Double,
     width: Float,
     noteArea: Float,
     noteHeight: Float,
@@ -270,19 +274,29 @@ private fun DrawScope.drawHits(
             if (beats == 0) continue
 
             val beatSeconds = (placed.endSeconds - placed.startSeconds) / beats
+
+            // A beat is judged at its midpoint but drawn as a whole bar, so the moment it is
+            // credited its trailing half is still ahead of the arrow that earned it — the note
+            // appears to light up before the singer gets there. Hold each beat until it has
+            // passed the arrow entirely. Costs half a beat of delay and buys the guarantee that
+            // nothing is ever seen to be paid for before the arrow reaches it.
+            val passed = ((arrowNowSeconds - placed.startSeconds) / beatSeconds)
+                .toInt()
+                .coerceIn(0, beats)
+            if (passed == 0) continue
             val top = geometry.yFor(placed.midi.toFloat(), noteArea, low, high) -
                 noteHeight / 2f + lane * laneHeight
 
             // Drawn as runs of consecutive hits rather than one rectangle per beat, so a note
             // sung all the way through is a single clean bar with no seams in it.
             var beat = 0
-            while (beat < beats) {
+            while (beat < passed) {
                 if (!score.wasHit(beat)) {
                     beat++
                     continue
                 }
                 var end = beat
-                while (end + 1 < beats && score.wasHit(end + 1)) end++
+                while (end + 1 < passed && score.wasHit(end + 1)) end++
 
                 val from = geometry.xFor(placed.startSeconds + beat * beatSeconds, nowSeconds, width)
                 val to = geometry.xFor(

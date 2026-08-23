@@ -21,14 +21,14 @@ private const val MAX_STEP_SECONDS = 0.05
  * becomes a twitching arrow that looks like the detector is unsure when it is not. The worst of
  * those outliers are already gone by here — `GameSession.Singer` medians them first.
  *
- * **The easing is off by default, and that is a deliberate position rather than an oversight.**
- * The scorer reads the raw pitch while the arrow read a smoothed one, so the arrow arrived on a
- * note *after* the game had already paid for it — measured at 83 ms, which is one and a half
- * beats of a song like Space Oddity. A note lighting up while the arrow is still visibly
- * climbing towards it makes the game look like it is guessing, and it makes any judgement about
- * whether scoring is fair impossible, because you cannot tell what the app actually heard from
- * what the animation did to it. What smoothing the arrow does have is a median of three readings
- * in `GameSession.Singer`, which removes a spike outright instead of gliding through it.
+ * **The easing is a sixtieth of a second, and it is the only smoothing left.** The history is
+ * the argument: median-of-5 plus a twentieth of a second put the arrow 150 ms behind the voice,
+ * and since the scorer reads the *raw* pitch, notes lit up well before the arrow reached them —
+ * which makes the game look like it is guessing, and makes any judgement about whether the
+ * scoring is fair impossible, because what the app heard cannot be told from what the animation
+ * did to it. Stripped to nothing the arrow was honest and jittery; a median of three fixed the
+ * spikes and still read as glitchy, because what a median does to a step is hold the old value
+ * for a whole reading and then jump. This never jumps, and costs 17 ms.
  *
  * The easing remains available and is still tested, because the argument for it was real: raw
  * YIN on a real voice is honest rather than tidy, and drawn literally a held note wanders. If it
@@ -51,7 +51,7 @@ private const val MAX_STEP_SECONDS = 0.05
  */
 class ArrowMotion(
     /** Zero draws the reading as it arrives. */
-    private val secondsToSettle: Double = 0.0,
+    private val secondsToSettle: Double = 0.015,
     /** A silence longer than this is treated as a fresh start rather than a continuation. */
     private val snapAfterSilenceSeconds: Double = 0.35,
     /** Roughly how long the arrow takes to fade in or out. Zero switches the arrow outright. */
