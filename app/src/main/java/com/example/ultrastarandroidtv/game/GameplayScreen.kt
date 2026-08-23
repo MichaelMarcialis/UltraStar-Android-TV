@@ -310,6 +310,7 @@ fun GameplayScreen(
                     toleranceSemitones = session.scoring.toleranceSemitones,
                     now = { nowSeconds.doubleValue },
                     arrowNow = { nowSeconds.doubleValue - session.arrowLagSeconds },
+                    solo = session.playerCount == 1,
                     modifier = Modifier.fillMaxWidth().height(trackHeight).padding(top = 10.dp),
                 )
             }
@@ -360,7 +361,7 @@ private fun TopBar(
                 ScoreReadout(
                     name = singer.name,
                     score = scores.getOrNull(singer.index)?.total ?: 0,
-                    color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                    color = GameTheme.playerColor(singer.index, session.playerCount == 1),
                     alignment = Alignment.Start,
                 )
             }
@@ -386,7 +387,7 @@ private fun TopBar(
                 ScoreReadout(
                     name = singer.name,
                     score = scores.getOrNull(singer.index)?.total ?: 0,
-                    color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                    color = GameTheme.playerColor(singer.index, session.playerCount == 1),
                     alignment = Alignment.End,
                 )
             }
@@ -456,13 +457,16 @@ private fun TrackPanel(
     toleranceSemitones: Float,
     now: () -> Double,
     arrowNow: () -> Double,
+    solo: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val traces = remember(track) {
+    val traces = remember(track, solo) {
         track.singers.map { singer ->
             Trace(
                 noteScores = singer.scorer.noteScores,
-                color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                // A lone singer is green, which is where the arrow's accuracy scale starts, so
+                // the arrow reads as one colour drifting off green rather than two ideas at once.
+                color = GameTheme.playerColor(singer.index, solo),
                 currentMidi = { singer.currentMidi },
             )
         }
@@ -475,6 +479,7 @@ private fun TrackPanel(
             now = now,
             arrowNow = arrowNow,
             toleranceSemitones = toleranceSemitones,
+            accuracyColored = solo,
             modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
         )
 
@@ -485,7 +490,7 @@ private fun TrackPanel(
                 Text(
                     singer.name,
                     style = MaterialTheme.typography.labelMedium,
-                    color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                    color = GameTheme.playerColor(singer.index, solo),
                     modifier = Modifier.align(Alignment.TopStart).padding(10.dp),
                 )
             }
@@ -548,7 +553,7 @@ private fun Results(
             Text(
                 "${singer.name}   %,d".format(score.total),
                 style = MaterialTheme.typography.headlineSmall,
-                color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                color = GameTheme.playerColor(singer.index, session.playerCount == 1),
             )
             Text(
                 "%d of %d beats  ·  %.0f%%".format(

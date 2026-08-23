@@ -75,6 +75,7 @@ fun NoteTrack(
     now: () -> Double,
     arrowNow: () -> Double,
     toleranceSemitones: Float,
+    accuracyColored: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val measurer = rememberTextMeasurer()
@@ -111,7 +112,7 @@ fun NoteTrack(
         Canvas(modifier = Modifier.fillMaxSize().clipToBounds()) {
             drawTrack(
                 geometry, traces, motions, syllables, lyrics, arrowPath,
-                toleranceSemitones, now(), arrowNow(),
+                toleranceSemitones, accuracyColored, now(), arrowNow(),
             )
         }
     }
@@ -125,6 +126,7 @@ private fun DrawScope.drawTrack(
     lyrics: LyricLayout,
     arrowPath: Path,
     toleranceSemitones: Float,
+    accuracyColored: Boolean,
     nowSeconds: Double,
     arrowNowSeconds: Double,
 ) {
@@ -187,7 +189,7 @@ private fun DrawScope.drawTrack(
     drawArrows(
         geometry, traces, motions, visible, geometry.activeIndex(arrowNowSeconds),
         nowSeconds, arrowNowSeconds,
-        width, noteArea, low, high, toleranceSemitones, arrowPath,
+        width, noteArea, low, high, toleranceSemitones, accuracyColored, arrowPath,
     )
 }
 
@@ -347,6 +349,7 @@ private fun DrawScope.drawArrows(
     low: Float,
     high: Float,
     toleranceSemitones: Float,
+    accuracyColored: Boolean,
     path: Path,
 ) {
     // Fold against whatever the singer is nearest to being asked for: the note under the arrow
@@ -394,13 +397,19 @@ private fun DrawScope.drawArrows(
         // information as the vertical gap, in a form that can be read without first finding
         // which bar it belongs to. Level means right.
         buildArrowHead(path, tipX, y, arrowWidth, halfHeight)
-        val tilt = tiltDegrees(midi, active?.let { geometry.placements[it].midi })
-        if (tilt == 0f) {
-            drawPath(path, trace.color.copy(alpha = alpha))
-        } else {
-            rotate(degrees = tilt, pivot = Offset(tipX, y)) {
-                drawPath(path, trace.color.copy(alpha = alpha))
-            }
+
+        val targetMidi = active?.let { geometry.placements[it].midi }
+        val tilt = motion.tiltTowards(tiltDegrees(midi, targetMidi))
+
+        // On your own the arrow is free to say how well it is going, because nobody else's arrow
+        // needs telling apart from it. With two singers the colour is the only thing that does.
+        val color = when {
+            !accuracyColored || targetMidi == null || midi.isNaN() -> trace.color
+            else -> GameTheme.arrowAccuracyColor(midi - targetMidi, toleranceSemitones)
+        }
+
+        rotate(degrees = tilt, pivot = Offset(tipX, y)) {
+            drawPath(path, color.copy(alpha = alpha))
         }
     }
 }

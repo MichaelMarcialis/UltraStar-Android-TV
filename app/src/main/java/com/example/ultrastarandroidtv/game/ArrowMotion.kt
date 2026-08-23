@@ -60,6 +60,8 @@ class ArrowMotion(
     private var shown = Float.NaN
     private var lastNowSeconds = Double.NaN
     private var lastVoicedSeconds = Double.NaN
+    private var lastStep = 0.0
+    private var shownTilt = 0f
 
     /** How solid to draw the arrow, 0..1. Zero means do not draw it at all. */
     var alpha: Float = 0f
@@ -83,6 +85,7 @@ class ArrowMotion(
             else -> (nowSeconds - lastNowSeconds).coerceIn(0.0, MAX_STEP_SECONDS)
         }
         lastNowSeconds = nowSeconds
+        lastStep = step
 
         val voiced = !targetMidi.isNaN()
         alpha += ((if (voiced) 1f else 0f) - alpha) * approach(step, fadeSeconds)
@@ -107,10 +110,26 @@ class ArrowMotion(
         return shown
     }
 
+    /**
+     * Eases the arrow's lean toward [targetDegrees], using the step measured by the last
+     * [update] — so call it once per frame, after that.
+     *
+     * Smoothed separately even though it is derived from an already-smoothed pitch, because the
+     * tilt *amplifies*: at 26° across three semitones, a third of a semitone of ordinary wobble
+     * on a held note swings the arrow about three degrees. That is invisible as a position and
+     * very visible as a rotation.
+     */
+    fun tiltTowards(targetDegrees: Float): Float {
+        shownTilt += (targetDegrees - shownTilt) * approach(lastStep, secondsToSettle)
+        return shownTilt
+    }
+
     fun reset() {
         shown = Float.NaN
         lastNowSeconds = Double.NaN
         lastVoicedSeconds = Double.NaN
+        lastStep = 0.0
+        shownTilt = 0f
         alpha = 0f
     }
 
