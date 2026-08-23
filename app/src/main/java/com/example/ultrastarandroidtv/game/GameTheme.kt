@@ -121,6 +121,9 @@ object GameTheme {
      */
     val judgedBand = Color(0x12FFFFFF)
 
+    /** Corner radius of the track's own panel. */
+    val trackCorner = 12.dp
+
     // ---- Pitch arrow ------------------------------------------------------------------------
 
     /**

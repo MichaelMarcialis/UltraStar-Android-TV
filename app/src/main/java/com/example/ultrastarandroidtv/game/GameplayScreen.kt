@@ -480,7 +480,10 @@ private fun TrackPanel(
             arrowNow = arrowNow,
             toleranceSemitones = toleranceSemitones,
             accuracyColored = solo,
-            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
+            // Deliberately unclipped here: NoteTrack clips its own panel and leaves the arrows
+            // free, so an arrow above or below the song's range stays visible instead of
+            // vanishing exactly when it has most to say.
+            modifier = Modifier.fillMaxSize(),
         )
 
         // Only a duet needs this: the scores at the top say who is who on a shared track, but

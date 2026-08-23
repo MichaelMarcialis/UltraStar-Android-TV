@@ -6,7 +6,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -109,35 +110,58 @@ fun NoteTrack(
             )
         }
 
-        Canvas(modifier = Modifier.fillMaxSize().clipToBounds()) {
+        // Two layers, and the split is the whole point. The track is a rounded panel and its
+        // notes and lyrics must not spill out of it as they scroll in and out, so it is clipped.
+        // The arrows must not be clipped: a singer outside the song's own range is exactly when
+        // the arrow has something urgent to say, and a clipped arrow says it by disappearing.
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(GameTheme.trackCorner)),
+        ) {
             drawTrack(
-                geometry, traces, motions, syllables, lyrics, arrowPath,
+                geometry, traces, syllables, lyrics,
+                toleranceSemitones, now(), arrowNow(),
+            )
+        }
+
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            drawArrowLayer(
+                geometry, traces, motions, arrowPath,
                 toleranceSemitones, accuracyColored, now(), arrowNow(),
             )
         }
     }
 }
 
-private fun DrawScope.drawTrack(
-    geometry: TrackGeometry,
-    traces: List<Trace>,
-    motions: List<ArrowMotion>,
-    syllables: List<TextLayoutResult>,
-    lyrics: LyricLayout,
-    arrowPath: Path,
-    toleranceSemitones: Float,
-    accuracyColored: Boolean,
-    nowSeconds: Double,
-    arrowNowSeconds: Double,
-) {
-    val width = size.width
+/**
+ * Height available to the notes: everything the lyrics underneath them do not need.
+ *
+ * Shared by both layers rather than passed between them, because the arrows are drawn on their
+ * own unclipped canvas and must land on exactly the same pitch scale as the notes they point at.
+ */
+private fun DrawScope.noteAreaHeight(): Float {
     // Capped as a share of the track as well as in absolute terms: a duet splits the screen in
     // two, and a lane sized for a full-height track would eat a third of each half.
     val lyricLane = minOf(
         GameTheme.lyricLaneHeight.toPx(),
         size.height * GameTheme.lyricLaneMaxShare,
     )
-    val noteArea = (size.height - lyricLane).coerceAtLeast(1f)
+    return (size.height - lyricLane).coerceAtLeast(1f)
+}
+
+private fun DrawScope.drawTrack(
+    geometry: TrackGeometry,
+    traces: List<Trace>,
+    syllables: List<TextLayoutResult>,
+    lyrics: LyricLayout,
+    toleranceSemitones: Float,
+    nowSeconds: Double,
+    arrowNowSeconds: Double,
+) {
+    val width = size.width
+    val lyricLane = size.height - noteAreaHeight()
+    val noteArea = noteAreaHeight()
 
     val low = geometry.lowMidi.toFloat()
     val high = geometry.highMidi.toFloat()
@@ -183,13 +207,36 @@ private fun DrawScope.drawTrack(
         strokeWidth = GameTheme.playheadWidth.toPx(),
     )
 
-    // Last, so the arrows and their sparks sit above everything they are pointing at. The arrow
-    // is judged against the note under *it* rather than the one under the line, because the note
-    // under the arrow is the one the reading it is showing was actually scored against.
+}
+
+/**
+ * The arrows and their sparks, on their own canvas so that nothing clips them.
+ *
+ * Drawn after the track and over it. The pitch scale is recomputed here rather than handed
+ * across, which is safe because it is a pure function of the canvas size and the song's range —
+ * both layers fill the same box, so both arrive at the same numbers.
+ *
+ * The arrow is judged against the note under *it* rather than the one under the sing line: the
+ * note under the arrow is the one the reading it is showing was actually scored against.
+ */
+private fun DrawScope.drawArrowLayer(
+    geometry: TrackGeometry,
+    traces: List<Trace>,
+    motions: List<ArrowMotion>,
+    arrowPath: Path,
+    toleranceSemitones: Float,
+    accuracyColored: Boolean,
+    nowSeconds: Double,
+    arrowNowSeconds: Double,
+) {
+    val noteArea = noteAreaHeight()
     drawArrows(
-        geometry, traces, motions, visible, geometry.activeIndex(arrowNowSeconds),
+        geometry, traces, motions,
+        geometry.visibleIndices(nowSeconds), geometry.activeIndex(arrowNowSeconds),
         nowSeconds, arrowNowSeconds,
-        width, noteArea, low, high, toleranceSemitones, accuracyColored, arrowPath,
+        size.width, noteArea,
+        geometry.lowMidi.toFloat(), geometry.highMidi.toFloat(),
+        toleranceSemitones, accuracyColored, arrowPath,
     )
 }
 
