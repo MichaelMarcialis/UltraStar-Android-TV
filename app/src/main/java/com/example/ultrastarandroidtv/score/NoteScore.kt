@@ -19,6 +19,8 @@ class NoteScore internal constructor(
 ) {
     private val sung = FloatArray(note.durationBeats) { Float.NaN }
     private val hits = BooleanArray(note.durationBeats)
+    private val levels = FloatArray(note.durationBeats) { Float.NaN }
+    private val probabilities = FloatArray(note.durationBeats) { Float.NaN }
 
     /** Points this note is worth if every beat is hit. Zero for freestyle notes. */
     val maxPoints: Int = note.type.beatWeight * note.durationBeats
@@ -50,9 +52,30 @@ class NoteScore internal constructor(
      */
     fun wasHit(beatOffset: Int): Boolean = hits[beatOffset]
 
-    internal fun record(beatOffset: Int, midi: Float, hit: Boolean, points: Int) {
+    /**
+     * How loud the beat was, or NaN if no reading covered it at all.
+     *
+     * Only ever read afterwards, to answer *why* a beat was missed: too quiet for the gate, or
+     * loud enough but with no pitch the detector would commit to. Those two want opposite fixes
+     * and are indistinguishable once the beat is recorded as simply unsung.
+     */
+    fun levelAt(beatOffset: Int): Float = levels[beatOffset]
+
+    /** How near the detector came to committing to a pitch here, 0..1. */
+    fun probabilityAt(beatOffset: Int): Float = probabilities[beatOffset]
+
+    internal fun record(
+        beatOffset: Int,
+        midi: Float,
+        hit: Boolean,
+        points: Int,
+        level: Float,
+        probability: Float,
+    ) {
         sung[beatOffset] = midi
         hits[beatOffset] = hit
+        levels[beatOffset] = level
+        probabilities[beatOffset] = probability
         beatsScored++
         if (hit) {
             beatsHit++
@@ -60,9 +83,31 @@ class NoteScore internal constructor(
         }
     }
 
+    /**
+     * Credits a beat that was already scored as missed, because the singer landed this note
+     * within the onset grace — see [com.example.ultrastarandroidtv.score.ScoringConfig].
+     *
+     * [beatsScored] deliberately does not move: the beat was counted the first time round, and
+     * counting it twice would make the song's maximum depend on how it was sung. What was
+     * *sung* during the beat is left exactly as it was recorded, because that is the honest
+     * record of the voice — a back-filled beat is one the singer is not being charged for, not
+     * one they are pretended to have sung.
+     *
+     * @return whether this actually changed anything.
+     */
+    internal fun creditOnset(beatOffset: Int, points: Int): Boolean {
+        if (hits[beatOffset]) return false
+        hits[beatOffset] = true
+        beatsHit++
+        earnedPoints += points
+        return true
+    }
+
     internal fun reset() {
         sung.fill(Float.NaN)
         hits.fill(false)
+        levels.fill(Float.NaN)
+        probabilities.fill(Float.NaN)
         beatsScored = 0
         beatsHit = 0
         earnedPoints = 0

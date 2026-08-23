@@ -11,7 +11,8 @@ import com.example.ultrastarandroidtv.playback.SyncCalibration
 private const val PREFS = "settings"
 private const val KEY_LEAD = "display_lead_seconds"
 private const val KEY_WINDOW = "window_seconds"
-private const val KEY_MIC_THRESHOLD = "mic_threshold"
+private const val KEY_MIC_SOLO = "mic_threshold_solo"
+private const val KEY_MIC_DUET = "mic_threshold_duet"
 
 /** Bounds for the sliders, and the reason each one has the range it does. */
 object SettingsRange {
@@ -60,11 +61,35 @@ class GameSettings(context: Context) {
     )
         private set
 
-    /** How loud a voice must be before it counts. The lever against mics hearing each other. */
-    var micThreshold by mutableFloatStateOf(
-        prefs.getFloat(KEY_MIC_THRESHOLD, DEFAULT_MIC_THRESHOLD),
+    /**
+     * How loud a voice must be before it counts, **on your own**.
+     *
+     * Nothing else in the room is trying to sing, so this can sit low: the only competition is
+     * the song itself coming back off the television.
+     */
+    var soloMicThreshold by mutableFloatStateOf(
+        prefs.getFloat(KEY_MIC_SOLO, DEFAULT_SOLO_MIC_THRESHOLD),
     )
         private set
+
+    /**
+     * The same gate **with two people singing**, which is a different acoustic problem and so a
+     * different number.
+     *
+     * Each microphone now hears the other singer as well as the television, and loudness is the
+     * only proxy these microphones give for which mouth is nearest. Kept as its own setting
+     * because one value cannot serve both: tuned for a solo it lets a duet score the wrong
+     * person, and tuned for a duet it makes a solo singer work harder than they need to.
+     * Remembering it per mode is also what stops anyone having to remember at all.
+     */
+    var duetMicThreshold by mutableFloatStateOf(
+        prefs.getFloat(KEY_MIC_DUET, DEFAULT_DUET_MIC_THRESHOLD),
+    )
+        private set
+
+    /** The gate that applies to a game with [playerCount] singers in it. */
+    fun micThresholdFor(playerCount: Int): Float =
+        if (playerCount >= 2) duetMicThreshold else soloMicThreshold
 
     fun updateLead(seconds: Double) {
         displayLeadSeconds = seconds.coerceIn(SettingsRange.lead)
@@ -76,9 +101,14 @@ class GameSettings(context: Context) {
         prefs.edit().putFloat(KEY_WINDOW, windowSeconds.toFloat()).apply()
     }
 
-    fun updateMicThreshold(level: Float) {
-        micThreshold = level.coerceIn(SettingsRange.micThreshold)
-        prefs.edit().putFloat(KEY_MIC_THRESHOLD, micThreshold).apply()
+    fun updateSoloMicThreshold(level: Float) {
+        soloMicThreshold = level.coerceIn(SettingsRange.micThreshold)
+        prefs.edit().putFloat(KEY_MIC_SOLO, soloMicThreshold).apply()
+    }
+
+    fun updateDuetMicThreshold(level: Float) {
+        duetMicThreshold = level.coerceIn(SettingsRange.micThreshold)
+        prefs.edit().putFloat(KEY_MIC_DUET, duetMicThreshold).apply()
     }
 
     /**
@@ -92,9 +122,14 @@ class GameSettings(context: Context) {
      * and the sensitivity is what a person reasons about, so the two are kept apart and
      * converted in one place rather than left to whoever draws the screen.
      */
-    val micSensitivity: Float get() = sensitivityOf(micThreshold)
+    val soloMicSensitivity: Float get() = sensitivityOf(soloMicThreshold)
+    val duetMicSensitivity: Float get() = sensitivityOf(duetMicThreshold)
 
-    fun updateMicSensitivity(sensitivity: Float) = updateMicThreshold(thresholdOf(sensitivity))
+    fun updateSoloMicSensitivity(sensitivity: Float) =
+        updateSoloMicThreshold(thresholdOf(sensitivity))
+
+    fun updateDuetMicSensitivity(sensitivity: Float) =
+        updateDuetMicThreshold(thresholdOf(sensitivity))
 
     companion object {
         /**
@@ -107,7 +142,25 @@ class GameSettings(context: Context) {
          * mic mostly hear its own singer. It is a blunt instrument — sing quietly enough and it
          * ignores you too — which is why it is a slider rather than a constant.
          */
-        const val DEFAULT_MIC_THRESHOLD = 0.06f
+        /**
+         * Wide open, because on your own there is no second singer to keep out.
+         *
+         * Measured rather than chosen: with the gate at its old 0.06 a real performance lost 17 %
+         * of its beats to "too quiet", and at this setting that fell to 3 %. What is left over
+         * for a solo singer to worry about is the television, which the singer is generally much
+         * louder than.
+         */
+        val DEFAULT_SOLO_MIC_THRESHOLD = thresholdOf(1f)
+
+        /**
+         * Where the gate sat when it had to serve both modes at once, near enough.
+         *
+         * With two people in a room each microphone hears the other one, and the bar has to be
+         * high enough that a voice across the room does not clear it. This is the number that was
+         * arrived at by testing two singers together, kept for the case it was actually tuned
+         * for.
+         */
+        val DEFAULT_DUET_MIC_THRESHOLD = thresholdOf(0.75f)
 
         /** Gate → sensitivity: a high gate hears little, so it comes out near zero. */
         fun sensitivityOf(threshold: Float): Float {

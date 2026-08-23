@@ -19,11 +19,31 @@ import java.nio.ByteBuffer
 private const val TAIL_SECONDS = 2.0
 
 /**
- * Readings behind the arrow's median filter. Five at ~47 readings a second is a touch over a
- * tenth of a second — long enough to swallow a lone bad reading, short enough that a deliberate
- * slide between notes still looks like one.
+ * Readings behind the arrow's median filter. **One means no filter**, which is what it is set to:
+ * the smoothing the arrow has is `ArrowMotion`'s easing, and this is not in the way of it.
+ *
+ * Both were tried alone. The median discards a wild reading outright where the easing only slows
+ * it down, which is the better argument on paper — but on the television the median still read as
+ * glitchy, because what it does to a *step* is hold the old value for a whole reading and then
+ * jump. Easing at a sixtieth of a second never jumps.
+ *
+ * **Zero here also lines the arrow up exactly with the scoring front**, which is not a
+ * coincidence but arithmetic: the arrow is drawn at `drawTime - arrowLagSeconds`, which works out
+ * as `playerPosition - totalLatency - MEDIAN_LAG_SECONDS`, and the scorer's cursor sits at
+ * `playerPosition - totalLatency`. Any median at all puts the fill ahead of the arrow that is
+ * supposed to be earning it.
  */
-private const val MEDIAN_WINDOW = 5
+private const val MEDIAN_WINDOW = 1
+
+/**
+ * Delay the median filter itself adds, in seconds.
+ *
+ * A median of N follows a step once (N+1)/2 of its samples are new, so it lags the raw reading
+ * by (N-1)/2 of them. One reading is one of `PitchTracker`'s hops — 1024 samples at 48 kHz —
+ * and this must be kept in step with that default, since it is used to decide where on the
+ * track the arrow is drawn.
+ */
+private const val MEDIAN_LAG_SECONDS = ((MEDIAN_WINDOW - 1) / 2) * (1024.0 / 48_000.0)
 
 /**
  * How close to the end of the audio counts as the end.
@@ -116,13 +136,10 @@ class GameSession(
          * between notes and during rests, where there is no beat to attach it to.
          *
          * **Median-filtered, and only for display.** Raw YIN on a real voice is honest rather
-         * than tidy — a held note still wanders, and the detector occasionally throws a single
-         * wild reading. Drawn literally that becomes a twitching arrow that looks like the
-         * detector is unsure when it is not. A median of the last few readings removes exactly
-         * the lone outliers without blunting a real slide, at the cost of about a frame of lag.
-         *
-         * Scoring never sees this: [PlayerScorer] is fed the raw reading, so the filter cannot
-         * quietly change what a performance is worth.
+         * than tidy, and a lone wild reading drawn literally makes the detector look unsure when
+         * it is not. The scorer is still fed the raw reading, so the filter cannot quietly change
+         * what a performance is worth — the arrow and the score are allowed to disagree by one
+         * reading, and never by more.
          *
          * Written on the capture thread, read by the draw pass. A single 32-bit field, so a
          * frame can be one reading behind but never sees a value that was never produced.
@@ -250,6 +267,36 @@ class GameSession(
      * back through capture and analysis.
      */
     fun drawTimeSeconds(): Double = calibration.heardSongTimeFor(playerPositionSeconds())
+
+    /**
+     * How far behind the frame being drawn the pitch an arrow shows actually sits.
+     *
+     * The arrow answers "where is this voice **now**", and the honest answer is that it cannot:
+     * the value it has was measured from audio that is already old. Drawn at the sing line it
+     * therefore points at a note that has moved on, which during a fast passage is simply the
+     * wrong note — and the arrow sitting inside the bar is supposed to mean the same thing as the
+     * beat being paid for. So the arrow is drawn where the audio it describes actually is, a
+     * little to the left of the line.
+     *
+     * Every term is derived rather than dialled in, which is what stops it drifting out of truth
+     * when something upstream changes:
+     *
+     *  - [SyncCalibration.captureLatencySeconds] — the reading describes the centre of its
+     *    analysis window, not its end.
+     *  - [SyncCalibration.displayLeadSeconds] — the notes are already drawn this far *ahead* to
+     *    beat the TV's own processing, so the arrow is that much further behind them.
+     *  - [MEDIAN_LAG_SECONDS] — the display filter's own delay.
+     *
+     * Every term here is *fixed*, which is what makes a constant offset the right shape for it.
+     * `ArrowMotion`'s easing never belonged in it for exactly that reason — how long that takes
+     * depends on how far the pitch just moved, and compensating a variable delay with a constant
+     * would be wrong in both directions instead of one. That is moot now that the easing is off
+     * by default, and it is the reason to keep it out if it ever comes back.
+     */
+    val arrowLagSeconds: Double
+        get() = calibration.captureLatencySeconds +
+            calibration.displayLeadSeconds +
+            MEDIAN_LAG_SECONDS
 
     /**
      * Whether the song is over.

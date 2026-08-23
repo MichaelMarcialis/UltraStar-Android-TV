@@ -53,7 +53,7 @@ class MicSensitivityTest {
     fun `the shipped default sits high enough to be usable and low enough to be picky`() {
         // 0.06 against a 0.01 noise floor: well above "hears the whole room", well short of
         // "only hears shouting".
-        val default = sensitivityOf(GameSettings.DEFAULT_MIC_THRESHOLD)
+        val default = sensitivityOf(GameSettings.DEFAULT_DUET_MIC_THRESHOLD)
 
         assertTrue("was $default", default in 0.5f..0.9f)
     }

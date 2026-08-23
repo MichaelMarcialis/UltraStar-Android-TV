@@ -145,7 +145,12 @@ class PlayerScorer(
                 isPitchHit(sungMidi, note.pitch, config.toleranceSemitones))
 
         val weight = note.type.beatWeight
-        score.record(beatOffset, sungMidi, hit, weight)
+        val firstHitOfNote = hit && score.beatsHit == 0
+        score.record(
+            beatOffset, sungMidi, hit, weight,
+            reading?.level ?: Float.NaN,
+            reading?.probability ?: Float.NaN,
+        )
         if (weight == 0) return // Freestyle: drawn on the pitch bar, never scored.
 
         beatsScored++
@@ -155,6 +160,41 @@ class PlayerScorer(
         basePoints++
         if (note.type.isGolden) goldenPoints++
         lineEarnedPoints[score.lineIndex] += weight
+
+        if (firstHitOfNote) creditOnset(score, beatOffset, weight)
+    }
+
+    /**
+     * Gives back the beats between a note's start and the moment the singer landed it.
+     *
+     * Only ever runs on the *first* beat of a note to be hit, so a singer who drops out in the
+     * middle of a note is not handed the gap back — this pays for the run-up to a note, which is
+     * the part nobody is actually late for, and nothing else.
+     */
+    private fun creditOnset(score: NoteScore, hitBeatOffset: Int, weight: Int) {
+        if (hitBeatOffset == 0 || config.onsetGraceSeconds <= 0.0) return
+
+        // All or nothing, measured to the beat that was actually landed. Forgiving whatever
+        // happens to fall inside the window regardless of when the singer arrived would pay a
+        // genuinely late entry for the beginning of a note they were nowhere near.
+        val note = score.note
+        val noteStart = beats.beatToSeconds(note.startBeat)
+        val noteSeconds = beats.beatToSeconds(note.startBeat + note.durationBeats) - noteStart
+
+        // Never more than a share of the note itself: a short one fits entirely inside the
+        // window, and catching only its last beat must not hand over the whole thing.
+        val grace = minOf(config.onsetGraceSeconds, noteSeconds * config.maxGraceShare)
+        val landedAfter = beats.beatToSeconds(note.startBeat + hitBeatOffset) - noteStart
+        if (landedAfter > grace) return
+
+        for (offset in 0 until hitBeatOffset) {
+            if (!score.creditOnset(offset, weight)) continue
+
+            beatsHit++
+            basePoints++
+            if (score.note.type.isGolden) goldenPoints++
+            lineEarnedPoints[score.lineIndex] += weight
+        }
     }
 
     private fun scaleToPool(points: Int): Int =

@@ -84,8 +84,40 @@ fun isPitchHit(sungMidi: Float, notePitch: Int, toleranceSemitones: Float): Bool
  * @param maxHoldSeconds how late a reading may arrive and still be used for a beat. Readings
  *   normally land within one hop (~21 ms) of the beat they score. Anything later means capture
  *   stalled, and guessing from stale audio would score beats nobody sang.
+ * @param onsetGraceSeconds how long after a note begins the singer may take to land it without
+ *   losing the beats before they did.
+ *
+ *   **This is not generosity, it is a debt being repaid.** A note takes real time to become a
+ *   pitch: a voice has an attack before it has a fundamental, singers slide into notes rather
+ *   than arriving on them, and this app's own detector needs a window of audio before it will
+ *   name a note at all. None of that is the singer being late, but all of it scored as silence —
+ *   which is why a phrase's opening note appeared to register halfway through.
+ *
+ *   The beats are credited only when the note is *actually landed*, and only when it is landed
+ *   inside this window: sing it late enough and the early beats stay lost, sing nothing and
+ *   nothing is credited. So it forgives the run-up without paying anyone for silence.
+ *
+ *   **65 ms is the measured debt and not a round number.** It is the worst case, on this
+ *   hardware, of the lag that the 127 ms calibration does *not* already take off — the detector
+ *   needing a window of audio before it will name a pitch, plus a phrase's opening note having
+ *   to clear the loudness gate from cold. Set beyond that and it stops repaying an error and
+ *   starts being difficulty, which belongs in [toleranceSemitones] where it is *visible*: that
+ *   dial makes the note bars taller, so the game is seen to be more forgiving rather than
+ *   quietly being so.
+ *
+ *   It is additionally capped at half of each note by [maxGraceShare], so **you always have to
+ *   sing at least half of a note to be given all of it**. Without that a short note is entirely
+ *   inside the window — a third of the notes in a real library are one or two beats long — and
+ *   catching only its last beat would hand over the whole thing.
+ *
+ *   It does not change what a song is worth. Every beat is still scored exactly once, and the
+ *   maximum stays a property of the chart alone.
+ * @param maxGraceShare the most of a note that [onsetGraceSeconds] may forgive, as a share of
+ *   its length.
  */
 data class ScoringConfig(
     val toleranceSemitones: Float = 1f,
     val maxHoldSeconds: Double = 0.1,
+    val onsetGraceSeconds: Double = 0.065,
+    val maxGraceShare: Double = 0.5,
 )

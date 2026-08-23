@@ -51,6 +51,7 @@ import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.playback.SyncCalibration
 import com.example.ultrastarandroidtv.score.ScoreSnapshot
+import com.example.ultrastarandroidtv.score.missBreakdown
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.song.UltraStarSong
 import kotlinx.coroutines.delay
@@ -97,7 +98,7 @@ fun GameplayScreen(
             },
             micSession = micSession,
             lineup = lineup,
-            micThreshold = settings.micThreshold,
+            micThreshold = settings.micThresholdFor(lineup.size),
         )
     }
 
@@ -153,6 +154,17 @@ fun GameplayScreen(
 
     DisposableEffect(session) {
         session.onError = { notice = it }
+        // Once per song, not per frame. A setting that is being ignored and a setting that is
+        // too small to see look identical from the sofa, and this is the difference.
+        Log.i(
+            TAG,
+            "settings in effect: lead=%.0fms window=%.2fs micGate=%.3f -> arrowLag=%.0fms".format(
+                session.calibration.displayLeadSeconds * 1000,
+                settings.windowSeconds,
+                settings.micThresholdFor(lineup.size),
+                session.arrowLagSeconds * 1000,
+            ),
+        )
         session.start()
         onDispose { session.release() }
     }
@@ -191,6 +203,16 @@ fun GameplayScreen(
             if (!finished && session.isFinished) {
                 finished = true
                 session.pause()
+                // Why the score was what it was: whether the missed beats had a voice in them
+                // decides whether the next thing to work on is latency or difficulty, and
+                // guessing between those two wastes the work.
+                session.singers.forEach { singer ->
+                    Log.i(
+                        TAG,
+                        "${singer.name}: ${missBreakdown(singer.scorer.noteScores, session.scoring, settings.micThresholdFor(lineup.size))
+                            .summary()}",
+                    )
+                }
             }
 
             if (notice == null) {
@@ -287,6 +309,8 @@ fun GameplayScreen(
                     showName = session.isDuet,
                     toleranceSemitones = session.scoring.toleranceSemitones,
                     now = { nowSeconds.doubleValue },
+                    arrowNow = { nowSeconds.doubleValue - session.arrowLagSeconds },
+                    solo = session.playerCount == 1,
                     modifier = Modifier.fillMaxWidth().height(trackHeight).padding(top = 10.dp),
                 )
             }
@@ -337,7 +361,7 @@ private fun TopBar(
                 ScoreReadout(
                     name = singer.name,
                     score = scores.getOrNull(singer.index)?.total ?: 0,
-                    color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                    color = GameTheme.playerColor(singer.index, session.playerCount == 1),
                     alignment = Alignment.Start,
                 )
             }
@@ -363,7 +387,7 @@ private fun TopBar(
                 ScoreReadout(
                     name = singer.name,
                     score = scores.getOrNull(singer.index)?.total ?: 0,
-                    color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                    color = GameTheme.playerColor(singer.index, session.playerCount == 1),
                     alignment = Alignment.End,
                 )
             }
@@ -432,13 +456,17 @@ private fun TrackPanel(
     showName: Boolean,
     toleranceSemitones: Float,
     now: () -> Double,
+    arrowNow: () -> Double,
+    solo: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val traces = remember(track) {
+    val traces = remember(track, solo) {
         track.singers.map { singer ->
             Trace(
                 noteScores = singer.scorer.noteScores,
-                color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                // A lone singer is green, which is where the arrow's accuracy scale starts, so
+                // the arrow reads as one colour drifting off green rather than two ideas at once.
+                color = GameTheme.playerColor(singer.index, solo),
                 currentMidi = { singer.currentMidi },
             )
         }
@@ -449,8 +477,13 @@ private fun TrackPanel(
             geometry = track.geometry,
             traces = traces,
             now = now,
+            arrowNow = arrowNow,
             toleranceSemitones = toleranceSemitones,
-            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
+            accuracyColored = solo,
+            // Deliberately unclipped here: NoteTrack clips its own panel and leaves the arrows
+            // free, so an arrow above or below the song's range stays visible instead of
+            // vanishing exactly when it has most to say.
+            modifier = Modifier.fillMaxSize(),
         )
 
         // Only a duet needs this: the scores at the top say who is who on a shared track, but
@@ -460,7 +493,7 @@ private fun TrackPanel(
                 Text(
                     singer.name,
                     style = MaterialTheme.typography.labelMedium,
-                    color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                    color = GameTheme.playerColor(singer.index, solo),
                     modifier = Modifier.align(Alignment.TopStart).padding(10.dp),
                 )
             }
@@ -523,7 +556,7 @@ private fun Results(
             Text(
                 "${singer.name}   %,d".format(score.total),
                 style = MaterialTheme.typography.headlineSmall,
-                color = GameTheme.playerColors[singer.index % GameTheme.playerColors.size],
+                color = GameTheme.playerColor(singer.index, session.playerCount == 1),
             )
             Text(
                 "%d of %d beats  ·  %.0f%%".format(

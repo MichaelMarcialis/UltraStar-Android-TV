@@ -19,7 +19,13 @@ data class PitchReading(
     val level: Float,
 ) {
     companion object {
-        /** Nothing usable in this window, but we still know how loud it was. */
-        fun unvoiced(level: Float): PitchReading = PitchReading(false, 0f, 0f, 0f, level)
+        /**
+         * Nothing usable in this window, but we still know how loud it was — and, where the
+         * detector did find a period and was simply not confident enough about it, how close
+         * it came. That is the difference between a beat nobody sang and a beat the detector
+         * would not commit to, which want opposite fixes.
+         */
+        fun unvoiced(level: Float, probability: Float = 0f): PitchReading =
+            PitchReading(false, 0f, 0f, probability, level)
     }
 }

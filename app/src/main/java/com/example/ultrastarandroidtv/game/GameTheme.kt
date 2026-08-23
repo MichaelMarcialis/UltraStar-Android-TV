@@ -65,13 +65,64 @@ object GameTheme {
         Color(0xFFFF7BA6), // Player 2: warm pink
     )
 
+    /**
+     * The one singer's colour when nobody else is playing.
+     *
+     * Green because on your own the arrow is free to say how *well* you are singing rather than
+     * *who* you are, and green is where that scale starts. With two people the colour is spoken
+     * for — it is the only thing telling two arrows on one track apart — so this is solo only.
+     */
+    val soloPlayer = Color(0xFF5BE37A)
+
+    /** Whose colour an arrow, score or name chip carries. Solo overrides the player order. */
+    fun playerColor(index: Int, solo: Boolean): Color =
+        if (solo) soloPlayer else playerColors[index % playerColors.size]
+
     /** The filled part of a note, showing which beats were actually paid for. */
     fun hitFill(player: Color): Color = player.copy(alpha = 0.55f)
+
+    // ---- Solo arrow accuracy --------------------------------------------------------------
+
+    val arrowOnPitch = Color(0xFF5BE37A)
+    val arrowNear = Color(0xFFFFC24A)
+    val arrowOff = Color(0xFFFF5A4A)
+
+    /**
+     * Green, amber, red by how far off the note a solo singer is.
+     *
+     * **Green holds for the whole scoring window** rather than starting to fade the moment the
+     * pitch is not exact. Green therefore means "this is earning points", which is the same thing
+     * the sparks say, and the two cannot contradict each other. Past the window it ramps to red
+     * over the same span the tilt uses, so colour and angle tell one story.
+     */
+    fun arrowAccuracyColor(errorSemitones: Float, toleranceSemitones: Float): Color {
+        val over = (kotlin.math.abs(errorSemitones) - toleranceSemitones).coerceAtLeast(0f)
+        val span = (arrowFullTiltSemitones - toleranceSemitones).coerceAtLeast(0.01f)
+        val t = (over / span).coerceIn(0f, 1f)
+        return if (t < 0.5f) lerp(arrowOnPitch, arrowNear, t * 2f)
+        else lerp(arrowNear, arrowOff, (t - 0.5f) * 2f)
+    }
 
     // ---- Playhead ---------------------------------------------------------------------------
 
     val playhead = Color(0x66FFFFFF)
     val playheadWidth = 2.dp
+
+    /**
+     * The stretch between the arrows and the sing line: the song that is being judged *now*.
+     *
+     * It exists because the arrows sit a little left of the line — they show pitch measured from
+     * audio that is already a moment old, so that is where that audio belongs. Correct, and
+     * without this it read as the arrow having come loose from the line and drifted. Shading the
+     * span turns a gap into a region with a meaning: everything inside it is in play.
+     *
+     * Very faint on purpose. It sits behind the notes and has to be legible as a change of
+     * ground without competing with the one thing in the track that must be read.
+     */
+    val judgedBand = Color(0x12FFFFFF)
+
+    /** Corner radius of the track's own panel. */
+    val trackCorner = 12.dp
 
     // ---- Pitch arrow ------------------------------------------------------------------------
 
@@ -88,6 +139,33 @@ object GameTheme {
 
     /** Clearance between the arrow's tip and the sing line, so the two never merge. */
     val arrowGap = 7.dp
+
+    /**
+     * How far the arrow tilts when the singer is a long way off the note, in degrees.
+     *
+     * The arrow pivots about its **tip**, so the tail swings and the point stays put: it keeps
+     * saying "your pitch is here" while starting to say "and it needs to go that way". Flat means
+     * right, which is the same reading as the vertical gap and costs nothing to learn.
+     *
+     * Borrowed from Karaoke Revolution, and worth having because the vertical gap alone is
+     * ambiguous at a glance — an arrow below a bar and an arrow below the bar *above* look
+     * identical until you find the note it belongs to. A tilt is legible without reference to
+     * anything else on screen.
+     *
+     * 26° is measured off the reference clip frame by frame rather than chosen: a badly-off
+     * arrow there reads at about that, where this started at 34° and leaned further than the
+     * thing it was copying.
+     */
+    val arrowMaxTiltDegrees = 26f
+
+    /**
+     * How far off the note the tilt reaches [arrowMaxTiltDegrees].
+     *
+     * Three semitones rather than the scoring tolerance, so the tilt is still growing across the
+     * range a singer actually corrects over. Tied to the tolerance it would be at full deflection
+     * the moment a note was missed, which says "wrong" and not "wrong by this much".
+     */
+    val arrowFullTiltSemitones = 3f
 
     // ---- Sparks -----------------------------------------------------------------------------
 
