@@ -62,6 +62,9 @@ class Trace(
  * @param now song time to draw at. Must be the time the singer *hears*, not the raw player
  *   position — see `SyncCalibration.heardSongTimeFor`. Read inside the draw pass, so updating
  *   it repaints without recomposing.
+ * @param arrowNow song time the arrows' pitches actually describe, which is a little behind
+ *   [now] — see `GameSession.arrowLagSeconds`. Read per frame rather than baked in, because it
+ *   depends on the display lead, which is a live setting.
  * @param toleranceSemitones the scoring window either side of a note, which is also its height.
  */
 @Composable
@@ -69,6 +72,7 @@ fun NoteTrack(
     geometry: TrackGeometry,
     traces: List<Trace>,
     now: () -> Double,
+    arrowNow: () -> Double,
     toleranceSemitones: Float,
     modifier: Modifier = Modifier,
 ) {
@@ -106,7 +110,7 @@ fun NoteTrack(
         Canvas(modifier = Modifier.fillMaxSize().clipToBounds()) {
             drawTrack(
                 geometry, traces, motions, syllables, lyrics, arrowPath,
-                toleranceSemitones, now(),
+                toleranceSemitones, now(), arrowNow(),
             )
         }
     }
@@ -121,6 +125,7 @@ private fun DrawScope.drawTrack(
     arrowPath: Path,
     toleranceSemitones: Float,
     nowSeconds: Double,
+    arrowNowSeconds: Double,
 ) {
     val width = size.width
     // Capped as a share of the track as well as in absolute terms: a duet splits the screen in
@@ -140,6 +145,19 @@ private fun DrawScope.drawTrack(
         .coerceAtLeast(GameTheme.minNoteHeight.toPx())
 
     drawRect(GameTheme.trackBackground)
+
+    // Behind everything else: the span between the arrows and the sing line, which is the song
+    // currently being judged. Drawn first so the notes and lyrics keep their contrast.
+    val arrowX = geometry.xFor(arrowNowSeconds, nowSeconds, width)
+    val bandX = width * geometry.playheadFraction
+    if (bandX > arrowX) {
+        drawRect(
+            color = GameTheme.judgedBand,
+            topLeft = Offset(arrowX, 0f),
+            size = Size(bandX - arrowX, size.height),
+        )
+    }
+
     drawOctaveLines(geometry, width, noteArea, low, high)
 
     val visible = geometry.visibleIndices(nowSeconds)
@@ -159,9 +177,12 @@ private fun DrawScope.drawTrack(
         strokeWidth = GameTheme.playheadWidth.toPx(),
     )
 
-    // Last, so the arrows and their sparks sit above everything they are pointing at.
+    // Last, so the arrows and their sparks sit above everything they are pointing at. The arrow
+    // is judged against the note under *it* rather than the one under the line, because the note
+    // under the arrow is the one the reading it is showing was actually scored against.
     drawArrows(
-        geometry, traces, motions, visible, active, nowSeconds,
+        geometry, traces, motions, visible, geometry.activeIndex(arrowNowSeconds),
+        nowSeconds, arrowNowSeconds,
         width, noteArea, low, high, toleranceSemitones, arrowPath,
     )
 }
@@ -283,10 +304,16 @@ private fun DrawScope.drawHits(
 /**
  * One arrow per singer, at the sing line, showing where their voice is this instant.
  *
- * It sits just left of the line and points at it, so pitch is read as a vertical gap between
- * arrow and note: level means right, and which way to move is immediately obvious. Deliberately
+ * It sits left of the line and points at it, so pitch is read as a vertical gap between arrow
+ * and note: level means right, and which way to move is immediately obvious. Deliberately
  * narrow, because in two-player mode the two arrows share the line and spend a lot of the song
  * near each other.
+ *
+ * **How far left is not a clearance, it is a measurement.** The pitch an arrow shows was taken
+ * from audio that is already old, so drawing it at the line points it at a note the singer has
+ * moved past — and during a fast passage that is a different note, which quietly breaks the one
+ * thing this drawing promises: that an arrow inside a bar means that beat was paid for. The
+ * arrow is therefore drawn at the moment in the song its reading actually came from.
  *
  * When a singer is inside the note's scoring window, sparks fire where the arrow meets the bar.
  * They are struck from the *same* comparison the scorer uses, so they cannot disagree with the
@@ -299,6 +326,7 @@ private fun DrawScope.drawArrows(
     visible: IntRange,
     active: Int?,
     nowSeconds: Double,
+    arrowNowSeconds: Double,
     width: Float,
     noteArea: Float,
     low: Float,
@@ -306,13 +334,16 @@ private fun DrawScope.drawArrows(
     toleranceSemitones: Float,
     path: Path,
 ) {
-    // Fold against whatever the singer is nearest to being asked for: the note under the line
+    // Fold against whatever the singer is nearest to being asked for: the note under the arrow
     // if there is one, otherwise the closest one on screen, so the arrow keeps its bearings
     // through rests instead of jumping an octave the moment a note ends.
-    val reference = active ?: nearestIndex(geometry, visible, nowSeconds)
+    val reference = active ?: nearestIndex(geometry, visible, arrowNowSeconds)
     val referenceMidi = reference?.let { geometry.placements[it].midi }
 
-    val tipX = width * geometry.playheadFraction - GameTheme.arrowGap.toPx()
+    // Not at the sing line, but at the moment in the song the pitch it is showing came from —
+    // which is a little to the left, because the voice had to be captured and analysed to get
+    // here. Drawn at the line it would point at a note that has already gone past.
+    val tipX = geometry.xFor(arrowNowSeconds, nowSeconds, width) - GameTheme.arrowGap.toPx()
     val arrowWidth = GameTheme.arrowWidth.toPx()
     val halfHeight = GameTheme.arrowHeight.toPx() / 2f
 

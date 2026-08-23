@@ -51,6 +51,7 @@ import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.playback.SyncCalibration
 import com.example.ultrastarandroidtv.score.ScoreSnapshot
+import com.example.ultrastarandroidtv.score.missBreakdown
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.song.UltraStarSong
 import kotlinx.coroutines.delay
@@ -153,6 +154,17 @@ fun GameplayScreen(
 
     DisposableEffect(session) {
         session.onError = { notice = it }
+        // Once per song, not per frame. A setting that is being ignored and a setting that is
+        // too small to see look identical from the sofa, and this is the difference.
+        Log.i(
+            TAG,
+            "settings in effect: lead=%.0fms window=%.2fs micGate=%.3f -> arrowLag=%.0fms".format(
+                session.calibration.displayLeadSeconds * 1000,
+                settings.windowSeconds,
+                settings.micThreshold,
+                session.arrowLagSeconds * 1000,
+            ),
+        )
         session.start()
         onDispose { session.release() }
     }
@@ -191,6 +203,16 @@ fun GameplayScreen(
             if (!finished && session.isFinished) {
                 finished = true
                 session.pause()
+                // Why the score was what it was: whether the missed beats had a voice in them
+                // decides whether the next thing to work on is latency or difficulty, and
+                // guessing between those two wastes the work.
+                session.singers.forEach { singer ->
+                    Log.i(
+                        TAG,
+                        "${singer.name}: ${missBreakdown(singer.scorer.noteScores, session.scoring, settings.micThreshold)
+                            .summary()}",
+                    )
+                }
             }
 
             if (notice == null) {
@@ -287,6 +309,7 @@ fun GameplayScreen(
                     showName = session.isDuet,
                     toleranceSemitones = session.scoring.toleranceSemitones,
                     now = { nowSeconds.doubleValue },
+                    arrowNow = { nowSeconds.doubleValue - session.arrowLagSeconds },
                     modifier = Modifier.fillMaxWidth().height(trackHeight).padding(top = 10.dp),
                 )
             }
@@ -432,6 +455,7 @@ private fun TrackPanel(
     showName: Boolean,
     toleranceSemitones: Float,
     now: () -> Double,
+    arrowNow: () -> Double,
     modifier: Modifier = Modifier,
 ) {
     val traces = remember(track) {
@@ -449,6 +473,7 @@ private fun TrackPanel(
             geometry = track.geometry,
             traces = traces,
             now = now,
+            arrowNow = arrowNow,
             toleranceSemitones = toleranceSemitones,
             modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
         )

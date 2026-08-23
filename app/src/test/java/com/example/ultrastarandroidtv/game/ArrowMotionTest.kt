@@ -7,7 +7,12 @@ import org.junit.Test
 
 class ArrowMotionTest {
 
-    private val motion = ArrowMotion()
+    /**
+     * The smoothing is off by default now, so everything below that is *about* smoothing has
+     * to ask for it. The behaviour is still supported and still worth pinning: it was removed
+     * because it put the arrow behind the score, not because it was wrong in itself.
+     */
+    private val motion = ArrowMotion(secondsToSettle = 0.03, fadeSeconds = 0.12)
 
     @Test
     fun `the arrow fades in rather than appearing`() {

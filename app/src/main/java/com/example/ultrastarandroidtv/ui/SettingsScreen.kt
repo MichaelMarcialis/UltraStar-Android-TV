@@ -69,10 +69,16 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
 
         SettingRow(
             label = "Display lead",
-            explanation = "Raise until the words reach the line exactly as they are sung.",
+            explanation = "Every television waits a moment before it shows a frame, and this " +
+                "draws that far ahead to cancel it out. Raise it if the words arrive at the line " +
+                "just after you hear them sung, lower it if they arrive early. Changes only " +
+                "what you see — never what you score.",
             value = settings.displayLeadSeconds,
             range = SettingsRange.lead,
-            step = 0.005,
+            // Ten milliseconds, not five. The range is three hundred, so a five-millisecond step
+            // needed sixty presses to cross it, and a few presses moved the picture by less than
+            // one frame — which is indistinguishable from the setting doing nothing at all.
+            step = 0.01,
             format = { "%d ms".format((it * 1000).roundToInt()) },
             onChange = settings::updateLead,
             modifier = Modifier.focusRequester(first),
@@ -80,7 +86,9 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
 
         SettingRow(
             label = "Visible window",
-            explanation = "How much of the song is on screen. Less is easier to read, and shows less of what is coming.",
+            explanation = "How many seconds of the song fit across the track. Less means larger " +
+                "words that are easier to read, and less warning of the note coming next. More " +
+                "means more warning, and everything packed tighter.",
             value = settings.windowSeconds,
             range = SettingsRange.window,
             step = 0.25,
@@ -90,7 +98,10 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
 
         SettingRow(
             label = "Microphone sensitivity",
-            explanation = "Higher hears more of the room, including the other singer and the TV. Lower needs a voice close to the mic.",
+            explanation = "How loud a voice must be to count as singing. Lower it if one " +
+                "singer's microphone is scoring the other singer or the television; raise it if " +
+                "someone quiet is scoring nothing. It sets how loudly a phrase must *begin* — " +
+                "once a singer has started, they keep counting as they soften.",
             // Sensitivity, not the underlying gate: a sensitive microphone picks up more, and a
             // slider labelled this way has to move that way.
             value = settings.micSensitivity.toDouble(),

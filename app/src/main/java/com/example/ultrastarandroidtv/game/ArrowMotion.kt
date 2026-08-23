@@ -2,8 +2,16 @@ package com.example.ultrastarandroidtv.game
 
 import kotlin.math.exp
 
-/** Longest step believed to be a real frame; anything larger is a stall or a restart. */
-private const val MAX_STEP_SECONDS = 0.1
+/**
+ * Longest step believed to be a real frame; anything larger is a stall or a restart.
+ *
+ * Three frames at 60 Hz rather than six. It has to be read against [ArrowMotion.secondsToSettle]
+ * rather than on its own: the clamp exists so that a rendering hitch is eased through like a
+ * plausible frame instead of teleporting the arrow, and once the easing got faster a tenth of a
+ * second stopped being a plausible frame — it was more than three time constants, which is
+ * arrival, not a step. Tightening it is what keeps the clamp doing the job it is named for.
+ */
+private const val MAX_STEP_SECONDS = 0.05
 
 /**
  * Smooths one singer's pitch arrow: where it sits, and whether it is there at all.
@@ -14,15 +22,23 @@ private const val MAX_STEP_SECONDS = 0.1
  * of those outliers are already gone by here — `GameSession.Singer` medians them first — and
  * this eases what is left.)
  *
- * The easing is deliberately fast, around a twentieth of a second, because this is an
- * instrument rather than a decoration: a singer correcting their pitch must not see the arrow
- * agree late.
+ * **Both smoothings are off by default, and that is a deliberate position rather than an
+ * oversight.** The scorer reads the raw pitch while the arrow read a smoothed one, so the arrow
+ * arrived on a note *after* the game had already paid for it — measured at 83 ms, which is one
+ * and a half beats of a song like Space Oddity. A note lighting up while the arrow is still
+ * visibly climbing towards it makes the game look like it is guessing, and it makes any
+ * judgement about whether scoring is fair impossible, because you cannot tell what the app
+ * actually heard from what the animation did to it. Nothing is now interposed between the
+ * reading and the drawing.
  *
- * **Appearing and disappearing is eased separately, and more slowly.** Position wants to be
- * quick and truthful; presence wants to be gentle, because a voice stops and starts constantly
- * — between syllables, between breaths — and an arrow that blinks in and out on every one of
- * those is exhausting to watch. So [alpha] fades rather than switching, and the arrow holds its
- * last position while it fades out instead of darting somewhere neutral.
+ * The easing remains available and is still tested, because the argument for it was real: raw
+ * YIN on a real voice is honest rather than tidy, and drawn literally a held note wanders. If it
+ * comes back it should come back as a *small* number — the history here is 150 ms, then 83 ms,
+ * then none, each because the previous one was felt from the sofa.
+ *
+ * [alpha] switches outright for the same reason. Fading it was gentler to watch — a voice stops
+ * and starts constantly, between syllables and between breaths — but a half-faded arrow is
+ * another thing on screen that is not quite what was heard.
  *
  * Coming back from a *short* gap eases from where the arrow was, since that is usually the same
  * phrase continuing; coming back from a long one snaps, since the singer has almost certainly
@@ -32,11 +48,12 @@ private const val MAX_STEP_SECONDS = 0.1
  * Not thread-safe; owned by the draw pass.
  */
 class ArrowMotion(
-    private val secondsToSettle: Double = 0.05,
+    /** Zero draws the reading as it arrives. */
+    private val secondsToSettle: Double = 0.0,
     /** A silence longer than this is treated as a fresh start rather than a continuation. */
     private val snapAfterSilenceSeconds: Double = 0.35,
-    /** Roughly how long the arrow takes to fade in or out. */
-    private val fadeSeconds: Double = 0.12,
+    /** Roughly how long the arrow takes to fade in or out. Zero switches the arrow outright. */
+    private val fadeSeconds: Double = 0.0,
 ) {
     private var shown = Float.NaN
     private var lastNowSeconds = Double.NaN
@@ -95,7 +112,12 @@ class ArrowMotion(
         alpha = 0f
     }
 
-    /** Frame-rate independent easing: the same journey takes the same time whatever the fps. */
+    /**
+     * Frame-rate independent easing: the same journey takes the same time whatever the fps.
+     *
+     * A time constant of zero means arrive immediately, which is how both smoothings are turned
+     * off — and is what the defaults now do.
+     */
     private fun approach(step: Double, timeConstant: Double): Float =
-        (1.0 - exp(-step / timeConstant)).toFloat()
+        if (timeConstant <= 0.0) 1f else (1.0 - exp(-step / timeConstant)).toFloat()
 }

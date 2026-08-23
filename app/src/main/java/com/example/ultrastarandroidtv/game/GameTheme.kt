@@ -73,6 +73,19 @@ object GameTheme {
     val playhead = Color(0x66FFFFFF)
     val playheadWidth = 2.dp
 
+    /**
+     * The stretch between the arrows and the sing line: the song that is being judged *now*.
+     *
+     * It exists because the arrows sit a little left of the line — they show pitch measured from
+     * audio that is already a moment old, so that is where that audio belongs. Correct, and
+     * without this it read as the arrow having come loose from the line and drifted. Shading the
+     * span turns a gap into a region with a meaning: everything inside it is in play.
+     *
+     * Very faint on purpose. It sits behind the notes and has to be legible as a change of
+     * ground without competing with the one thing in the track that must be read.
+     */
+    val judgedBand = Color(0x12FFFFFF)
+
     // ---- Pitch arrow ------------------------------------------------------------------------
 
     /**
