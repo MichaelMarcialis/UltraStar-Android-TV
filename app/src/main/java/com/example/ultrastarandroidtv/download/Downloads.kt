@@ -173,7 +173,11 @@ class Downloads(private val context: Context) {
         return when (outcome) {
             is RepairOutcome.Repaired -> RepairStatus.Done(outcome.summary)
             is RepairOutcome.Failed -> {
-                if (outcome.problem == DownloadProblem.AUDIO_UNAVAILABLE) {
+                // Only when the *music* was the thing that could not be got. A video-only
+                // repair fails with the same reason when its upload has gone -- and swapping
+                // in a different chart there would delete a song that plays perfectly well,
+                // because an optional video could not be fetched.
+                if (outcome.problem == DownloadProblem.AUDIO_UNAVAILABLE && job.plan.needsAudio) {
                     replaceFromUsdb(job, card) ?: RepairStatus.Failed(outcome.message)
                 } else {
                     RepairStatus.Failed(outcome.message)

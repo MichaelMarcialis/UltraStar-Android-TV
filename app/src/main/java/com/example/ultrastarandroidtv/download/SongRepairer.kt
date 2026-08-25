@@ -298,6 +298,16 @@ class SongRepairer(
         val gotVideo = plan.needsVideo && picture != null &&
             saveVideo(song.folderId, base, picture, onStage)
 
+        // Getting none of it is a failure, not a quiet success. Reported as `Repaired` it was
+        // counted among the songs fixed, marked the library scan out of date, and put a
+        // success-coloured "Nothing could be got" in front of somebody -- three statements
+        // that were all untrue. Partial success is still success: one asset is worth having.
+        if (!gotAudio && !gotVideo && !gotCover) {
+            return RepairOutcome.Failed(
+                DownloadProblem.NOTHING_FETCHED,
+                "Nothing could be found for this song.",
+            )
+        }
         return RepairOutcome.Repaired(audio = gotAudio, video = gotVideo, cover = gotCover)
     }
 

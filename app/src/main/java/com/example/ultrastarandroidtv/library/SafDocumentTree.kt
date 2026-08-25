@@ -109,7 +109,12 @@ class SafDocumentTree(
      * wrong. Holding a few kilobytes is the smaller and more certain guard.
      */
     override fun overwrite(documentId: String, bytes: ByteArray): Boolean {
-        val original = runCatching { readBytes(documentId) }.getOrNull()
+        // No backup, no overwrite. Reading the old bytes is not a nicety here, it is the
+        // entire safety of the method: truncating first and *then* discovering there is
+        // nothing to restore is strictly worse than refusing, because the caller can report
+        // a failed repair and clean up after itself, where a destroyed chart is a song that
+        // cannot be sung again.
+        val original = runCatching { readBytes(documentId) }.getOrNull() ?: return false
 
         val written = runCatching {
             resolver.openOutputStream(uriFor(documentId), "wt")?.use { it.write(bytes) } != null
@@ -119,10 +124,8 @@ class SafDocumentTree(
         // Best effort, and nothing more can be promised -- if the card has gone, the restore
         // goes with it. It costs one attempt, and it is the difference between a bad day and
         // a song nobody can sing again.
-        if (original != null) {
-            runCatching {
-                resolver.openOutputStream(uriFor(documentId), "wt")?.use { it.write(original) }
-            }
+        runCatching {
+            resolver.openOutputStream(uriFor(documentId), "wt")?.use { it.write(original) }
         }
         return false
     }

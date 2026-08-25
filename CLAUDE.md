@@ -344,6 +344,13 @@ A failed download stretched one row of the results list to the full height of th
 - **A replacement that could not delete the original announced success anyway**, leaving both songs in the library with one of them silent. The delete is checked and the wording says what is actually there.
 - **The download notice expired while it was hidden**, so a download landing in the first seconds of a song was erased six seconds later and never seen. The timer starts when the notice is visible. Late news is still news; no news looks like a download that vanished.
 
+**A second review pass, and one of the findings was a fix that did not work** (Copilot on PR #2, 2026-08-25). Four more, all real.
+
+- **The artist was being sent to USDB *and* judged locally, so the loose matcher never saw the charts it was written for.** `AlternateVersions` searched `interpret=Disney's Moana (Auli'i Cravalho)`, which the server cannot match against the Alessia Cara credit — the exact real-library case the bracket-stripping rule had just been added for, filtered out before `sameSongAs` ran. **Every test passed and the feature still could not work**, because the tests pinned the matching and nothing pinned the request. It searches by arrangement-free **title alone** now, and `AlternateSearchTest` pins the form that goes out.
+- **A repair that fetched nothing was reported as a success** — counted among the songs fixed, marking the scan out of date, and showing a success-coloured "Nothing could be got". `DownloadProblem.NOTHING_FETCHED` exists so it can fail *without* being mistaken for `AUDIO_UNAVAILABLE`, which is the reason that sends the app off to replace the whole song. Partial success is still success: one asset of three is worth having.
+- **A video-only repair could delete a playable song.** Its failure carries `AUDIO_UNAVAILABLE` too, so the replacement path fired for a song whose only fault was a missing music video. Guarded on `plan.needsAudio`.
+- **`overwrite` truncated even when it had no backup to restore.** Reading the old bytes is not a nicety there, it is the whole safety of the method — so a failed read now refuses the write outright. The caller reports a failed repair and cleans up its own orphan, which is strictly better than a destroyed chart.
+
 **The made-for-kids hole is closed, and the answer was the obvious client** (`InnertubeClients.ANDROID_KIDS`, measured 2026-08-24 across the whole client table against a real Disney upload).
 
 - **`ANDROID_KIDS` answers `OK` where visionOS answers `UNPLAYABLE`**, with the **full format ladder** — itag 140 for sound and itag 137 for picture, the two this app already prefers — plain URLs, no JS player, no PO token, no cookies, no account.

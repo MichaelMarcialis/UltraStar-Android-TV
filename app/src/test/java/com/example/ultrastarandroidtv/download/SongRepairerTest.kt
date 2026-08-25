@@ -13,6 +13,7 @@ import com.example.ultrastarandroidtv.song.UltraStarSongParser
 import com.example.ultrastarandroidtv.usdb.readUsdbSidecar
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -256,6 +257,56 @@ class SongRepairerTest {
         )
     }
 
+    /**
+     * A repair that got none of what it went for is a failure, not a quiet success.
+     *
+     * Reported as `Repaired` it was counted among the songs fixed, marked the library scan out of
+     * date, and put a success-coloured "Nothing could be got" in front of somebody — three
+     * statements that were all untrue at once.
+     */
+    @Test
+    fun `fetching none of it is a failure`() {
+        val card = FakeFolder(chart = CHART_PLAYABLE, sidecar = null)
+        val song = card.song(audio = "audio", video = "video")
+        val repairer = repairerFor(card, net = FakeNet(coverFails = true, itunesFinds = false))
+
+        val outcome = repairer.repair(song, repairer.plan(song)!!)
+
+        assertEquals(
+            DownloadProblem.NOTHING_FETCHED,
+            (outcome as RepairOutcome.Failed).problem,
+        )
+    }
+
+    /**
+     * And it must not be reported as the music being unavailable, which is the reason that sends
+     * `Downloads` off to replace the entire song with a different chart. A cover iTunes happened
+     * not to have is nowhere near grounds for that.
+     */
+    @Test
+    fun `a missing cover is never mistaken for missing music`() {
+        val card = FakeFolder(chart = CHART_PLAYABLE, sidecar = null)
+        val song = card.song(audio = "audio", video = "video")
+        val repairer = repairerFor(card, net = FakeNet(coverFails = true, itunesFinds = false))
+
+        val outcome = repairer.repair(song, repairer.plan(song)!!) as RepairOutcome.Failed
+
+        assertNotEquals(DownloadProblem.AUDIO_UNAVAILABLE, outcome.problem)
+    }
+
+    /** Getting one of three is still worth having, and still counts. */
+    @Test
+    fun `partial success is still success`() {
+        val card = FakeFolder(chart = CHART_WITHOUT_VIDEO, sidecar = SIDECAR)
+        val song = card.song(audio = null)
+        val repairer = repairerFor(card, net = FakeNet(coverFails = true, itunesFinds = false))
+
+        val outcome = repairer.repair(song, repairer.plan(song)!!) as RepairOutcome.Repaired
+
+        assertTrue(outcome.audio)
+        assertFalse(outcome.cover)
+    }
+
     // -------------------------------------------------------------------------------------
     // The sidecar itself
     // -------------------------------------------------------------------------------------
@@ -365,6 +416,7 @@ class SongRepairerTest {
     private class FakeNet(
         private val playable: Boolean = true,
         private val coverFails: Boolean = false,
+        private val itunesFinds: Boolean = true,
     ) : Http {
         override fun send(request: HttpRequest): HttpReply {
             val url = request.url
@@ -374,7 +426,7 @@ class SongRepairerTest {
                 url.startsWith("https://www.youtube.com/") -> HttpReply(200, YT_HOME, NO_HEADERS)
                 url.contains("googlevideo") -> ranged(ByteArray(2048) { 7 }, request)
                 url.startsWith("https://itunes.apple.com/search") ->
-                    HttpReply(200, ITUNES_HIT, NO_HEADERS)
+                    HttpReply(200, if (itunesFinds) ITUNES_HIT else ITUNES_MISS, NO_HEADERS)
                 url.startsWith("https://is1-ssl.mzstatic.com") ->
                     if (coverFails) HttpReply(500, "", NO_HEADERS)
                     else HttpReply(200, ByteArray(128) { 22 }, NO_HEADERS)
@@ -432,6 +484,8 @@ class SongRepairerTest {
             {"playabilityStatus":{"status":"UNPLAYABLE","reason":"This video is not available"},
              "videoDetails":{"title":"Golden Years","lengthSeconds":"240"}}
         """.trimIndent()
+
+        val ITUNES_MISS = """{"resultCount":0,"results":[]}"""
 
         val ITUNES_HIT = """
             {"resultCount":1,"results":[{"artistName":"David Bowie","trackName":"Golden Years",

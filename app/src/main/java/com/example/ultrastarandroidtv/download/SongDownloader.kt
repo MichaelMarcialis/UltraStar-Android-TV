@@ -57,6 +57,16 @@ sealed interface DownloadStage {
 /** Why a download did not happen, in terms a screen can turn into a sentence. */
 enum class DownloadProblem {
     ALREADY_HAVE_IT,
+
+    /**
+     * Everything that was asked for was attempted and none of it could be got.
+     *
+     * Its own value rather than reusing [AUDIO_UNAVAILABLE], which is load-bearing: a repair
+     * failing with that one sends [com.example.ultrastarandroidtv.download.Downloads] off to
+     * replace the whole song with a different chart, and a cover that iTunes happened not to
+     * have is nowhere near reason enough for that.
+     */
+    NOTHING_FETCHED,
     USDB_REFUSED,
     CHART_NAMES_NO_VIDEO,
     AUDIO_UNAVAILABLE,

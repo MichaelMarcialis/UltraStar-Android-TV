@@ -68,8 +68,15 @@ class AlternateVersions(
     ): UsdbSong? {
         if (artist.isBlank() || title.isBlank()) return null
 
+        // Searched by **title alone**, and the artist judged here.
+        //
+        // Sending the artist to USDB as well undoes the whole point of the loose matcher
+        // below: `interpret=Disney's Moana (Auli'i Cravalho)` cannot match the chart credited
+        // to Alessia Cara, so the one real-library case this exists for was being filtered out
+        // on the server before [sameSongAs] ever saw it. A title search is wider and the
+        // widening is free -- USDB's search is the part that is not throttled.
         val page = runCatching {
-            search.search(SongFilter(artist = artist, title = title))
+            search.search(SongFilter(title = withoutArrangementTag(title).trim()))
         }.getOrNull() ?: return null
 
         val same = differentFolderFrom?.let { safeFileName(it).lowercase() }
