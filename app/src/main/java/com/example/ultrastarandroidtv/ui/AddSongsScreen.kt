@@ -58,9 +58,11 @@ import com.example.ultrastarandroidtv.download.queueSummary
 import com.example.ultrastarandroidtv.download.safeFileName
 import com.example.ultrastarandroidtv.download.shortStatusLabel
 import com.example.ultrastarandroidtv.download.statusLabel
+import com.example.ultrastarandroidtv.audio.previewPlayer
 import com.example.ultrastarandroidtv.game.GameTheme
 import com.example.ultrastarandroidtv.library.CoverLoader
 import com.example.ultrastarandroidtv.library.LibraryLocation
+import com.example.ultrastarandroidtv.library.filingKey
 import com.example.ultrastarandroidtv.library.SongLibraryCache
 import com.example.ultrastarandroidtv.net.AudioLookup
 import com.example.ultrastarandroidtv.usdb.SignIn
@@ -114,6 +116,29 @@ private val LANGUAGES = listOf(
     "French" to "French",
     "Italian" to "Italian",
 )
+
+/**
+ * USDB's page, in the order it is worth reading on a television.
+ *
+ * **Artist matches stay first.** That split is deliberate and predates this: one keyword becomes
+ * two searches, and somebody who types "queen" almost always means the band rather than every song
+ * with the word in its title. Sorting the whole page alphabetically would shuffle the two together
+ * and bury what was asked for.
+ *
+ * Within each half it is alphabetical **past the leading article**, so a page of results is not
+ * three quarters of the way through T before it reaches the band anybody was looking for.
+ */
+internal fun orderedForDisplay(results: List<UsdbSong>, keyword: String): List<UsdbSong> {
+    val word = keyword.trim().lowercase()
+    val order = compareBy<UsdbSong>(
+        { filingKey(it.artist).lowercase() },
+        { filingKey(it.title).lowercase() },
+    )
+    if (word.isEmpty()) return results.sortedWith(order)
+
+    val (byArtist, rest) = results.partition { it.artist.lowercase().contains(word) }
+    return byArtist.sortedWith(order) + rest.sortedWith(order)
+}
 
 private enum class AddMode { SignIn, Browse }
 
@@ -250,7 +275,8 @@ fun AddSongsScreen(
 
     // One player for the whole screen, reused as focus moves -- the song picker's arrangement,
     // for the same reason: building an ExoPlayer per card would stutter the grid.
-    val preview = remember { ExoPlayer.Builder(context).build() }
+    // Levelled: previews are mastered decades apart and run 8.6 dB apart on this library.
+    val preview = remember { previewPlayer(context) }
     DisposableEffect(preview) { onDispose { preview.release() } }
     LaunchedEffect(focused) {
         preview.pause()
@@ -259,7 +285,9 @@ fun AddSongsScreen(
         runCatching {
             preview.setMediaItem(MediaItem.fromUri(sample))
             preview.prepare()
-            preview.volume = 0.75f
+            // Full scale here, because PreviewLevel has already brought the clip to a
+            // fixed loudness -- turning it down again would only undo half of that.
+            preview.volume = 1f
             preview.play()
         }
     }
@@ -589,13 +617,14 @@ private fun ResultsPanel(
         }
 
         Spacer(Modifier.height(14.dp))
+        val shown = remember(results, keyword) { orderedForDisplay(results, keyword) }
         LazyVerticalGrid(
             columns = GridCells.Fixed(3),
             modifier = Modifier.fillMaxSize(),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            items(results, key = { song -> song.songId }) { song ->
+            items(shown, key = { song -> song.songId }) { song ->
                 ResultCard(
                     song = song,
                     cover = covers[song.songId],

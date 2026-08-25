@@ -65,6 +65,7 @@ import com.example.ultrastarandroidtv.library.SongLibraryCache
 import com.example.ultrastarandroidtv.library.SongLibraryScanner
 import com.example.ultrastarandroidtv.library.SongFilterState
 import com.example.ultrastarandroidtv.library.SongSort
+import com.example.ultrastarandroidtv.library.songOrder
 import com.example.ultrastarandroidtv.library.arrange
 import com.example.ultrastarandroidtv.library.firstIndexUnder
 import com.example.ultrastarandroidtv.library.indexLetters
@@ -256,7 +257,7 @@ fun SongsScreen(
         val found = withContext(Dispatchers.IO) {
             SongLibraryScanner(currentTree).scan { counted++ }
         }
-        cache.put(treeUri, found.songs.sortedBy { it.song.metadata.title.lowercase() })
+        cache.put(treeUri, found.songs.sortedWith(songOrder(SongSort.Title)))
         songs = cache.songs
         scanning = false
         status = tally(songs)
