@@ -9,13 +9,18 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -26,25 +31,56 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.tv.material3.Button
+import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.example.ultrastarandroidtv.download.Downloads
+import com.example.ultrastarandroidtv.download.RepairPlan
+import com.example.ultrastarandroidtv.download.RepairStatus
+import com.example.ultrastarandroidtv.download.SongRepairer
+import com.example.ultrastarandroidtv.download.repairQueueProgress
+import com.example.ultrastarandroidtv.download.repairStatusLabel
+import com.example.ultrastarandroidtv.download.repairSummary
 import com.example.ultrastarandroidtv.game.GameTheme
+import com.example.ultrastarandroidtv.library.CoverLoader
 import com.example.ultrastarandroidtv.library.LibraryLocation
 import com.example.ultrastarandroidtv.library.SafDocumentTree
 import com.example.ultrastarandroidtv.library.ScannedSong
 import com.example.ultrastarandroidtv.library.SongLibraryCache
 import com.example.ultrastarandroidtv.library.SongLibraryScanner
+import com.example.ultrastarandroidtv.library.SongFilterState
+import com.example.ultrastarandroidtv.library.SongSort
+import com.example.ultrastarandroidtv.library.arrange
+import com.example.ultrastarandroidtv.library.firstIndexUnder
+import com.example.ultrastarandroidtv.library.indexLetters
+import com.example.ultrastarandroidtv.library.matches
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private enum class SongsMode { List, Managing, Confirming }
+
+/**
+ * Five across.
+ *
+ * Enough that a fifty-song library is two screens rather than ten, and not so many that a cover
+ * stops being recognisable from the sofa — which is the whole reason for showing covers at all.
+ */
+private const val SONG_COLUMNS = 5
 
 /**
  * What is on the card, and what is wrong with it.
@@ -66,6 +102,7 @@ private enum class SongsMode { List, Managing, Confirming }
 @Composable
 fun SongsScreen(
     cache: SongLibraryCache,
+    downloads: Downloads,
     onAddSongs: () -> Unit,
     onMenu: () -> Unit,
 ) {
@@ -79,6 +116,20 @@ fun SongsScreen(
     var scanning by remember { mutableStateOf(false) }
     var counted by remember { mutableIntStateOf(0) }
     var rescans by remember { mutableIntStateOf(0) }
+
+    var sort by remember { mutableStateOf(SongSort.Title) }
+    var filter by remember { mutableStateOf(SongFilterState.All) }
+    var jumpTo by remember { mutableStateOf<Int?>(null) }
+
+    /**
+     * Album covers, decoded once each and kept for the visit.
+     *
+     * Filled in by the cards themselves as they compose, which means only what is on screen is
+     * ever read: a cover is a Storage Access Framework read and a decode, and doing all seventy
+     * up front would put a second scan's worth of work in front of a screen that has just
+     * finished scanning.
+     */
+    val covers = remember { mutableStateMapOf<String, ImageBitmap?>() }
 
     var mode by remember { mutableStateOf(SongsMode.List) }
     var selected by remember { mutableStateOf<ScannedSong?>(null) }
@@ -101,6 +152,70 @@ fun SongsScreen(
 
     val tree = remember(treeUri) {
         treeUri?.let { SafDocumentTree(context.contentResolver, it) }
+    }
+
+    LaunchedEffect(songs, tree) {
+        val currentTree = tree ?: return@LaunchedEffect
+        for (song in songs) {
+            val coverId = song.coverId ?: continue
+            if (covers.containsKey(song.textId)) continue
+            covers[song.textId] = withContext(Dispatchers.IO) {
+                runCatching {
+                    CoverLoader.decode(currentTree.readBytes(coverId), maxPixels = 256)
+                }.getOrNull()
+            }
+        }
+    }
+
+    val repairer = remember(tree) {
+        tree?.let {
+            SongRepairer(
+                youTube = downloads.youTube,
+                artwork = downloads.artwork,
+                http = downloads.http,
+                tree = it,
+                writer = it,
+            )
+        }
+    }
+
+    /**
+     * What can be done for the song being looked at, or null when nothing can.
+     *
+     * Worked out when the song is opened rather than for the whole list, because answering it can
+     * mean reading a `.usdb` file — one round trip through the Storage Access Framework, which is
+     * nothing for one song and most of a rescan for seventy.
+     *
+     * **The button only exists when there is an answer.** A Repair that says "there is nothing I
+     * can do about this" is worse than no Repair: it invites somebody to press it, wait, and be
+     * told off. A song whose folder does not say where its media came from simply does not offer
+     * one, and the screen says why.
+     */
+    var plan by remember { mutableStateOf<RepairPlan?>(null) }
+    LaunchedEffect(selected, repairer) {
+        plan = null
+        val song = selected ?: return@LaunchedEffect
+        val fixer = repairer ?: return@LaunchedEffect
+        plan = withContext(Dispatchers.IO) { runCatching { fixer.plan(song) }.getOrNull() }
+    }
+
+    /**
+     * The songs that cannot be sung and could be, with the plan for each.
+     *
+     * **Only the ones missing their music.** Sweeping in every song missing anything would catch
+     * the twenty-five that simply have no video, and "repair everything" would then mean
+     * downloading twenty-five music videos nobody asked for. A song with no video plays perfectly
+     * well over the visualiser; a song with no audio is the only kind that is actually broken.
+     */
+    var repairable by remember { mutableStateOf<List<Pair<ScannedSong, RepairPlan>>>(emptyList()) }
+    LaunchedEffect(songs, repairer) {
+        val fixer = repairer ?: return@LaunchedEffect
+        val broken = songs.filter { it.audioId == null }
+        repairable = if (broken.isEmpty()) emptyList() else withContext(Dispatchers.IO) {
+            broken.mapNotNull { song ->
+                runCatching { fixer.plan(song) }.getOrNull()?.let { song to it }
+            }
+        }
     }
 
     val picker = rememberLauncherForActivityResult(
@@ -142,39 +257,85 @@ fun SongsScreen(
         status = tally(songs)
     }
 
+    // A finished batch rescans itself, once.
+    //
+    // Without this the screen keeps saying "Audio: missing" about a song it has just repaired,
+    // beside a line saying it got the music -- and being told two opposite things at once is worse
+    // than being told the slow one. Waiting until the queue is idle rather than rescanning per
+    // song matters: a rescan is several seconds of card reads, and doing one after each of
+    // nineteen repairs would cost more than the repairs.
+    val repairsBusy = downloads.repairs.isBusy
+    LaunchedEffect(repairsBusy) {
+        if (!repairsBusy && downloads.repairs.fixedCount > 0) {
+            cache.clear()
+            rescans++
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(GameTheme.background)
-            .padding(56.dp),
+            .padding(horizontal = 40.dp, vertical = 28.dp),
     ) {
         when (mode) {
             SongsMode.List -> {
-                Text(
-                    "Songs",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = GameTheme.lyricActive,
-                )
-                Text(
-                    if (scanning) "Found $counted so far…" else status,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = GameTheme.lyricIdle,
-                )
+                // Title and tally on the left, everything you can do on the right. A row rather
+                // than a stack because vertical space is what the grid wants: the whole reason for
+                // a grid is that a television is wide and a list of song titles uses about a fifth
+                // of that.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column {
+                        Text(
+                            "Songs",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = GameTheme.lyricActive,
+                        )
+                        Text(
+                            if (scanning) "Found $counted so far…" else status,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = GameTheme.lyricIdle,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
 
-                if (scanning) {
-                    Spacer(Modifier.height(18.dp))
-                    LoadingBar()
+                    Button(
+                        onClick = { picker.launch(null) },
+                        modifier = Modifier.focusRequester(first),
+                    ) {
+                        Text(
+                            if (treeUri == null) "Choose folder" else "Change folder",
+                            modifier = Modifier.padding(horizontal = 8.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    // Downloading needs somewhere to put a song, so it is offered only once a
+                    // folder is chosen -- the same rule Play follows on the main menu.
+                    Button(onClick = onAddSongs, enabled = treeUri != null) {
+                        Text("Add songs", modifier = Modifier.padding(horizontal = 8.dp))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Button(onClick = { cache.clear(); rescans++ }) {
+                        Text("Rescan", modifier = Modifier.padding(horizontal = 8.dp))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Button(onClick = onMenu) {
+                        Text("Main menu", modifier = Modifier.padding(horizontal = 8.dp))
+                    }
                 }
 
                 problem?.let {
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
                     Text(it, style = MaterialTheme.typography.bodyMedium, color = GameTheme.sparkWarm)
                 }
 
                 // Said once, at the top, rather than on every song: the reason Remove is missing
                 // is about the folder, not about the song being looked at.
                 if (treeUri != null && !canModify) {
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
                     Text(
                         "Choose the folder again to remove songs — the current permission is " +
                             "read-only.",
@@ -183,56 +344,133 @@ fun SongsScreen(
                     )
                 }
 
-                Spacer(Modifier.height(20.dp))
-                PickerHint()
+                // The picker's one awkward rule, said only while it is about to matter. It used to
+                // be here always, and a paragraph of instructions about a file dialog is not what
+                // this screen is for once a folder has been chosen.
+                if (treeUri == null) {
+                    Spacer(Modifier.height(16.dp))
+                    PickerHint()
+                }
 
-                Spacer(Modifier.height(20.dp))
-                Row {
-                    Button(
-                        onClick = { picker.launch(null) },
-                        modifier = Modifier.focusRequester(first),
-                    ) {
+                if (scanning) {
+                    Spacer(Modifier.height(16.dp))
+                    LoadingBar()
+                }
+
+                // One bar for the whole batch, the same arrangement the Add-songs screen uses.
+                val repairing = repairQueueProgress(downloads.repairs)
+                if (repairing != null && downloads.repairs.isBusy) {
+                    Spacer(Modifier.height(12.dp))
+                    repairSummary(downloads.repairs)?.let {
                         Text(
-                            if (treeUri == null) "Choose song folder" else "Change folder",
-                            modifier = Modifier.padding(horizontal = 12.dp),
+                            it,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = GameTheme.lyricIdle,
                         )
+                        Spacer(Modifier.height(4.dp))
                     }
-                    Spacer(Modifier.width(16.dp))
-                    // Downloading needs somewhere to put a song, so it is offered only once a
-                    // folder is chosen -- the same rule Play follows on the main menu.
-                    Button(onClick = onAddSongs, enabled = treeUri != null) {
-                        Text("Add songs", modifier = Modifier.padding(horizontal = 12.dp))
+                    ProgressBar(repairing, modifier = Modifier.fillMaxWidth())
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                // Sorting and filtering, small and across the top rather than down the side. This
+                // screen is about the songs somebody already has, so the songs get the width; the
+                // two questions worth asking about them fit on one line.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Sort", style = MaterialTheme.typography.bodySmall, color = GameTheme.lyricIdle)
+                    Spacer(Modifier.width(8.dp))
+                    for (option in SongSort.entries) {
+                        Chip(
+                            label = option.label,
+                            selected = sort == option,
+                            onClick = { sort = option },
+                        )
+                        Spacer(Modifier.width(6.dp))
                     }
-                    Spacer(Modifier.width(16.dp))
-                    Button(
-                        onClick = {
-                            cache.clear()
-                            rescans++
-                        },
-                    ) {
-                        Text("Rescan", modifier = Modifier.padding(horizontal = 12.dp))
+
+                    Spacer(Modifier.width(20.dp))
+                    Text("Show", style = MaterialTheme.typography.bodySmall, color = GameTheme.lyricIdle)
+                    Spacer(Modifier.width(8.dp))
+                    for (option in SongFilterState.entries) {
+                        Chip(
+                            label = option.label,
+                            selected = filter == option,
+                            onClick = { filter = option },
+                            // A filter matching nothing is a dead end on a remote: it takes the
+                            // focus, empties the screen, and leaves nowhere obvious to go back to.
+                            enabled = songs.any { matches(it, option) },
+                        )
+                        Spacer(Modifier.width(6.dp))
                     }
-                    Spacer(Modifier.width(16.dp))
-                    Button(onClick = onMenu) {
-                        Text("Main menu", modifier = Modifier.padding(horizontal = 12.dp))
+
+                    // Repairing lives on this row rather than up with the other actions: six
+                    // buttons across the top wrapped "Main menu" into two lines, which is exactly
+                    // the fault that made UltraStar Play unusable. It also belongs here -- it is a
+                    // thing to do *about* what the filters are showing.
+                    val waiting = repairable.filterNot { downloads.repairs.holds(it.first.textId) }
+                    if (waiting.isNotEmpty()) {
+                        Spacer(Modifier.weight(1f))
+                        Button(
+                            onClick = {
+                                waiting.forEach { downloads.repairs.add(it.first, it.second) }
+                            },
+                        ) {
+                            Text(
+                                "Repair " + waiting.size + if (waiting.size == 1) " song" else " songs",
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                            )
+                        }
                     }
                 }
 
-                Spacer(Modifier.height(28.dp))
+                Spacer(Modifier.height(14.dp))
 
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    itemsIndexed(songs) { _, scanned ->
-                        SongRow(
-                            scanned = scanned,
-                            onSelect = {
-                                selected = scanned
-                                mode = SongsMode.Managing
+                val arranged = remember(songs, sort, filter) { arrange(songs, sort, filter) }
+                val letters = remember(songs, sort) { indexLetters(songs, sort) }
+                val gridState = rememberLazyGridState()
+
+                Row(modifier = Modifier.fillMaxSize()) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(SONG_COLUMNS),
+                        state = gridState,
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        items(arranged, key = { it.textId }) { scanned ->
+                            SongCard(
+                                scanned = scanned,
+                                cover = covers[scanned.textId],
+                                onSelect = {
+                                    selected = scanned
+                                    mode = SongsMode.Managing
+                                },
+                            )
+                        }
+                    }
+
+                    if (letters.size > 1) {
+                        Spacer(Modifier.width(10.dp))
+                        LetterRail(
+                            letters = letters,
+                            modifier = Modifier.fillMaxHeight(),
+                            onJump = { letter ->
+                                val at = firstIndexUnder(arranged, sort, letter)
+                                if (at >= 0) jumpTo = at
                             },
                         )
                     }
+                }
+
+                // Scrolling is done here rather than in the rail's own click, because a jump is a
+                // suspending call and a button press is not -- and because the rail must keep the
+                // focus while the grid moves underneath it. Taking focus to the grid would mean
+                // one press per letter and then a journey back for the next.
+                LaunchedEffect(jumpTo) {
+                    val at = jumpTo ?: return@LaunchedEffect
+                    gridState.scrollToItem(at)
+                    jumpTo = null
                 }
             }
 
@@ -280,6 +518,32 @@ fun SongsScreen(
                         Text(it, style = MaterialTheme.typography.bodyMedium, color = GameTheme.sparkWarm)
                     }
 
+                    // Said where the Repair button would have been, so its absence is explained
+                    // rather than merely noticed.
+                    if (!song.isPlayable && plan == null) {
+                        Spacer(Modifier.height(14.dp))
+                        Text(
+                            "This song does not say where its music came from, so it cannot be " +
+                                "repaired. Download it again from Add songs.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = GameTheme.lyricIdle,
+                        )
+                    }
+
+                    val job = downloads.repairs.jobs.firstOrNull { it.song.textId == song.textId }
+                    job?.let {
+                        Spacer(Modifier.height(14.dp))
+                        Text(
+                            repairStatusLabel(it.status),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (it.status is RepairStatus.Failed) {
+                                GameTheme.sparkWarm
+                            } else {
+                                GameTheme.lyricIdle
+                            },
+                        )
+                    }
+
                     Spacer(Modifier.height(28.dp))
                     Row {
                         Button(
@@ -290,6 +554,20 @@ fun SongsScreen(
                             modifier = Modifier.focusRequester(first),
                         ) {
                             Text("Back", modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                        }
+                        plan?.let { ready ->
+                            if (canModify && !downloads.repairs.holds(song.textId)) {
+                                Spacer(Modifier.width(16.dp))
+                                Button(onClick = { downloads.repairs.add(song, ready) }) {
+                                    Text(
+                                        repairLabel(ready),
+                                        modifier = Modifier.padding(
+                                            horizontal = 16.dp,
+                                            vertical = 4.dp,
+                                        ),
+                                    )
+                                }
+                            }
                         }
                         if (canModify) {
                             Spacer(Modifier.width(16.dp))
@@ -376,6 +654,21 @@ fun SongsScreen(
     }
 }
 
+/**
+ * What a Repair button offers, in its own words.
+ *
+ * Naming the missing part rather than saying "Repair" is the difference between an action somebody
+ * can predict and one they have to try. Getting a song's music back and fetching a nicer picture
+ * for one that already plays are not the same act, and one word for both would make the bigger one
+ * look trivial and the smaller one look alarming.
+ */
+private fun repairLabel(plan: RepairPlan): String = when {
+    plan.needsAudio -> "Get the music"
+    plan.needsVideo && plan.needsCover -> "Get the video and artwork"
+    plan.needsVideo -> "Get the video"
+    else -> "Get the artwork"
+}
+
 /** One line of the inventory. [required] is what separates "broken" from "just doesn't have one". */
 @Composable
 private fun Inventory(label: String, present: Boolean, required: Boolean) {
@@ -391,33 +684,127 @@ private fun Inventory(label: String, present: Boolean, required: Boolean) {
     )
 }
 
+/**
+ * One song, as a card.
+ *
+ * The cover carries it, because on a shelf of seventy songs a picture is recognised from across the
+ * room and a title has to be read. A song with no cover still gets a card of exactly the same size
+ * with a plain panel where the picture goes — the grid must not go ragged over what is, on this
+ * card, a quarter of the library.
+ *
+ * The fault line only appears when there is a fault. "Ready" on every one of fifty-seven cards is
+ * fifty-seven words nobody reads, and it makes the nineteen that matter harder to see rather than
+ * easier.
+ */
 @Composable
-private fun SongRow(scanned: ScannedSong, onSelect: () -> Unit) {
+private fun SongCard(scanned: ScannedSong, cover: ImageBitmap?, onSelect: () -> Unit) {
     val fault = faultWith(scanned)
-    Button(onClick = onSelect, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    scanned.song.metadata.title.ifBlank { scanned.folderName },
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                Text(
-                    scanned.song.metadata.artist.ifBlank { "Unknown artist" },
-                    fontSize = 15.sp,
-                    color = GameTheme.lyricIdle,
-                )
+    Button(
+        onClick = onSelect,
+        modifier = Modifier.fillMaxWidth(),
+        // A rectangle, said explicitly. `androidx.tv.material3.Button` is a *pill* by default,
+        // which is right for a word and catastrophic for anything tall: a card came out as an
+        // ellipse with its own title clipped off at the sides -- "7 Years" reading as "Years".
+        // The same shape the dome-shaped download row turned out to be, arrived at from the
+        // other direction.
+        shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(GameTheme.noteIdle),
+            ) {
+                cover?.let {
+                    Image(
+                        bitmap = it,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
+
+            Spacer(Modifier.height(8.dp))
             Text(
-                fault ?: "Ready",
-                fontSize = 16.sp,
-                color = if (fault == null) GameTheme.lyricIdle else GameTheme.sparkWarm,
+                scanned.song.metadata.title.ifBlank { scanned.folderName },
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
+            Text(
+                scanned.song.metadata.artist.ifBlank { "Unknown artist" },
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = GameTheme.lyricIdle,
+            )
+            if (fault != null) {
+                Text(fault, fontSize = 12.sp, maxLines = 1, color = GameTheme.sparkWarm)
+            }
+        }
+    }
+}
+
+/**
+ * A small two-state button, for the questions that are settings rather than actions.
+ *
+ * Distinct from an ordinary Button on purpose: sorting and filtering *stay* chosen, and a control
+ * that looks the same before and after it is pressed cannot say which of five things is in force.
+ */
+@Composable
+private fun Chip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        colors = ButtonDefaults.colors(
+            containerColor = if (selected) GameTheme.playerColors[0] else GameTheme.trackBackground,
+            contentColor = if (selected) GameTheme.background else GameTheme.lyricIdle,
+        ),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+    ) {
+        Text(label, fontSize = 13.sp)
+    }
+}
+
+/**
+ * The letters down the right-hand edge, for jumping.
+ *
+ * On the right because that is where every alphabetical index has been since address books, and
+ * because the grid is what the left of the screen is for. The one rule it has to obey on a remote:
+ * **it keeps the focus while the grid moves**. Scrolling by taking focus to the target card would
+ * cost a press to get back for the next letter, which is the opposite of what a jump list is for.
+ */
+@Composable
+private fun LetterRail(
+    letters: List<Char>,
+    modifier: Modifier = Modifier,
+    onJump: (Char) -> Unit,
+) {
+    Column(
+        modifier = modifier.width(46.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        for (letter in letters) {
+            Button(
+                onClick = { onJump(letter) },
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                colors = ButtonDefaults.colors(containerColor = GameTheme.trackBackground),
+                shape = ButtonDefaults.shape(shape = RoundedCornerShape(4.dp)),
+                contentPadding = PaddingValues(0.dp),
+            ) {
+                Text(letter.toString(), fontSize = 14.sp, color = GameTheme.lyricIdle)
+            }
         }
     }
 }

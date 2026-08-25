@@ -77,16 +77,16 @@ class SongDownloaderTest {
     }
 
     /**
-     * Without a Range header Google serves the file at roughly playback speed -- measured at
-     * 31 KB/s against 10.1 MB/s with it. The download still works, so nothing fails; it just
-     * takes two minutes and reads as a hang. That is exactly the kind of thing a later tidy-up
-     * removes as a no-op, so it is pinned here.
+     * Without a Range header Google serves a media URL at roughly 31 KB/s, and a *bounded* range
+     * is what keeps each response under the size YouTube throttles at. The download still works
+     * without either, so nothing fails; it just crawls and reads as a hang. That is exactly the
+     * kind of thing a later tidy-up removes as a no-op, so it is pinned here.
      */
     @Test
-    fun `asks for the music as a range`() {
+    fun `asks for the music as a bounded range`() {
         val net = FakeNet()
         downloaderFor(net, FakeCard()).download(bowie)
-        assertEquals("bytes=0-", net.audioRequestHeaders["Range"])
+        assertEquals(listOf("bytes=0-2047"), net.audioRanges)
     }
 
     @Test
@@ -428,10 +428,10 @@ class SongDownloaderTest {
     }
 
     @Test
-    fun `the video is fetched with the Range header too`() {
+    fun `the video is fetched in bounded ranges too`() {
         val net = FakeNet(youTubeReply = PLAYABLE_WITH_VIDEO)
         downloaderFor(net, FakeCard()).download(bowie)
-        assertEquals("bytes=0-", net.videoRequestHeaders["Range"])
+        assertEquals(listOf("bytes=0-4095"), net.videoRanges)
     }
 
 
@@ -509,8 +509,10 @@ class SongDownloaderTest {
     ) : Http {
         var requests = 0
         var itunesRequests = 0
-        var audioRequestHeaders: Map<String, String> = emptyMap()
-        var videoRequestHeaders: Map<String, String> = emptyMap()
+
+        /** Every `Range` the media URLs were asked for, in order, so chunking can be asserted. */
+        val audioRanges = mutableListOf<String>()
+        val videoRanges = mutableListOf<String>()
 
         /** Every video the player API was asked about, in order. */
         val playerVideoIds = mutableListOf<String>()
@@ -520,8 +522,8 @@ class SongDownloaderTest {
             val url = request.url
             val isVideoStream = url.contains("googlevideo") && url.contains("vid=1")
             if (url.contains("googlevideo")) {
-                if (isVideoStream) videoRequestHeaders = request.headers
-                else audioRequestHeaders = request.headers
+                val range = request.headers["Range"].orEmpty()
+                if (isVideoStream) videoRanges += range else audioRanges += range
             }
             if (url.contains("youtubei/v1/player")) {
                 videoIdIn(request.body?.decodeToString().orEmpty())
@@ -533,8 +535,8 @@ class SongDownloaderTest {
                 url.startsWith("https://www.youtube.com/") -> HttpReply(200, YT_HOME, NO_HEADERS)
                 isVideoStream ->
                     if (videoFails) HttpReply(500, "", NO_HEADERS)
-                    else HttpReply(200, ByteArray(4096) { 9 }, NO_HEADERS)
-                url.contains("googlevideo") -> HttpReply(200, ByteArray(2048) { 7 }, NO_HEADERS)
+                    else ranged(ByteArray(4096) { 9 }, request)
+                url.contains("googlevideo") -> ranged(ByteArray(2048) { 7 }, request)
                 url.startsWith(ITUNES) ->
                     HttpReply(200, if (itunesFinds) ITUNES_HIT else ITUNES_MISS, NO_HEADERS)
                 // coverFails turns off *every* source, not just USDB's: with three of them, a
@@ -555,6 +557,22 @@ class SongDownloaderTest {
                     else HttpReply(200, waitPage(waitSeconds), NO_HEADERS)
                 else -> HttpReply(404, "", NO_HEADERS)
             }
+        }
+
+        /**
+         * Serves a `Range` the way a real CDN does.
+         *
+         * Not decoration: media is now fetched as a series of bounded ranges, so a fake that
+         * ignored the header would hand back the whole file to every request and the chunking
+         * would look like it worked while being untested.
+         */
+        private fun ranged(body: ByteArray, request: HttpRequest): HttpReply {
+            val spec = request.headers["Range"]?.removePrefix("bytes=")
+                ?: return HttpReply(200, body, NO_HEADERS)
+            val start = spec.substringBefore('-').toIntOrNull() ?: 0
+            val end = spec.substringAfter('-').toIntOrNull() ?: (body.size - 1)
+            if (start >= body.size) return HttpReply(416, "", NO_HEADERS)
+            return HttpReply(206, body.copyOfRange(start, minOf(end + 1, body.size)), NO_HEADERS)
         }
     }
 
@@ -594,6 +612,12 @@ class SongDownloaderTest {
             children.getOrPut(parentId) { mutableListOf() } += TreeEntry(id, renameTo(name), false)
             contents[id] = bytes
             return id
+        }
+
+        override fun overwrite(documentId: String, bytes: ByteArray): Boolean {
+            if (documentId !in contents) return false
+            contents[documentId] = bytes
+            return true
         }
 
         override fun delete(documentId: String): Boolean {

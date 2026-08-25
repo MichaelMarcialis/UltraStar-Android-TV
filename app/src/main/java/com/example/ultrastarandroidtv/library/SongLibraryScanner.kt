@@ -14,6 +14,15 @@ data class ScannedSong(
     val videoId: String?,
     val coverId: String?,
     val backgroundId: String?,
+    /**
+     * The `.usdb` file USDB Syncer left in the folder, if there is one.
+     *
+     * Kept because it is where a broken song's media ids survive — see
+     * [com.example.ultrastarandroidtv.usdb.UsdbSidecar]. Recorded during the walk rather than
+     * looked up later: the folder listing is already in hand here and asking for it again is a
+     * round trip through the Storage Access Framework, which is most of what a scan costs.
+     */
+    val sidecarId: String? = null,
 ) {
     /** A song whose audio is missing cannot be played, however well it parsed. */
     val isPlayable: Boolean get() = audioId != null
@@ -140,6 +149,9 @@ class SongLibraryScanner(
         videoId = findVideo(song.metadata.video, entries),
         coverId = findFile(song.metadata.cover, entries),
         backgroundId = findFile(song.metadata.background, entries),
+        sidecarId = entries.firstOrNull {
+            !it.isDirectory && it.name.endsWith(".usdb", ignoreCase = true)
+        }?.id,
     )
 
     /**

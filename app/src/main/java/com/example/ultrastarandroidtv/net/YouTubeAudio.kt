@@ -183,19 +183,15 @@ data class AudioFormat(
     val container: String get() = containerFor(mimeType)
 
     /**
-     * Headers this stream must be fetched with.
+     * Headers a fetch of this stream needs beyond its `Range`, which is empty today.
      *
-     * **The `Range` header is not an optimisation, it is the difference between working and not.**
-     * Measured on 2026-08-20 against the same URL: a plain `GET` came back at **31 KB/s**, and the
-     * identical request carrying `Range: bytes=0-` came back at **10.1 MB/s**. Google throttles
-     * whole-file requests to roughly playback speed — sensible for a video player, ruinous for a
-     * download — and asking for a range opts out of it. Without this a four-megabyte song takes
-     * about two minutes and looks exactly like a hang.
-     *
-     * `bytes=0-` asks for the whole file, so the reply is a `206` carrying everything; there is no
-     * chunking to reassemble. Do not "simplify" this away.
+     * **The `Range` itself belongs to [com.example.ultrastarandroidtv.net.downloadInChunks] and
+     * must not be set here.** A plain `GET` of a YouTube media URL is served at about 31 KB/s, so
+     * one is always required — but a single request carrying `Range: bytes=0-` is throttled just
+     * as hard once the file passes 10 MiB, which is measured in detail on that function. The size
+     * of each response is the thing that matters, and only the chunked fetch can bound it.
      */
-    val fetchHeaders: Map<String, String> get() = mapOf("Range" to "bytes=0-")
+    val fetchHeaders: Map<String, String> get() = emptyMap()
 
     /** Codec string YouTube declared, e.g. `mp4a.40.2` or `opus`. Empty when it did not say. */
     val codec: String
@@ -216,8 +212,8 @@ data class VideoFormat(
     /** File extension to save this as: `mp4`, `webm`. */
     val container: String get() = containerFor(mimeType)
 
-    /** The same header for the same measured reason — see [AudioFormat.fetchHeaders]. */
-    val fetchHeaders: Map<String, String> get() = mapOf("Range" to "bytes=0-")
+    /** The same, for the same reason — see [AudioFormat.fetchHeaders]. */
+    val fetchHeaders: Map<String, String> get() = emptyMap()
 
     /** Codec string YouTube declared, e.g. `avc1.4d401f` or `vp9`. Empty when it did not say. */
     val codec: String

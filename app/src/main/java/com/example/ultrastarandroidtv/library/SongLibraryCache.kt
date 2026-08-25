@@ -56,7 +56,20 @@ class SongLibraryCache {
         songs = songs.filterNot { it.folderId == folderId }
     }
 
-    /** Forgets everything, so the next visit scans. */
+    /**
+     * Says the card has changed without throwing away what is known about it.
+     *
+     * The next visit rescans, exactly as [clear] would — but everything already found stays
+     * readable in the meantime, and that difference matters. Downloading a song has to invalidate
+     * the scan, and clearing it outright meant the Add-songs screen instantly forgot every song
+     * already on the card and offered them all over again. What is here is out of date by exactly
+     * one song, which is a far better answer than nothing at all.
+     */
+    fun markStale() {
+        loaded = false
+    }
+
+    /** Forgets everything, so the next visit scans. Use when the *folder* changed. */
     fun clear() {
         scannedTree = null
         songs = emptyList()

@@ -91,6 +91,16 @@ class SafDocumentTree(
      * Cleans up after itself: a document that was created but could not be filled is deleted
      * rather than left as an empty file that looks like a song.
      */
+    /**
+     * Truncates and rewrites an existing document.
+     *
+     * `"wt"` rather than `"w"`: without the truncate flag a shorter replacement leaves the tail of
+     * the old file behind, which for a chart means a song with two endings.
+     */
+    override fun overwrite(documentId: String, bytes: ByteArray): Boolean = runCatching {
+        resolver.openOutputStream(uriFor(documentId), "wt")?.use { it.write(bytes) } != null
+    }.getOrDefault(false)
+
     override fun writeFile(
         parentId: String,
         name: String,
