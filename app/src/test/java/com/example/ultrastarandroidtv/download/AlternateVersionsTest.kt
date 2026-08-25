@@ -104,6 +104,30 @@ class AlternateVersionsTest {
         assertTrue(sameSongAs(wanted, found).isEmpty())
     }
 
+    /**
+     * The dangerous case, and the reason titles are compared for equality rather than containment.
+     *
+     * "Hello" is contained in "Hello Again". Under the old rule a song whose music had gone could
+     * be silently replaced by a *different song* with a longer name -- which is the worst outcome
+     * this file has, because nobody finds out until they press play on it.
+     */
+    @Test
+    fun `a longer title by the same artist is a different song`() {
+        val wanted = song(1, "Adele", "Hello")
+        val found = listOf(song(2, "Adele", "Hello Again"))
+
+        assertTrue(sameSongAs(wanted, found).isEmpty())
+    }
+
+    /** A remix or a re-recording is its own thing, and its own chart timing. */
+    @Test
+    fun `a bracketed arrangement in the title is not the same recording`() {
+        val wanted = song(1, "Disney's Moana", "How Far I'll Go")
+        val found = listOf(song(2, "Disney's Moana", "How Far I'll Go (Hardstyle)"))
+
+        assertTrue(sameSongAs(wanted, found).isEmpty())
+    }
+
     /** The chart that just failed must never be offered as its own replacement. */
     @Test
     fun `never offers the version that just failed`() {

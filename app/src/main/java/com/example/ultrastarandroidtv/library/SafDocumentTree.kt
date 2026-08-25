@@ -92,14 +92,40 @@ class SafDocumentTree(
      * rather than left as an empty file that looks like a song.
      */
     /**
-     * Truncates and rewrites an existing document.
+     * Rewrites an existing document, and puts the old contents back if that goes wrong.
      *
-     * `"wt"` rather than `"w"`: without the truncate flag a shorter replacement leaves the tail of
-     * the old file behind, which for a chart means a song with two endings.
+     * `"wt"` rather than `"w"`: without the truncate flag a shorter replacement leaves the tail
+     * of the old file behind, which for a chart means a song with two endings.
+     *
+     * **But `"wt"` empties the file before a single new byte is written.** A card that fills up,
+     * is pulled out, or simply throws half way then leaves nothing where the chart used to be --
+     * and the chart is the one part of a song that cannot be fetched again from anywhere. So the
+     * old bytes are read first and written back if the write fails. A chart is a few kilobytes;
+     * the guard costs one extra read of a small file.
+     *
+     * Not a temporary sibling and a rename, which is the textbook answer: that needs a file
+     * created, filled, the original deleted and the new one renamed, and a failure *between* the
+     * delete and the rename loses the chart just as completely with more moving parts to get
+     * wrong. Holding a few kilobytes is the smaller and more certain guard.
      */
-    override fun overwrite(documentId: String, bytes: ByteArray): Boolean = runCatching {
-        resolver.openOutputStream(uriFor(documentId), "wt")?.use { it.write(bytes) } != null
-    }.getOrDefault(false)
+    override fun overwrite(documentId: String, bytes: ByteArray): Boolean {
+        val original = runCatching { readBytes(documentId) }.getOrNull()
+
+        val written = runCatching {
+            resolver.openOutputStream(uriFor(documentId), "wt")?.use { it.write(bytes) } != null
+        }.getOrDefault(false)
+        if (written) return true
+
+        // Best effort, and nothing more can be promised -- if the card has gone, the restore
+        // goes with it. It costs one attempt, and it is the difference between a bad day and
+        // a song nobody can sing again.
+        if (original != null) {
+            runCatching {
+                resolver.openOutputStream(uriFor(documentId), "wt")?.use { it.write(original) }
+            }
+        }
+        return false
+    }
 
     override fun writeFile(
         parentId: String,

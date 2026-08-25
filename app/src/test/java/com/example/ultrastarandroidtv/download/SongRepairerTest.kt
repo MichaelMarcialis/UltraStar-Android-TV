@@ -68,12 +68,27 @@ class SongRepairerTest {
     /**
      * No offer when there is nothing to offer. A Repair button that answers "there is nothing I
      * can do about this" is worse than no button — it invites a press and then a telling-off.
+     *
+     * With no media source the *music* is beyond reach, and the plan has to say so rather than
+     * promising a repair it cannot perform. What it may still offer is artwork, which comes from
+     * the song's own name — see the cover-only test below.
      */
     @Test
-    fun `offers nothing when the folder does not say where the media came from`() {
+    fun `a folder that does not say where its media came from cannot get its music back`() {
         val card = FakeFolder(chart = CHART_WITHOUT_VIDEO, sidecar = null)
 
-        assertNull(repairerFor(card).plan(card.song(audio = null)))
+        val plan = repairerFor(card).plan(card.song(audio = null))
+
+        assertFalse("music cannot be promised without knowing where it lives", plan!!.needsAudio)
+        assertFalse(plan.needsVideo)
+    }
+
+    /** Nothing missing and nothing fetchable means no button at all. */
+    @Test
+    fun `offers nothing when there is nothing left to get`() {
+        val card = FakeFolder(chart = CHART_WITHOUT_VIDEO, sidecar = null)
+
+        assertNull(repairerFor(card).plan(card.song(audio = "a", video = "v", cover = "c")))
     }
 
     @Test
@@ -190,6 +205,57 @@ class SongRepairerTest {
         assertTrue(card.chartText().contains("#MP3:David Bowie - Golden Years.mp3"))
     }
 
+    /**
+     * Artwork does not come from YouTube, so a missing video id must not cancel fetching it.
+     *
+     * A playable song wearing a thumbnail, whose chart names no video and which has no sidecar, can
+     * still have a proper cover found from its artist and title alone. Refusing to offer that
+     * because of an unrelated missing id was refusing the one repair that was possible.
+     */
+    @Test
+    fun `a cover can be repaired without knowing where the media came from`() {
+        val card = FakeFolder(chart = CHART_WITHOUT_VIDEO, sidecar = null)
+        val song = card.song(audio = "audio", video = "video")
+
+        val plan = repairerFor(card).plan(song)!!
+
+        assertNull("nothing says where media would come from", plan.videoId)
+        assertTrue(plan.needsCover)
+        assertFalse("and so neither of those can be attempted", plan.needsAudio)
+        assertFalse(plan.needsVideo)
+    }
+
+    /** A cover-only repair must not be blocked by a video that has since been taken down. */
+    @Test
+    fun `a removed video does not stop the artwork being fetched`() {
+        val card = FakeFolder(chart = CHART_PLAYABLE, sidecar = null)
+        val song = card.song(audio = "audio", video = "video")
+        val repairer = repairerFor(card, net = FakeNet(playable = false))
+
+        val outcome = repairer.repair(song, repairer.plan(song)!!) as RepairOutcome.Repaired
+
+        assertTrue(outcome.cover)
+    }
+
+    /**
+     * A file the chart does not name is litter, and SAF *suffixes* a name that is already taken —
+     * so retrying would leave one more orphan each time while the song still would not play.
+     */
+    @Test
+    fun `music that cannot be pointed at is removed again`() {
+        val card = FakeFolder(chart = CHART_WITHOUT_VIDEO, sidecar = SIDECAR, refuseChartRewrite = true)
+        val song = card.song(audio = null)
+        val repairer = repairerFor(card)
+
+        val outcome = repairer.repair(song, repairer.plan(song)!!)
+
+        assertTrue(outcome is RepairOutcome.Failed)
+        assertTrue(
+            "no orphaned audio may be left behind",
+            card.names().none { it.endsWith(".m4a") },
+        )
+    }
+
     // -------------------------------------------------------------------------------------
     // The sidecar itself
     // -------------------------------------------------------------------------------------
@@ -229,7 +295,11 @@ class SongRepairerTest {
     )
 
     /** One song's folder, with whatever is in it. */
-    private class FakeFolder(chart: String, sidecar: String?) : DocumentTree, DocumentWriter {
+    private class FakeFolder(
+        chart: String,
+        sidecar: String?,
+        private val refuseChartRewrite: Boolean = false,
+    ) : DocumentTree, DocumentWriter {
 
         override val rootId = "root"
         private val entries = mutableListOf<TreeEntry>()
@@ -280,6 +350,7 @@ class SongRepairerTest {
         ): String = put(name, bytes)
 
         override fun overwrite(documentId: String, bytes: ByteArray): Boolean {
+            if (refuseChartRewrite) return false
             if (documentId !in contents) return false
             contents[documentId] = bytes
             return true

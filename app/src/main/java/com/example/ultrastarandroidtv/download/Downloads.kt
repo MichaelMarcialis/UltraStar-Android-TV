@@ -252,10 +252,22 @@ class Downloads(private val context: Context) {
         val sharing = runCatching {
             card.list(job.song.folderId).count { it.name.endsWith(".txt", ignoreCase = true) }
         }.getOrDefault(1)
-        card.delete(if (sharing > 1) job.song.textId else job.song.folderId)
+        val removed = card.delete(if (sharing > 1) job.song.textId else job.song.folderId)
 
         _downloaded.add(outcome.folderName.lowercase())
-        return RepairStatus.Done("Its music had gone — replaced with ${other.artist}'s version")
+
+        // The delete can fail -- a card pulled out, a provider in a mood -- and saying
+        // "replaced" then would be a lie with consequences: both songs are in the library,
+        // one of them silent, and the picker shows them side by side. The new song is real
+        // either way, so this is still a success; it just has to say what is actually there.
+        return if (removed) {
+            RepairStatus.Done("Its music had gone — replaced with ${other.artist}'s version")
+        } else {
+            RepairStatus.Done(
+                "Added ${other.artist}'s version — the old one is still there and can be " +
+                    "removed from the Songs screen",
+            )
+        }
     }
 
     private suspend fun runOne(entry: QueuedSong): QueueStatus {

@@ -48,10 +48,15 @@ import kotlinx.coroutines.delay
 fun DownloadNotice(downloads: Downloads, visible: Boolean) {
     val announcement = downloads.announcement
 
-    // The timer runs even while the notice is hidden, so a song does not come back to a stale
-    // notice about something that finished three minutes ago.
-    LaunchedEffect(announcement) {
-        if (announcement == null) return@LaunchedEffect
+    // The clock starts when the notice appears, not when the download finished.
+    //
+    // It used to run while hidden, on the theory that coming out of a song should not be met
+    // with news from three minutes ago. That was backwards: downloads are held during a song,
+    // so the only thing this could ever hide is one that landed in its first seconds -- and
+    // expiring that unseen means the single report anybody gets is the one they never see.
+    // Late news is still news; no news is a download that appears to have vanished.
+    LaunchedEffect(announcement, visible) {
+        if (announcement == null || !visible) return@LaunchedEffect
         delay(ANNOUNCEMENT_SECONDS * 1_000L)
         downloads.dismissAnnouncement()
     }

@@ -108,13 +108,13 @@ fun sameSongAs(
     excludeSongId: Int?,
     found: List<UsdbSong>,
 ): List<UsdbSong> {
-    val wantedTitle = loosely(title)
+    val wantedTitle = loosely(withoutArrangementTag(title))
     if (artist.isBlank() || wantedTitle.isEmpty()) return emptyList()
 
     return found.filter { other ->
         other.songId != excludeSongId &&
             sameArtist(other.artist, artist) &&
-            oneContainsTheOther(loosely(other.title), wantedTitle)
+            loosely(withoutArrangementTag(other.title)) == wantedTitle
     }
 }
 
@@ -127,8 +127,22 @@ private fun loosely(text: String): String = text
     .filter { it.isNotBlank() }
     .joinToString(" ")
 
-private fun oneContainsTheOther(a: String, b: String): Boolean =
-    a.isNotEmpty() && b.isNotEmpty() && (a.contains(b) || b.contains(a))
+/**
+ * A title with USDB's own arrangement tag taken off, so `[DUET]` is not part of the name.
+ *
+ * Titles are then compared for **equality**, not containment. Containment was the first rule
+ * and it is dangerous in one specific way: "Hello" is contained in "Hello Again", so a song
+ * whose music had gone could be replaced by a different song with a longer name -- and a wrong
+ * song on the card is the failure nobody notices until they press play on it.
+ *
+ * **Square brackets only.** A round bracket in a title is usually part of the song -- "(A Man
+ * After Midnight)" -- or marks a genuinely different recording -- "(Hardstyle)" -- and folding
+ * those together is the same mistake by another road. The same distinction the iTunes cover
+ * search draws, for the same reason.
+ */
+private fun withoutArrangementTag(title: String): String = title.replace(ARRANGEMENT_TAG, " ")
+
+private val ARRANGEMENT_TAG = Regex("""\[[^\]]*\]""")
 
 /**
  * Whether two artist strings name the same act.

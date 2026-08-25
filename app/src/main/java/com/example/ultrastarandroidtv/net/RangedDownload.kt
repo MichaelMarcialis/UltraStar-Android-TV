@@ -101,8 +101,19 @@ fun downloadInChunks(
             throw e
         }
 
-        // A range that returned nothing is the end of the file, whatever the length claimed.
-        if (got == 0L) break
+        // A range that returned nothing is the end of the file -- but only when nobody said
+        // how long the file was. With a declared length still unmet, an empty 2xx is a
+        // *short read*, and treating it as the end would write a truncated song and call it
+        // finished. That is the same corruption a declared-length 416 is already rejected
+        // for, and it has to be rejected the same way rather than saved silently.
+        if (got == 0L) {
+            if (declaredLength > 0L && written < declaredLength) {
+                throw HttpFailure(
+                    "The download stopped after $written of $declaredLength bytes.",
+                )
+            }
+            break
+        }
     }
 
     return written
@@ -122,10 +133,35 @@ fun fetchInChunks(
     headers: Map<String, String> = emptyMap(),
     declaredLength: Long = -1L,
     chunkBytes: Int = DOWNLOAD_CHUNK_BYTES,
+    maxBytes: Long = MAX_IN_MEMORY_BYTES,
 ): ByteArray {
-    val out = ByteArrayOutputStream(if (declaredLength > 0L) declaredLength.toInt() else DEFAULT_BUFFER_SIZE)
+    // A declared length is somebody else's number, and using it as an allocation size hands
+    // a remote server the size of this app's heap -- 192 MB on this device, of which
+    // `toByteArray` then wants a second copy. A length above two gigabytes is worse than
+    // that: it truncates to a *negative* int and throws before a byte has been fetched.
+    val expected =
+        if (declaredLength in 1..maxBytes) declaredLength.toInt() else DEFAULT_BUFFER_SIZE
+    val out = object : ByteArrayOutputStream(expected) {
+        override fun write(source: ByteArray, offset: Int, length: Int) {
+            if (count.toLong() + length > maxBytes) {
+                throw HttpFailure("That file is larger than ${maxBytes / (1024 * 1024)} MB.")
+            }
+            super.write(source, offset, length)
+        }
+    }
     downloadInChunks(http, url, out, headers, declaredLength, chunkBytes)
     return out.toByteArray()
 }
+
+/**
+ * The most any [fetchInChunks] caller may hold in memory at once.
+ *
+ * The same cap [UrlHttp] already applies to a whole-body read, which fetching in chunks was
+ * otherwise quietly routing around. Everything that comes through here is a song's audio or a
+ * cover -- a few megabytes -- and anything claiming to be sixty-four times that is a mistake
+ * worth refusing rather than a file worth having. A music video never comes through here at
+ * all: it is streamed straight to the card by [downloadInChunks].
+ */
+const val MAX_IN_MEMORY_BYTES: Long = 64L * 1024 * 1024
 
 private const val RANGE_NOT_SATISFIABLE = 416

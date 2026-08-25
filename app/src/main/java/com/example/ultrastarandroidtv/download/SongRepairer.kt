@@ -29,8 +29,16 @@ const val MIN_COVER_PIXELS = 400
 
 /** What a song on the card is missing, and where the missing part can be got from. */
 data class RepairPlan(
-    /** The YouTube video the media comes from. */
-    val videoId: String,
+    /**
+     * The YouTube video the media comes from, or null when the folder does not say.
+     *
+     * Nullable because **artwork does not come from YouTube**. A playable song wearing a
+     * thumbnail, whose chart names no video and which has no sidecar, can still have a proper
+     * cover fetched from iTunes on the strength of its artist and title alone — and refusing
+     * to offer that because of a missing video id would be refusing the one repair that was
+     * actually possible.
+     */
+    val videoId: String?,
     val needsAudio: Boolean,
     val needsVideo: Boolean,
     val needsCover: Boolean,
@@ -132,11 +140,15 @@ class SongRepairer(
      */
     fun plan(song: ScannedSong): RepairPlan? {
         val tags = mediaTagsFor(song)
-        val videoId = tags.audioSource ?: return null
+        val videoId = tags.audioSource
+
+        // Media can only be fetched when the folder says where it came from; artwork can be
+        // fetched from the song's own name. Deciding those separately is what stops a missing
+        // video id from cancelling a repair that never needed one.
         val plan = RepairPlan(
             videoId = videoId,
-            needsAudio = song.audioId == null,
-            needsVideo = song.videoId == null,
+            needsAudio = song.audioId == null && videoId != null,
+            needsVideo = song.videoId == null && videoId != null,
             needsCover = song.coverId == null,
             needsBetterCover = song.coverId != null && isThumbnail(song.coverId),
             coverUrl = tags.coverFile?.takeIf {
@@ -194,20 +206,26 @@ class SongRepairer(
         plan: RepairPlan,
         onStage: (RepairStage) -> Unit,
     ): RepairOutcome {
-        onStage(RepairStage.Looking)
-        val media: ResolvedMedia = when (val lookup = youTube.resolve(plan.videoId)) {
-            is AudioLookup.Found -> lookup.media
-            is AudioLookup.Refused -> return RepairOutcome.Failed(
-                DownloadProblem.AUDIO_UNAVAILABLE,
-                explain(lookup),
-            )
+        // Only asked when there is media to fetch. A cover-only repair must not be blocked by
+        // a video that has since been taken down -- the artwork is still perfectly gettable.
+        val media: ResolvedMedia? = if (plan.needsAudio || plan.needsVideo) {
+            onStage(RepairStage.Looking)
+            when (val lookup = youTube.resolve(plan.videoId.orEmpty())) {
+                is AudioLookup.Found -> lookup.media
+                is AudioLookup.Refused -> return RepairOutcome.Failed(
+                    DownloadProblem.AUDIO_UNAVAILABLE,
+                    explain(lookup),
+                )
+            }
+        } else {
+            null
         }
 
         val base = song.folderName.ifBlank { safeFileName(song.song.metadata.title) }
         var gotAudio = false
         var gotCover = false
 
-        if (plan.needsAudio) {
+        if (plan.needsAudio && media != null) {
             onStage(RepairStage.Music)
             val bytes = fetchInChunks(
                 http = http,
@@ -234,6 +252,11 @@ class SongRepairer(
             // reason: a `#MP3:` naming a file that is not there is a song that will not play.
             val savedAs = tree.list(song.folderId).firstOrNull { it.id == audioId }?.name ?: name
             if (!repointChart(song, audioFile = savedAs, coverFile = null)) {
+                // The audio goes with the failure. Left behind it is a file the chart does not
+                // name, and the next attempt would be given a *suffixed* copy by SAF rather
+                // than replacing it -- so every retry would leave one more orphan in the
+                // folder while the song still would not play.
+                writer.delete(audioId)
                 return RepairOutcome.Failed(
                     DownloadProblem.COULD_NOT_WRITE,
                     "The music was saved but the song file could not be updated.",
@@ -255,19 +278,23 @@ class SongRepairer(
                 else -> {
                     val name = "$base [CO].jpg"
                     val coverId = writer.writeFile(song.folderId, name, "image/jpeg", bytes)
-                    coverId != null && repointChart(
+                    val pointed = coverId != null && repointChart(
                         song,
                         audioFile = null,
                         coverFile = tree.list(song.folderId)
                             .firstOrNull { it.id == coverId }?.name ?: name,
                     )
+                    // Same rule as the music: a picture the chart does not name is litter, and
+                    // retrying would add another beside it rather than replacing it.
+                    if (!pointed && coverId != null) writer.delete(coverId)
+                    pointed
                 }
             }
         }
 
         // Last, and allowed to fail quietly: a song with no video gets the visualiser, which is
         // not a fault worth reporting as one.
-        val picture = media.video
+        val picture = media?.video
         val gotVideo = plan.needsVideo && picture != null &&
             saveVideo(song.folderId, base, picture, onStage)
 

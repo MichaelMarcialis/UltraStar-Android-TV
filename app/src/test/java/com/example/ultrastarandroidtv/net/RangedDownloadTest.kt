@@ -149,6 +149,80 @@ class RangedDownloadTest {
         assertEquals(500, (thrown as HttpFailure).status)
     }
 
+    /**
+     * A short read must fail rather than pass as the end of the file.
+     *
+     * An empty 2xx in the middle of a download used to break the loop and return what had been
+     * collected, which wrote a truncated song and reported success -- the same corruption a
+     * declared-length 416 was already being rejected for, arrived at through a different door.
+     */
+    @Test
+    fun `a range that stops early is a failure, not an ending`() {
+        val net = FakeRanges(ByteArray(600))
+
+        val thrown = runCatching {
+            downloadInChunks(net, URL, ByteArrayOutputStream(), declaredLength = 900, chunkBytes = 300)
+        }.exceptionOrNull()
+
+        assertTrue("a truncated file must not pass as complete", thrown is HttpFailure)
+    }
+
+    /** With no declared length, the same empty range is simply where the file ends. */
+    @Test
+    fun `an empty range still ends an undeclared read`() {
+        val net = FakeRanges(ByteArray(600))
+
+        assertEquals(
+            600L,
+            downloadInChunks(net, URL, ByteArrayOutputStream(), declaredLength = -1, chunkBytes = 300),
+        )
+    }
+
+    // -------------------------------------------------------------------------------------
+    // What may be held in memory
+    // -------------------------------------------------------------------------------------
+
+    /**
+     * A declared length is somebody else's number, and it used to be handed straight to an
+     * allocation. This app's heap is 192 MB and `toByteArray` wants a second copy of whatever is
+     * collected, so a wrong or hostile length could take the process down before a byte arrived.
+     */
+    @Test
+    fun `refuses to collect more than the cap allows`() {
+        val net = FakeRanges(ByteArray(5_000))
+
+        val thrown = runCatching {
+            fetchInChunks(net, URL, declaredLength = 5_000, chunkBytes = 1_000, maxBytes = 2_000)
+        }.exceptionOrNull()
+
+        assertTrue(thrown is HttpFailure)
+    }
+
+    /**
+     * A length beyond two gigabytes truncates to a *negative* int, and
+     * `ByteArrayOutputStream(-1)` throws before a single byte is fetched.
+     *
+     * The download still fails — a declared length that nothing matches is bogus data and a short
+     * read is refused on purpose — but it has to fail as a *download*, having actually tried,
+     * rather than as an allocation error thrown at the door.
+     */
+    @Test
+    fun `an absurd declared length does not become an allocation`() {
+        val net = FakeRanges(ByteArray(400))
+
+        val thrown = runCatching {
+            fetchInChunks(net, URL, declaredLength = Long.MAX_VALUE, chunkBytes = 200)
+        }.exceptionOrNull()
+
+        assertTrue("must not be an allocation failure", thrown is HttpFailure)
+        assertTrue("and it must have got as far as asking", net.ranges.isNotEmpty())
+    }
+
+    @Test
+    fun `the cap is the same one a whole-body read already had`() {
+        assertEquals(64L * 1024 * 1024, MAX_IN_MEMORY_BYTES)
+    }
+
     // -------------------------------------------------------------------------------------
     // Talking to a screen
     // -------------------------------------------------------------------------------------
