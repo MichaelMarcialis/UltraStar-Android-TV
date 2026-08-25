@@ -308,6 +308,97 @@ private fun songText(
 
 // ---- a document tree held in memory, so the scanning rules can be tested without a device ----
 
+/**
+ * USDB Syncer's sidecar, which is the bridge that makes a desktop-created broken song repairable.
+ *
+ * Worth its own tests because the failure is silent: a song whose sidecar the scanner does not
+ * record simply stops offering a Repair button, and nothing anywhere says why. All nineteen of the
+ * audio-less folders on the real card depend on this one field.
+ */
+class SidecarScanningTest {
+
+    @Test
+    fun `records the sidecar sitting beside a song`() {
+        val tree = tree {
+            dir("David Bowie - Golden Years") {
+                file("David Bowie - Golden Years.txt", SONG)
+                file("David Bowie - Golden Years.mp3")
+                file("R0V2tgk2txI.usdb", "{}")
+            }
+        }
+
+        val song = SongLibraryScanner(tree).scan().songs.single()
+
+        assertEquals(tree.idOf("R0V2tgk2txI.usdb"), song.sidecarId)
+    }
+
+    /** These files were written on Windows, where nobody was ever forced to be consistent. */
+    @Test
+    fun `finds a sidecar whatever case it is written in`() {
+        val tree = tree {
+            dir("Song") {
+                file("Song.txt", SONG)
+                file("Song.mp3")
+                file("ABC123.USDB", "{}")
+            }
+        }
+
+        assertNotNull(SongLibraryScanner(tree).scan().songs.single().sidecarId)
+    }
+
+    @Test
+    fun `a song with no sidecar simply has none`() {
+        val tree = tree {
+            dir("Song") {
+                file("Song.txt", SONG)
+                file("Song.mp3")
+            }
+        }
+
+        assertNull(SongLibraryScanner(tree).scan().songs.single().sidecarId)
+    }
+
+    /**
+     * A *folder* whose name ends in `.usdb` is not a sidecar, and reading one as a file would fail
+     * at exactly the moment somebody pressed Repair.
+     */
+    @Test
+    fun `a directory named like a sidecar is not one`() {
+        val tree = tree {
+            dir("Song") {
+                file("Song.txt", SONG)
+                file("Song.mp3")
+                dir("something.usdb")
+            }
+        }
+
+        assertNull(SongLibraryScanner(tree).scan().songs.single().sidecarId)
+    }
+
+    /** Two arrangements share a folder, and so they share its sidecar. */
+    @Test
+    fun `both songs in a folder get the sidecar it holds`() {
+        val tree = tree {
+            dir("Song") {
+                file("Song.txt", SONG)
+                file("Song (Duet).txt", SONG)
+                file("Song.mp3")
+                file("ABC123.usdb", "{}")
+            }
+        }
+
+        val songs = SongLibraryScanner(tree).scan().songs
+
+        assertEquals(2, songs.size)
+        assertTrue(songs.all { it.sidecarId == tree.idOf("ABC123.usdb") })
+    }
+
+    private companion object {
+        val SONG = "#TITLE:Golden Years\n#ARTIST:David Bowie\n#BPM:435\n#MP3:Song.mp3\n" +
+            ": 0 3 31 la\n- 20\nE"
+    }
+}
+
 private class FakeTree : DocumentTree {
     override val rootId = "root"
 

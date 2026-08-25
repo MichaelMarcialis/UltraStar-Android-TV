@@ -253,10 +253,17 @@ class Downloads(private val context: Context) {
         // The old folder goes only now, with a working song already on the card in its place. A
         // folder holding a second arrangement loses just its own chart, the same rule the Songs
         // screen follows when removing a song by hand.
-        val sharing = runCatching {
+        // The whole folder goes only when it is *known* to hold this song alone.
+        //
+        // A folder can hold a second arrangement beside the original, and a listing that
+        // fails tells us nothing about which case this is. Defaulting an unknown count to
+        // one took the destructive branch on no evidence: a transient read error would have
+        // deleted somebody's duet arrangement along with the song being replaced. Unknown is
+        // treated as shared, so the worst a bad listing can do is leave a chart behind.
+        val charts = runCatching {
             card.list(job.song.folderId).count { it.name.endsWith(".txt", ignoreCase = true) }
-        }.getOrDefault(1)
-        val removed = card.delete(if (sharing > 1) job.song.textId else job.song.folderId)
+        }.getOrNull()
+        val removed = card.delete(if (charts == 1) job.song.folderId else job.song.textId)
 
         _downloaded.add(outcome.folderName.lowercase())
 

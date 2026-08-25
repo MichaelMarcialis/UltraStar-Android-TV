@@ -31,7 +31,12 @@ sealed interface RepairStatus {
 }
 
 /** One song somebody asked to have filled in, and how it is going. */
-class RepairJob(val song: ScannedSong, val plan: RepairPlan) {
+class RepairJob(
+    val song: ScannedSong,
+    val plan: RepairPlan,
+    /** Which run of the queue this was asked for in — see [RepairQueue.current]. */
+    val batch: Int = 0,
+) {
 
     private var current: RepairStatus by mutableStateOf(RepairStatus.Queued)
 
@@ -66,7 +71,21 @@ class RepairQueue {
 
     private val _jobs = mutableStateListOf<RepairJob>()
 
+    /** Everything asked for this session, finished runs included. */
     val jobs: List<RepairJob> get() = _jobs
+
+    private var batch = 0
+
+    /**
+     * The run happening now: what was asked for since the queue was last finished with.
+     *
+     * Progress and the count of what has been fixed are about **this** run, not the session.
+     * Finished jobs are kept — a song's own screen shows what its last repair did — but
+     * counting them into the bar meant that repairing one song after a batch of twenty-three
+     * opened at 96%, because twenty-three of the twenty-four jobs were already complete. A
+     * bar that starts nearly full is worse than no bar.
+     */
+    val current: List<RepairJob> get() = _jobs.filter { it.batch == batch }
 
     /** Adds a job unless the same song is already here and has not failed. Retries are allowed. */
     fun add(song: ScannedSong, plan: RepairPlan): Boolean {
@@ -75,7 +94,10 @@ class RepairQueue {
             if (_jobs[existing].status !is RepairStatus.Failed) return false
             _jobs.removeAt(existing)
         }
-        _jobs.add(RepairJob(song, plan))
+        // A queue with nothing left to do is finished with, so the next thing asked for
+        // starts a new run rather than joining the last one.
+        if (!isBusy) batch++
+        _jobs.add(RepairJob(song, plan, batch))
         return true
     }
 
@@ -88,7 +110,7 @@ class RepairQueue {
 
     val waitingCount: Int get() = _jobs.count { it.isPending }
 
-    val fixedCount: Int get() = _jobs.count { it.status is RepairStatus.Done }
+    val fixedCount: Int get() = current.count { it.status is RepairStatus.Done }
 
     fun clearFinished() {
         _jobs.removeAll { it.isFinished }
@@ -149,7 +171,7 @@ fun repairStatusLabel(status: RepairStatus): String = when (status) {
 
 /** How far through the whole repair queue, or null when there is nothing to fix. */
 fun repairQueueProgress(queue: RepairQueue): Float? {
-    val jobs = queue.jobs
+    val jobs = queue.current
     if (jobs.isEmpty()) return null
     val done = jobs.sumOf { if (it.isFinished) 1.0 else it.progress.toDouble() }
     return (done / jobs.size).toFloat().coerceIn(0f, 1f)
@@ -164,7 +186,7 @@ fun repairQueueProgress(queue: RepairQueue): Float? {
 fun repairSummary(queue: RepairQueue): String? {
     val fixed = queue.fixedCount
     val waiting = queue.waitingCount
-    val working = queue.jobs.any { it.status is RepairStatus.Working }
+    val working = queue.current.any { it.status is RepairStatus.Working }
     return when {
         working && waiting > 0 -> "Repairing — $waiting more waiting" +
             if (fixed > 0) ", $fixed fixed" else ""

@@ -20,7 +20,11 @@ sealed interface QueueStatus {
 }
 
 /** One song someone asked for, and how it is going. */
-class QueuedSong(val song: UsdbSong) {
+class QueuedSong(
+    val song: UsdbSong,
+    /** Which run of the queue this was asked for in — see [DownloadQueue.current]. */
+    val batch: Int = 0,
+) {
 
     private var current: QueueStatus by mutableStateOf(QueueStatus.Queued)
 
@@ -85,6 +89,18 @@ class DownloadQueue {
     /** Everything asked for this session, in the order it was asked for. */
     val entries: List<QueuedSong> get() = _entries
 
+    private var batch = 0
+
+    /**
+     * The run happening now: what was asked for since the queue was last finished with.
+     *
+     * Finished entries are kept, because a row saying "Added" or "Try again" is the most
+     * useful thing on the screen — but the *bar* has to be about the songs somebody is
+     * waiting for. Averaged over the session it would open a new download at nine tenths
+     * full, having counted every song already downloaded as progress towards it.
+     */
+    val current: List<QueuedSong> get() = _entries.filter { it.batch == batch }
+
     /**
      * Adds [song] unless it is already here.
      *
@@ -100,7 +116,9 @@ class DownloadQueue {
             if (entry.status !is QueueStatus.Failed) return false
             _entries.removeAt(existing)
         }
-        _entries.add(QueuedSong(song))
+        // Nothing left in flight means the last run is over, and this starts a new one.
+        if (!isBusy) batch++
+        _entries.add(QueuedSong(song, batch))
         return true
     }
 
@@ -112,7 +130,7 @@ class DownloadQueue {
 
     val waitingCount: Int get() = _entries.count { it.isPending }
 
-    val savedCount: Int get() = _entries.count { it.status is QueueStatus.Done }
+    val savedCount: Int get() = current.count { it.status is QueueStatus.Done }
 
     /** Forgets everything that has finished, leaving anything still in flight alone. */
     fun clearFinished() {
@@ -199,7 +217,7 @@ fun shortStatusLabel(entry: QueuedSong): String = when (entry.status) {
 fun queueSummary(queue: DownloadQueue): String? {
     val saved = queue.savedCount
     val waiting = queue.waitingCount
-    val working = queue.entries.any { it.status is QueueStatus.Working }
+    val working = queue.current.any { it.status is QueueStatus.Working }
     return when {
         working && waiting > 0 -> "Downloading — $waiting more waiting" +
             if (saved > 0) ", $saved added" else ""
@@ -301,7 +319,7 @@ private fun workingProgress(stage: DownloadStage, waitSeconds: Int): Float {
  * reaching the end for a song nobody is waiting for any more.
  */
 fun queueProgress(queue: DownloadQueue): Float? {
-    val entries = queue.entries
+    val entries = queue.current
     if (entries.isEmpty()) return null
     val done = entries.sumOf { if (it.isFinished) 1.0 else it.progress.toDouble() }
     return (done / entries.size).toFloat().coerceIn(0f, 1f)
