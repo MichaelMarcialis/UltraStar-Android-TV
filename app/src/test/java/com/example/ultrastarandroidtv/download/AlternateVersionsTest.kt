@@ -58,6 +58,31 @@ class AlternateVersionsTest {
         assertEquals(listOf(2), sameSongAs(wanted, found).map { it.songId })
     }
 
+    /**
+     * The case measured on the real library, and the one the first version of this got wrong.
+     *
+     * "How Far I'll Go" is on USDB twice, as *Disney's Moana (Auli'i Cravalho)* and as *Disney's
+     * Moana (Alessia Cara)* — the same song from the same film, billed to two different singers.
+     * Comparing the letters of the whole artist rejects that pair, so the alternative was never
+     * even checked; comparing them again with the bracketed credit removed accepts it.
+     */
+    @Test
+    fun `a soundtrack billed to two different singers is the same song`() {
+        val wanted = song(1, "Disney's Moana (Auli'i Cravalho)", "How Far I'll Go")
+        val found = listOf(song(2, "Disney's Moana (Alessia Cara)", "How Far I'll Go"))
+
+        assertEquals(listOf(2), sameSongAs(wanted, found).map { it.songId })
+    }
+
+    /** A bracket must not be able to make two different acts into one. */
+    @Test
+    fun `stripping the credit does not merge unrelated artists`() {
+        val wanted = song(1, "The Monkees (Davy Jones)", "I'm A Believer")
+        val found = listOf(song(2, "The Beatles (John Lennon)", "I'm A Believer"))
+
+        assertTrue(sameSongAs(wanted, found).isEmpty())
+    }
+
     // -------------------------------------------------------------------------------------
     // What must never match
     // -------------------------------------------------------------------------------------

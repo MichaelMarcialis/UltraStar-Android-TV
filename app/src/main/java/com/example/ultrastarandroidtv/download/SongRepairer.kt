@@ -17,6 +17,16 @@ import com.example.ultrastarandroidtv.usdb.UsdbMetaTags
 import com.example.ultrastarandroidtv.usdb.metaTagsFrom
 import com.example.ultrastarandroidtv.usdb.readUsdbSidecar
 
+/**
+ * How few pixels a cover may have before it is worth fetching a better one.
+ *
+ * USDB serves exactly one cover per song and it is genuinely **200x200** — fine as a row icon,
+ * visibly soft as a card on a 4K television, and softer than the rest of a library whose covers the
+ * desktop tool fetched at 1000x1000. Anything at or below this is a thumbnail standing in for
+ * artwork; the threshold sits well above 200 and well below 1000 so neither case is ambiguous.
+ */
+const val MIN_COVER_PIXELS = 400
+
 /** What a song on the card is missing, and where the missing part can be got from. */
 data class RepairPlan(
     /** The YouTube video the media comes from. */
@@ -24,10 +34,19 @@ data class RepairPlan(
     val needsAudio: Boolean,
     val needsVideo: Boolean,
     val needsCover: Boolean,
+    /**
+     * Whether the cover it has is a thumbnail rather than artwork.
+     *
+     * Separate from [needsCover] because the two are different acts on the card: one writes a file
+     * that is not there, the other *replaces* one that is. Keeping them apart is also what lets a
+     * replacement be refused when what came back is no better than what is already there.
+     */
+    val needsBetterCover: Boolean,
     /** A full URL the chart names for its cover, when it names a fetchable one. */
     val coverUrl: String?,
 ) {
-    val isWorthDoing: Boolean get() = needsAudio || needsVideo || needsCover
+    val isWorthDoing: Boolean
+        get() = needsAudio || needsVideo || needsCover || needsBetterCover
 }
 
 sealed interface RepairOutcome {
@@ -45,7 +64,7 @@ sealed interface RepairOutcome {
                 if (cover) "artwork" else null,
             ).let { parts ->
                 when (parts.size) {
-                    0 -> "Nothing was missing"
+                    0 -> "Nothing could be got"
                     1 -> "Got the ${parts[0]}"
                     else -> "Got the " + parts.dropLast(1).joinToString(", ") + " and " + parts.last()
                 }
@@ -94,6 +113,14 @@ class SongRepairer(
     private val http: Http,
     private val tree: DocumentTree,
     private val writer: DocumentWriter,
+    /**
+     * How many pixels a cover has on its shorter edge.
+     *
+     * Injected because measuring an image needs Android's `BitmapFactory`, and everything else in
+     * this class is ordinary logic that can be tested without a device. The rule — *is this a
+     * thumbnail* — is the part worth pinning, not the decoder.
+     */
+    private val measureCover: (ByteArray) -> Int = { 0 },
 ) {
 
     /**
@@ -111,11 +138,25 @@ class SongRepairer(
             needsAudio = song.audioId == null,
             needsVideo = song.videoId == null,
             needsCover = song.coverId == null,
+            needsBetterCover = song.coverId != null && isThumbnail(song.coverId),
             coverUrl = tags.coverFile?.takeIf {
                 it.startsWith("http://", true) || it.startsWith("https://", true)
             },
         )
         return plan.takeIf { it.isWorthDoing }
+    }
+
+    /**
+     * Whether what a song has for artwork is really a thumbnail.
+     *
+     * Reads the file, which is the expensive part of asking — so it is only ever asked about a song
+     * that *has* a cover, and never about one already going to be repaired for something else.
+     * A cover that will not decode is left alone: unreadable and low-resolution are different
+     * problems, and guessing between them would replace files for no reason.
+     */
+    private fun isThumbnail(coverId: String): Boolean {
+        val pixels = runCatching { measureCover(tree.readBytes(coverId)) }.getOrDefault(0)
+        return pixels in 1 until MIN_COVER_PIXELS
     }
 
     /**
@@ -201,15 +242,25 @@ class SongRepairer(
             gotAudio = true
         }
 
-        if (plan.needsCover) {
+        if (plan.needsCover || plan.needsBetterCover) {
             onStage(RepairStage.Artwork)
             val bytes = coverBytes(song, plan)
-            if (bytes != null) {
-                val name = "$base [CO].jpg"
-                val coverId = writer.writeFile(song.folderId, name, "image/jpeg", bytes)
-                if (coverId != null) {
-                    val savedAs = tree.list(song.folderId).firstOrNull { it.id == coverId }?.name
-                    gotCover = repointChart(song, audioFile = null, coverFile = savedAs ?: name)
+            val existing = song.coverId
+            gotCover = when {
+                bytes == null -> false
+                // Replacing artwork that is already there, in place. Writing it under a new name
+                // would leave both on the card and the Storage Access Framework would suffix the
+                // second, so the song would keep pointing at the thumbnail it already had.
+                existing != null -> replaceCover(existing, bytes)
+                else -> {
+                    val name = "$base [CO].jpg"
+                    val coverId = writer.writeFile(song.folderId, name, "image/jpeg", bytes)
+                    coverId != null && repointChart(
+                        song,
+                        audioFile = null,
+                        coverFile = tree.list(song.folderId)
+                            .firstOrNull { it.id == coverId }?.name ?: name,
+                    )
                 }
             }
         }
@@ -221,6 +272,21 @@ class SongRepairer(
             saveVideo(song.folderId, base, picture, onStage)
 
         return RepairOutcome.Repaired(audio = gotAudio, video = gotVideo, cover = gotCover)
+    }
+
+    /**
+     * Swaps a thumbnail for something better, and **only** when it really is better.
+     *
+     * Measured before it is written, because the sources here can perfectly well hand back another
+     * 200x200: the chart's own `co=` tag sometimes points at the same thumbnail USDB serves, and
+     * iTunes has small artwork for obscure records. Replacing like with like would rewrite files
+     * across the whole library to no effect and lose the original in the process.
+     */
+    private fun replaceCover(coverId: String, bytes: ByteArray): Boolean {
+        val had = runCatching { measureCover(tree.readBytes(coverId)) }.getOrDefault(0)
+        val offered = measureCover(bytes)
+        if (offered <= had) return false
+        return writer.overwrite(coverId, bytes)
     }
 
     /** Cover sources, best first — the same order a fresh download uses, minus USDB's thumbnail. */

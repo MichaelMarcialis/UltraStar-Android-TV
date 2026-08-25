@@ -175,6 +175,7 @@ fun SongsScreen(
                 http = downloads.http,
                 tree = it,
                 writer = it,
+                measureCover = CoverLoader::shortestEdge,
             )
         }
     }
@@ -200,19 +201,23 @@ fun SongsScreen(
     }
 
     /**
-     * The songs that cannot be sung and could be, with the plan for each.
+     * Every song with something worth fetching, and the plan for each.
      *
-     * **Only the ones missing their music.** Sweeping in every song missing anything would catch
-     * the twenty-five that simply have no video, and "repair everything" would then mean
-     * downloading twenty-five music videos nobody asked for. A song with no video plays perfectly
-     * well over the visualiser; a song with no audio is the only kind that is actually broken.
+     * **Everything, not only the unplayable ones.** It started as songs missing their music, on the
+     * grounds that "repair everything" should not quietly mean downloading two dozen music videos.
+     * The user's call was that it should — a song with no video and a song with a 200-pixel
+     * thumbnail are both worse than they need to be, and the machinery to fix them was already
+     * written. It is one press either way, and the count in the button says how big a job it is.
+     *
+     * The cost is a survey: a `.usdb` file for a song whose chart names no video, and the header of
+     * every cover to see whether it is a thumbnail. Off the main thread, once per scan, and the
+     * button simply appears when it has an answer.
      */
     var repairable by remember { mutableStateOf<List<Pair<ScannedSong, RepairPlan>>>(emptyList()) }
     LaunchedEffect(songs, repairer) {
         val fixer = repairer ?: return@LaunchedEffect
-        val broken = songs.filter { it.audioId == null }
-        repairable = if (broken.isEmpty()) emptyList() else withContext(Dispatchers.IO) {
-            broken.mapNotNull { song ->
+        repairable = if (songs.isEmpty()) emptyList() else withContext(Dispatchers.IO) {
+            songs.mapNotNull { song ->
                 runCatching { fixer.plan(song) }.getOrNull()?.let { song to it }
             }
         }
@@ -429,6 +434,15 @@ fun SongsScreen(
                 val arranged = remember(songs, sort, filter) { arrange(songs, sort, filter) }
                 val letters = remember(songs, sort) { indexLetters(songs, sort) }
                 val gridState = rememberLazyGridState()
+
+                // Re-sorting starts at the top.
+                //
+                // A lazy grid keeps its scroll *offset* when its contents change, so re-ordering
+                // seventy songs left the view halfway down a list that now meant something else
+                // entirely -- which reads as the app having decided to show you a random song.
+                // Arranging a library is a fresh look at it, and a fresh look starts at the
+                // beginning. Focus stays on the chip that was just pressed.
+                LaunchedEffect(sort, filter) { gridState.scrollToItem(0) }
 
                 Row(modifier = Modifier.fillMaxSize()) {
                     LazyVerticalGrid(
@@ -747,32 +761,6 @@ private fun SongCard(scanned: ScannedSong, cover: ImageBitmap?, onSelect: () -> 
                 Text(fault, fontSize = 12.sp, maxLines = 1, color = GameTheme.sparkWarm)
             }
         }
-    }
-}
-
-/**
- * A small two-state button, for the questions that are settings rather than actions.
- *
- * Distinct from an ordinary Button on purpose: sorting and filtering *stay* chosen, and a control
- * that looks the same before and after it is pressed cannot say which of five things is in force.
- */
-@Composable
-private fun Chip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        colors = ButtonDefaults.colors(
-            containerColor = if (selected) GameTheme.playerColors[0] else GameTheme.trackBackground,
-            contentColor = if (selected) GameTheme.background else GameTheme.lyricIdle,
-        ),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-    ) {
-        Text(label, fontSize = 13.sp)
     }
 }
 

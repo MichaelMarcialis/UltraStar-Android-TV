@@ -29,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -92,6 +93,27 @@ private const val SEARCH_DELAY_MS = 800L
 
 /** Below this a search matches most of USDB and means nothing. */
 private const val MIN_QUERY = 2
+
+/**
+ * The languages worth a button, and the order they are in.
+ *
+ * A fixed list rather than one built from whatever the last search returned: a filter that appears
+ * and disappears as results arrive cannot be aimed at, and the cursor would land on a different
+ * language every time the row changed shape. These are the ones USDB actually has in quantity;
+ * anything else is still reachable by simply not filtering.
+ *
+ * The value is sent to USDB rather than used to sift the results here, which matters for the same
+ * reason paging does: filtering after the fact would hide most of a page and leave three songs on
+ * screen with fifty-six "found".
+ */
+private val LANGUAGES = listOf(
+    "All" to "",
+    "English" to "English",
+    "German" to "German",
+    "Spanish" to "Spanish",
+    "French" to "French",
+    "Italian" to "Italian",
+)
 
 private enum class AddMode { SignIn, Browse }
 
@@ -159,6 +181,7 @@ fun AddSongsScreen(
     var searching by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf(0) }
     var morePages by remember { mutableStateOf(false) }
+    var language by remember { mutableStateOf("") }
     var focused by remember { mutableStateOf<UsdbSong?>(null) }
 
     val covers = remember { mutableStateMapOf<Int, ImageBitmap?>() }
@@ -265,7 +288,7 @@ fun AddSongsScreen(
     // Keyed on the words *and* the page, so turning a page re-runs it and editing the query starts
     // again at the first. The delay is what makes a run of key presses one search: a new keystroke
     // cancels this effect before it has finished waiting, which is debouncing for free.
-    LaunchedEffect(keyword, page) {
+    LaunchedEffect(keyword, page, language) {
         val words = keyword.trim()
         if (words.length < MIN_QUERY) {
             results = emptyList()
@@ -276,7 +299,9 @@ fun AddSongsScreen(
         searching = true
         problem = null
         val outcome = runCatching {
-            withContext(Dispatchers.IO) { search.search(SongFilter(keyword = words), page) }
+            withContext(Dispatchers.IO) {
+                search.search(SongFilter(keyword = words, language = language), page)
+            }
         }
         searching = false
         outcome.onSuccess { found ->
@@ -354,6 +379,11 @@ fun AddSongsScreen(
                 Spacer(Modifier.width(28.dp))
 
                 ResultsPanel(
+                    language = language,
+                    onLanguage = {
+                        language = it
+                        page = 0
+                    },
                     results = results,
                     covers = covers,
                     owned = owned,
@@ -473,6 +503,8 @@ private fun SearchRail(
 /** The right two thirds: how it is going, then a grid of what was found. */
 @Composable
 private fun ResultsPanel(
+    language: String,
+    onLanguage: (String) -> Unit,
     results: List<UsdbSong>,
     covers: Map<Int, ImageBitmap?>,
     owned: Set<String>,
@@ -535,7 +567,28 @@ private fun ResultsPanel(
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        // Language, across the top of the results rather than down in the rail with the keys.
+        // It is a question about the answers, not about the question -- and it is asked far more
+        // often than it is changed, so it belongs where the answers are being read.
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Language",
+                style = MaterialTheme.typography.bodySmall,
+                color = GameTheme.lyricIdle,
+            )
+            Spacer(Modifier.width(10.dp))
+            for ((label, value) in LANGUAGES) {
+                Chip(
+                    label = label,
+                    selected = language == value,
+                    onClick = { onLanguage(value) },
+                )
+                Spacer(Modifier.width(6.dp))
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
         LazyVerticalGrid(
             columns = GridCells.Fixed(3),
             modifier = Modifier.fillMaxSize(),

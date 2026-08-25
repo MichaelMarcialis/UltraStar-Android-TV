@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.example.ultrastarandroidtv.library.CoverLoader
 import com.example.ultrastarandroidtv.library.LibraryLocation
 import com.example.ultrastarandroidtv.library.SafDocumentTree
 import com.example.ultrastarandroidtv.library.SongLibraryCache
@@ -154,6 +155,7 @@ class Downloads(private val context: Context) {
             http = http,
             tree = card,
             writer = card,
+            measureCover = CoverLoader::shortestEdge,
         )
         val outcome = runCatching {
             withContext(Dispatchers.IO) {
@@ -170,8 +172,90 @@ class Downloads(private val context: Context) {
         }
         return when (outcome) {
             is RepairOutcome.Repaired -> RepairStatus.Done(outcome.summary)
-            is RepairOutcome.Failed -> RepairStatus.Failed(outcome.message)
+            is RepairOutcome.Failed -> {
+                if (outcome.problem == DownloadProblem.AUDIO_UNAVAILABLE) {
+                    replaceFromUsdb(job, card) ?: RepairStatus.Failed(outcome.message)
+                } else {
+                    RepairStatus.Failed(outcome.message)
+                }
+            }
         }
+    }
+
+    /**
+     * When a song's music has gone for good, fetches a different chart of the same song instead.
+     *
+     * ## Why this is a replacement and not a repair
+     *
+     * A repair puts the missing media back beside **this** chart, and that only works because the
+     * chart was written against that exact recording — its `#GAP` and every beat in it are timed to
+     * one upload. Another chart of the same song is another *pair*: different notes, different
+     * timing, its own audio. Pouring one chart's audio into another's notes produces a song that is
+     * silently out of time, which is the Magic Dance failure this project already has a diagnostic
+     * tool for. So the whole folder is swapped, not the file.
+     *
+     * ## Order, and why nothing is deleted first
+     *
+     * The replacement is downloaded **before** the original is removed, and a candidate whose
+     * folder would have the same name is not considered at all. A song that has already lost its
+     * music is not worth much, but it is worth more than an empty folder, and deleting first would
+     * mean a failed download left nothing.
+     *
+     * Needs the USDB session, so it only runs when somebody has signed in on the Add-songs screen.
+     * Returns null when there is nothing to be done, so the caller can report the original failure
+     * — which is the one worth reading.
+     */
+    private suspend fun replaceFromUsdb(job: RepairJob, card: SafDocumentTree): RepairStatus? {
+        if (!session.hasSession) return null
+
+        val metadata = job.song.song.metadata
+        job.status = RepairStatus.Working(RepairStage.Looking)
+
+        val other = withContext(Dispatchers.IO) {
+            AlternateVersions(search, details, youTube).findFor(
+                artist = metadata.artist,
+                title = metadata.title,
+                alreadyHave = ownedFolders(),
+                differentFolderFrom = job.song.folderName,
+            )
+        } ?: return null
+
+        val downloader = SongDownloader(
+            charts = UsdbCharts(session),
+            details = details,
+            youTube = youTube,
+            artwork = artwork,
+            http = http,
+            tree = card,
+            writer = card,
+        )
+        val outcome = runCatching {
+            withContext(Dispatchers.IO) {
+                downloader.download(other) { stage ->
+                    job.status = RepairStatus.Working(
+                        when (stage) {
+                            is DownloadStage.DownloadingVideo -> RepairStage.Video(stage.percent)
+                            DownloadStage.FetchingArtwork -> RepairStage.Artwork
+                            else -> RepairStage.Music
+                        },
+                    )
+                    holdWhilePaused(stage)
+                }
+            }
+        }.getOrNull()
+
+        if (outcome !is DownloadOutcome.Saved) return null
+
+        // The old folder goes only now, with a working song already on the card in its place. A
+        // folder holding a second arrangement loses just its own chart, the same rule the Songs
+        // screen follows when removing a song by hand.
+        val sharing = runCatching {
+            card.list(job.song.folderId).count { it.name.endsWith(".txt", ignoreCase = true) }
+        }.getOrDefault(1)
+        card.delete(if (sharing > 1) job.song.textId else job.song.folderId)
+
+        _downloaded.add(outcome.folderName.lowercase())
+        return RepairStatus.Done("Its music had gone — replaced with ${other.artist}'s version")
     }
 
     private suspend fun runOne(entry: QueuedSong): QueueStatus {

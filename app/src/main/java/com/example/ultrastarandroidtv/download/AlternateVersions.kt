@@ -49,13 +49,34 @@ class AlternateVersions(
      * @param alreadyHave folder names already on the card, so a version that would collide with
      *   something is never offered — two folders for one song is worse than not downloading.
      */
-    fun find(song: UsdbSong, alreadyHave: Set<String> = emptySet()): UsdbSong? {
+    fun find(song: UsdbSong, alreadyHave: Set<String> = emptySet()): UsdbSong? =
+        findFor(song.artist, song.title, song.songId, alreadyHave)
+
+    /**
+     * The same, for a song that is already on the card rather than one in a list of results.
+     *
+     * @param differentFolderFrom refuse a version whose folder would have the same name. A repair
+     *   uses this: a replacement that lands in the folder it is replacing cannot be written until
+     *   the old one is gone, and deleting first would mean a failure left nothing at all.
+     */
+    fun findFor(
+        artist: String,
+        title: String,
+        excludeSongId: Int? = null,
+        alreadyHave: Set<String> = emptySet(),
+        differentFolderFrom: String? = null,
+    ): UsdbSong? {
+        if (artist.isBlank() || title.isBlank()) return null
+
         val page = runCatching {
-            search.search(SongFilter(artist = song.artist, title = song.title))
+            search.search(SongFilter(artist = artist, title = title))
         }.getOrNull() ?: return null
 
-        val candidates = sameSongAs(song, page.songs)
-            .filterNot { safeFileName(it.folderName).lowercase() in alreadyHave }
+        val same = differentFolderFrom?.let { safeFileName(it).lowercase() }
+        val candidates = sameSongAs(artist, title, excludeSongId, page.songs)
+            .map { it to safeFileName(it.folderName).lowercase() }
+            .filterNot { (_, folder) -> folder in alreadyHave || folder == same }
+            .map { (song, _) -> song }
             .take(MAX_CANDIDATES)
 
         return candidates.firstOrNull { canFetch(it) }
@@ -78,15 +99,22 @@ class AlternateVersions(
  *
  * The original is always excluded — it is the one that just failed.
  */
-fun sameSongAs(song: UsdbSong, found: List<UsdbSong>): List<UsdbSong> {
-    val artist = loosely(song.artist)
-    val title = loosely(song.title)
-    if (artist.isEmpty() || title.isEmpty()) return emptyList()
+fun sameSongAs(song: UsdbSong, found: List<UsdbSong>): List<UsdbSong> =
+    sameSongAs(song.artist, song.title, song.songId, found)
+
+fun sameSongAs(
+    artist: String,
+    title: String,
+    excludeSongId: Int?,
+    found: List<UsdbSong>,
+): List<UsdbSong> {
+    val wantedTitle = loosely(title)
+    if (artist.isBlank() || wantedTitle.isEmpty()) return emptyList()
 
     return found.filter { other ->
-        other.songId != song.songId &&
-            sameArtist(loosely(other.artist), artist) &&
-            oneContainsTheOther(loosely(other.title), title)
+        other.songId != excludeSongId &&
+            sameArtist(other.artist, artist) &&
+            oneContainsTheOther(loosely(other.title), wantedTitle)
     }
 }
 
@@ -103,20 +131,34 @@ private fun oneContainsTheOther(a: String, b: String): Boolean =
     a.isNotEmpty() && b.isNotEmpty() && (a.contains(b) || b.contains(a))
 
 /**
- * Artists are compared with their spaces taken out as well as their punctuation.
+ * Whether two artist strings name the same act.
  *
- * Two charts of one song rarely agree on how an artist is written: "a-ha" and "aha", "Guns N'
- * Roses" and "Guns N Roses", "Disney's Moana" and "Moana". Comparing the letters alone, and asking
- * only that one name contains the other, survives all of those.
+ * Compared on the **letters alone**, with spaces and punctuation gone, and asking only that one
+ * name contains the other: two charts of one song rarely agree on how an artist is written, and
+ * that survives "a-ha"/"aha" and "Guns N' Roses"/"Guns N Roses".
+ *
+ * **And again with the bracketed part removed**, which is what a soundtrack needs. Measured on the
+ * real library: "How Far I'll Go" is on USDB twice, as *Disney's Moana (Auli'i Cravalho)* and as
+ * *Disney's Moana (Alessia Cara)* — the same song from the same film, billed to two different
+ * singers. Letters alone rejects that pair; letters without the qualifier accepts it. A bracket in
+ * an *artist* is a performer credit, where a bracket in a **title** is usually part of the song —
+ * which is why this rule lives here and not in the title comparison.
  *
  * A shared *word* was tried first and is wrong in a way worth recording: "The Monkees" and "The
- * Beatles" share "the", which would have matched two entirely different bands on the strength of a
- * definite article. Containment cannot make that mistake — neither of those names is inside the
- * other.
+ * Beatles" share "the", which would have matched two entirely different bands on a definite
+ * article. Containment cannot make that mistake.
  */
-private fun sameArtist(a: String, b: String): Boolean {
-    val left = a.replace(" ", "")
-    val right = b.replace(" ", "")
-    if (left.length < 3 || right.length < 3) return left.isNotEmpty() && left == right
-    return left.contains(right) || right.contains(left)
+private fun sameArtist(a: String, b: String): Boolean =
+    containsEitherWay(letters(a), letters(b)) ||
+        containsEitherWay(letters(withoutQualifier(a)), letters(withoutQualifier(b)))
+
+private fun withoutQualifier(name: String): String = name.replace(QUALIFIER, " ")
+
+private val QUALIFIER = Regex("""\([^)]*\)""")
+
+private fun letters(name: String): String = loosely(name).replace(" ", "")
+
+private fun containsEitherWay(a: String, b: String): Boolean = when {
+    a.length < 3 || b.length < 3 -> a.isNotEmpty() && a == b
+    else -> a.contains(b) || b.contains(a)
 }
