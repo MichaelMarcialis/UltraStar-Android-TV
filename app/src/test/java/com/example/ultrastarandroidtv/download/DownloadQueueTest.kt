@@ -290,6 +290,173 @@ class DownloadQueueTest {
         )
     }
 
+    // -----------------------------------------------------------------------------------------
+    // One bar instead of several countdowns
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * The bar must only ever go forwards, and this is the case that breaks a naive version:
+     * "getting the song" is reported twice, once before USDB's countdown and once to collect the
+     * file afterwards. Reading the stage straight off would send the bar back to 4% having sat at
+     * 80%, which looks exactly like the download restarting.
+     */
+    @Test
+    fun `progress never goes backwards when a stage repeats`() {
+        val entry = QueuedSong(song(1, "First"))
+
+        entry.status = QueueStatus.Working(DownloadStage.FetchingChart)
+        entry.status = QueueStatus.Working(DownloadStage.WaitingForUsdb(24))
+        entry.status = QueueStatus.Working(DownloadStage.WaitingForUsdb(1))
+        val afterWait = entry.progress
+        entry.status = QueueStatus.Working(DownloadStage.FetchingChart)
+
+        assertTrue("the countdown must have moved it", afterWait > 0.5f)
+        assertEquals(afterWait, entry.progress, 0f)
+    }
+
+    @Test
+    fun `the countdown fills its own share of the bar as it runs`() {
+        val entry = QueuedSong(song(1, "First"))
+        entry.status = QueueStatus.Working(DownloadStage.WaitingForUsdb(24))
+        val atStart = entry.progress
+        entry.status = QueueStatus.Working(DownloadStage.WaitingForUsdb(12))
+        val halfway = entry.progress
+        entry.status = QueueStatus.Working(DownloadStage.WaitingForUsdb(1))
+
+        assertTrue(atStart < halfway)
+        assertTrue(halfway < entry.progress)
+    }
+
+    /**
+     * USDB shortens the wait for people who upload songs, so the countdown is not always 24. The
+     * fraction has to be measured against whatever it actually started at.
+     */
+    @Test
+    fun `a shorter countdown still fills the same share`() {
+        val long = QueuedSong(song(1, "First"))
+        long.status = QueueStatus.Working(DownloadStage.WaitingForUsdb(24))
+        long.status = QueueStatus.Working(DownloadStage.WaitingForUsdb(12))
+
+        val short = QueuedSong(song(2, "Second"))
+        short.status = QueueStatus.Working(DownloadStage.WaitingForUsdb(6))
+        short.status = QueueStatus.Working(DownloadStage.WaitingForUsdb(3))
+
+        assertEquals(long.progress, short.progress, 0.001f)
+    }
+
+    @Test
+    fun `the stages run in order and end at the top`() {
+        val entry = QueuedSong(song(1, "First"))
+        val seen = mutableListOf<Float>()
+        for (stage in listOf(
+            DownloadStage.FindingAudio,
+            DownloadStage.FetchingChart,
+            DownloadStage.DownloadingAudio,
+            DownloadStage.FetchingArtwork,
+            DownloadStage.Saving,
+            DownloadStage.DownloadingVideo(0),
+            DownloadStage.DownloadingVideo(100),
+        )) {
+            entry.status = QueueStatus.Working(stage)
+            seen += entry.progress
+        }
+        entry.status = QueueStatus.Done("An Artist - First")
+
+        assertEquals("must only ever climb", seen.sorted(), seen)
+        assertEquals(seen.distinct().size, seen.size)
+        assertEquals(1f, entry.progress, 0f)
+    }
+
+    /** A failure is finished with. Leaving it part-filled stops the queue's bar ever completing. */
+    @Test
+    fun `a failed song counts as finished rather than stuck`() {
+        val entry = QueuedSong(song(1, "First"))
+        entry.status = QueueStatus.Working(DownloadStage.DownloadingAudio)
+        entry.status = QueueStatus.Failed(DownloadProblem.AUDIO_UNAVAILABLE, "gone")
+
+        assertEquals(1f, entry.progress, 0f)
+    }
+
+    @Test
+    fun `the queue bar is each song's equal share`() {
+        val queue = DownloadQueue()
+        assertNull("nothing queued means no bar at all", queueProgress(queue))
+
+        queue.add(song(1, "First"))
+        queue.add(song(2, "Second"))
+        assertEquals(0f, queueProgress(queue)!!, 0.001f)
+
+        queue.entries[0].status = QueueStatus.Done("An Artist - First")
+        assertEquals(0.5f, queueProgress(queue)!!, 0.001f)
+
+        queue.entries[1].status = QueueStatus.Failed(DownloadProblem.NETWORK, "no internet")
+        assertEquals(1f, queueProgress(queue)!!, 0.001f)
+    }
+
+    /** The row says a number; the sentence naming the step is said once, above the list. */
+    @Test
+    fun `a working row reads as a percentage`() {
+        val entry = QueuedSong(song(1, "First"))
+        entry.status = QueueStatus.Working(DownloadStage.WaitingForUsdb(24))
+        entry.status = QueueStatus.Working(DownloadStage.WaitingForUsdb(12))
+
+        assertTrue(shortStatusLabel(entry).endsWith("%"))
+        assertEquals("Added", shortStatusLabel(QueuedSong(song(2, "S")).also {
+            it.status = QueueStatus.Done("x")
+        }))
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // One run at a time
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * The same bug the repair queue has a test for: a bar that opens nearly full.
+     *
+     * Finished entries are kept on purpose — a row saying "Added" or "Try again" is the most useful
+     * thing on the screen — but counting them into the *bar* meant a new download opened at nine
+     * tenths, having counted every song already fetched as progress towards it.
+     */
+    @Test
+    fun `a new run starts its bar at the beginning`() {
+        val queue = DownloadQueue()
+        repeat(5) { queue.add(song(it, "Old $it")) }
+        queue.entries.forEach { it.status = QueueStatus.Done("An Artist - ${it.song.title}") }
+        assertEquals(1f, queueProgress(queue)!!, 0.001f)
+
+        queue.add(song(99, "New"))
+
+        assertEquals(0f, queueProgress(queue)!!, 0.001f)
+        assertEquals("only the new one is being waited for", 1, queue.current.size)
+        assertEquals("New", queue.current.single().song.title)
+    }
+
+    /** And what has been added is counted for this run, not for the whole session. */
+    @Test
+    fun `what was saved is counted per run`() {
+        val queue = DownloadQueue()
+        queue.add(song(1, "Old"))
+        queue.entries.first().status = QueueStatus.Done("An Artist - Old")
+        assertEquals(1, queue.savedCount)
+
+        queue.add(song(2, "New"))
+
+        assertEquals(0, queue.savedCount)
+    }
+
+    /** Adding while a run is still going joins it rather than starting another. */
+    @Test
+    fun `adding to a busy queue joins the same run`() {
+        val queue = DownloadQueue()
+        queue.add(song(1, "First"))
+        queue.add(song(2, "Second"))
+
+        assertEquals(2, queue.current.size)
+
+        queue.entries.first().status = QueueStatus.Done("An Artist - First")
+        assertEquals(0.5f, queueProgress(queue)!!, 0.001f)
+    }
+
     private fun song(id: Int, title: String) = UsdbSong(
         songId = id,
         artist = "An Artist",

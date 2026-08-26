@@ -55,8 +55,32 @@ class HttpReply(
 class HttpStream(
     val stream: InputStream,
     val declaredLength: Long,
+    /**
+     * The status that came back — `206` for a range that was honoured, `200` for a whole body.
+     *
+     * Kept because a chunked download has to know the difference. A server, a proxy or a
+     * redirect that ignores `Range` answers `200` with the entire file, and appending that to
+     * bytes already collected produces a file with its beginning written twice.
+     */
+    val status: Int = 200,
+    /** The raw `Content-Range` header, or null — the reply's own account of what it sent. */
+    val contentRange: String? = null,
     private val onClose: () -> Unit = {},
 ) : Closeable {
+
+    /**
+     * Where this reply says its bytes start, or null when it did not say.
+     *
+     * `Content-Range: bytes 5242880-10485759/77000000` — the first number is the only part
+     * worth reading here, because the only question is whether the server sent the piece that
+     * was asked for or some other piece.
+     */
+    val rangeStart: Long?
+        get() = contentRange
+            ?.substringAfter("bytes ", "")
+            ?.substringBefore('-', "")
+            ?.trim()
+            ?.toLongOrNull()
 
     override fun close() {
         runCatching { stream.close() }
@@ -129,8 +153,13 @@ interface Http {
      * connection that stays open, which is the version that actually saves the memory.
      */
     fun openStream(url: String, headers: Map<String, String> = emptyMap()): HttpStream {
-        val bytes = getBytes(url, headers)
-        return HttpStream(ByteArrayInputStream(bytes), bytes.size.toLong())
+        val reply = send(HttpRequest(url, headers = headers)).orThrow(url)
+        return HttpStream(
+            stream = ByteArrayInputStream(reply.bytes),
+            declaredLength = reply.bytes.size.toLong(),
+            status = reply.status,
+            contentRange = reply.header("Content-Range"),
+        )
     }
 
     /**
@@ -272,7 +301,12 @@ class UrlHttp(
                 connection.disconnect()
                 throw HttpFailure("${hostOf(url)} sent no body.")
             }
-        return HttpStream(stream, connection.contentLengthLong) { connection.disconnect() }
+        return HttpStream(
+            stream = stream,
+            declaredLength = connection.contentLengthLong,
+            status = status,
+            contentRange = connection.getHeaderField("Content-Range"),
+        ) { connection.disconnect() }
     }
 
     override fun send(request: HttpRequest): HttpReply {

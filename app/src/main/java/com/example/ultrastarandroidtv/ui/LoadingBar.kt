@@ -68,3 +68,29 @@ fun LoadingBar(
         )
     }
 }
+
+/**
+ * A determinate bar, for the one thing in this app whose length really is known.
+ *
+ * The library scan cannot report a fraction and says so with a sweep. A download can: USDB names
+ * its own countdown to the second, every media stream declares its length, and the steps between
+ * them are short and few. So this is a real measurement rather than a lie told smoothly — which is
+ * the only condition under which a filling bar is better than a moving one.
+ */
+@Composable
+fun ProgressBar(
+    fraction: Float,
+    modifier: Modifier = Modifier,
+    color: Color = GameTheme.playerColors[0],
+) {
+    Canvas(
+        modifier = modifier
+            .width(360.dp)
+            .height(6.dp)
+            .clip(RoundedCornerShape(3.dp)),
+    ) {
+        drawRect(color.copy(alpha = 0.16f))
+        val filled = size.width * fraction.coerceIn(0f, 1f)
+        if (filled > 0f) drawRect(color, size = Size(filled, size.height))
+    }
+}

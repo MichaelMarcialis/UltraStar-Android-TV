@@ -91,6 +91,77 @@ class SafDocumentTree(
      * Cleans up after itself: a document that was created but could not be filled is deleted
      * rather than left as an empty file that looks like a song.
      */
+    /**
+     * Rewrites an existing document, and puts the old contents back if that goes wrong.
+     *
+     * `"wt"` rather than `"w"`: without the truncate flag a shorter replacement leaves the tail
+     * of the old file behind, which for a chart means a song with two endings.
+     *
+     * **But `"wt"` empties the file before a single new byte is written.** A card that fills up,
+     * is pulled out, or simply throws half way then leaves nothing where the chart used to be --
+     * and the chart is the one part of a song that cannot be fetched again from anywhere. So the
+     * old bytes are read first and written back if the write fails. A chart is a few kilobytes;
+     * the guard costs one extra read of a small file.
+     *
+     * Not a temporary sibling and a rename, which is the textbook answer: that needs a file
+     * created, filled, the original deleted and the new one renamed, and a failure *between* the
+     * delete and the rename loses the chart just as completely with more moving parts to get
+     * wrong. Holding a few kilobytes is the smaller and more certain guard.
+     */
+    override fun overwrite(documentId: String, bytes: ByteArray): Boolean {
+        // No backup, no overwrite. Reading the old bytes is not a nicety here, it is the
+        // entire safety of the method: truncating first and *then* discovering there is
+        // nothing to restore is strictly worse than refusing, because the caller can report
+        // a failed repair and clean up after itself, where a destroyed chart is a song that
+        // cannot be sung again.
+        //
+        // **Not [readBytes]**, which stops at [MAX_TEXT_BYTES] and says nothing about having
+        // done so. That is right for a chart and wrong for a rollback: this also replaces
+        // cover artwork, and a picture larger than the cap would be "backed up" as its first
+        // few megabytes and then restored that way -- destroying the original in the course
+        // of protecting it. A file too large to copy faithfully is refused instead.
+        val original = wholeFileOrNull(documentId) ?: return false
+
+        val written = runCatching {
+            resolver.openOutputStream(uriFor(documentId), "wt")?.use { it.write(bytes) } != null
+        }.getOrDefault(false)
+        if (written) return true
+
+        // Best effort, and nothing more can be promised -- if the card has gone, the restore
+        // goes with it. It costs one attempt, and it is the difference between a bad day and
+        // a song nobody can sing again.
+        runCatching {
+            resolver.openOutputStream(uriFor(documentId), "wt")?.use { it.write(original) }
+        }
+        return false
+    }
+
+    /**
+     * The whole of a file, or null when it will not fit — never a silently shortened part.
+     *
+     * The limit is the same one [readBytes] uses, and everything this is asked about is a
+     * chart or a cover: kilobytes and hundreds of kilobytes. Anything bigger is refused rather
+     * than half-read, because the only caller is a rollback and half a rollback is corruption.
+     */
+    private fun wholeFileOrNull(documentId: String, limit: Int = MAX_TEXT_BYTES): ByteArray? =
+        runCatching {
+            resolver.openInputStream(uriFor(documentId))?.use { input ->
+                val collected = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                var tooBig = false
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    if (collected.size() + read > limit) {
+                        tooBig = true
+                        break
+                    }
+                    collected.write(buffer, 0, read)
+                }
+                if (tooBig) null else collected.toByteArray()
+            }
+        }.getOrNull()
+
     override fun writeFile(
         parentId: String,
         name: String,

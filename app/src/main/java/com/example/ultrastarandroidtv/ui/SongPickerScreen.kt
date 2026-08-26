@@ -56,12 +56,15 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.example.ultrastarandroidtv.audio.previewPlayer
 import com.example.ultrastarandroidtv.game.GameTheme
 import com.example.ultrastarandroidtv.library.CoverLoader
 import com.example.ultrastarandroidtv.library.LibraryLocation
 import com.example.ultrastarandroidtv.library.SafDocumentTree
 import com.example.ultrastarandroidtv.library.ScannedSong
 import com.example.ultrastarandroidtv.library.SongLibraryCache
+import com.example.ultrastarandroidtv.library.SongSort
+import com.example.ultrastarandroidtv.library.songOrder
 import com.example.ultrastarandroidtv.library.SongLibraryScanner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -142,7 +145,7 @@ fun SongPickerScreen(
         }
     }
 
-    LaunchedEffect(treeUri) {
+    LaunchedEffect(treeUri, cache.revision) {
         val currentTree = tree ?: run {
             status = "Choose the folder your songs are in."
             return@LaunchedEffect
@@ -168,7 +171,7 @@ fun SongPickerScreen(
 
         // The cache keeps everything, including songs with no audio: those are what the Songs
         // screen exists to explain, and re-finding them would mean walking the card again.
-        cache.put(treeUri, found.songs.sortedBy { it.song.metadata.title.lowercase() })
+        cache.put(treeUri, found.songs.sortedWith(songOrder(SongSort.Title)))
         songs = cache.playable
         scanning = false
         status = summarise(songs.size)
@@ -195,7 +198,8 @@ fun SongPickerScreen(
 
     // One player for the whole screen, reused as focus moves. Building an ExoPlayer is not
     // cheap and doing it per card would be felt.
-    val preview = remember { ExoPlayer.Builder(context).build() }
+    // Levelled: previews are mastered decades apart and run 8.6 dB apart on this library.
+    val preview = remember { previewPlayer(context) }
     DisposableEffect(Unit) {
         onDispose { preview.release() }
     }
@@ -213,7 +217,9 @@ fun SongPickerScreen(
             preview.prepare()
             val start = song.song.metadata.previewStartSeconds ?: FALLBACK_PREVIEW_SECONDS
             preview.seekTo((start * 1000).toLong())
-            preview.volume = 0.75f
+            // Full scale here, because PreviewLevel has already brought the clip to a
+            // fixed loudness -- turning it down again would only undo half of that.
+            preview.volume = 1f
             preview.play()
         }
     }

@@ -116,13 +116,19 @@ class YouTubeAudioTest {
     }
 
     /**
-     * Measured 2026-08-20: the same URL served 31 KB/s plain and 10.1 MB/s with this header.
-     * Google throttles whole-file requests to about playback speed, so without it a four-megabyte
-     * song takes two minutes and looks exactly like a hang. This is not an optimisation.
+     * The `Range` belongs to the chunked fetch, not to the format.
+     *
+     * It used to be set here, as `bytes=0-`, on the strength of a measurement that showed 31 KB/s
+     * plain against 10.1 MB/s with it. That measurement was real and its conclusion was too
+     * narrow: re-measured against a 77 MB video, one request carrying `bytes=0-` is throttled just
+     * as hard as one carrying no range at all. What matters is the size of each response, which
+     * only [downloadInChunks] can bound — so a format setting its own `Range` would quietly put
+     * the wrong one back.
      */
     @Test
-    fun `a stream is fetched with a range header or it crawls`() {
-        assertEquals("bytes=0-", format().fetchHeaders["Range"])
+    fun `a format does not set its own range`() {
+        assertNull(format().fetchHeaders["Range"])
+        assertNull(video(136, "video/mp4; codecs=\"avc1.4d401f\"", 720, 41_000).fetchHeaders["Range"])
     }
 
     @Test
@@ -514,14 +520,6 @@ class YouTubeAudioTest {
             ),
         )
         assertEquals(136, chosen?.itag)
-    }
-
-    @Test
-    fun `a picture is fetched with the same Range header the audio needs`() {
-        assertEquals(
-            "bytes=0-",
-            video(136, "video/mp4; codecs=\"avc1.4d401f\"", 720, 41_000).fetchHeaders["Range"],
-        )
     }
 
     /** Read from the same response the sound came from, so a video costs no extra request. */

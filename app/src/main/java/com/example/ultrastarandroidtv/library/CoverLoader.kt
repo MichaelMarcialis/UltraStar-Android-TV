@@ -23,6 +23,25 @@ private const val TAG = "CoverLoader"
 object CoverLoader {
 
     /**
+     * How many pixels this cover has on its **shorter** edge, or 0 if it is not a picture.
+     *
+     * The shorter edge rather than the longer, because that is what limits how large the artwork
+     * can be drawn: a 1400x200 strip is not a 1400-pixel cover.
+     *
+     * Reads only the header — `inJustDecodeBounds` gives the dimensions without decoding a single
+     * pixel, which is what makes it affordable to ask this about every song in a library.
+     */
+    fun shortestEdge(bytes: ByteArray): Int = try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) 0
+        else minOf(bounds.outWidth, bounds.outHeight)
+    } catch (error: Exception) {
+        Log.w(TAG, "could not measure a cover of ${bytes.size} bytes", error)
+        0
+    }
+
+    /**
      * Decodes cover bytes already in hand, for artwork that came off the network rather than the
      * card. Same downscaling, same tolerance of rubbish: a cover that will not decode is a
      * cosmetic problem.
