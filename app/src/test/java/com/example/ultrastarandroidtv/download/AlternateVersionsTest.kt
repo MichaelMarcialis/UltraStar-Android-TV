@@ -97,6 +97,44 @@ class AlternateVersionsTest {
         assertTrue(sameSongAs(wanted, found).isEmpty())
     }
 
+    /**
+     * Only USDB's own arrangement tag comes off, and this is why it matters.
+     *
+     * Stripping every square bracket looked equivalent and is not: it makes "Song [Live]" equal to
+     * "Song", and this comparison decides whether a chart may *replace* another — so a live
+     * recording could be downloaded against a studio chart's timing and the original deleted.
+     * Measured across the real card, `[DUET]` is the only square-bracket tag in any title.
+     */
+    @Test
+    fun `a bracketed qualifier that is not the duet tag is part of the name`() {
+        val wanted = song(1, "Adele", "Hello")
+
+        assertTrue(sameSongAs(wanted, listOf(song(2, "Adele", "Hello [Live]"))).isEmpty())
+        assertTrue(sameSongAs(wanted, listOf(song(3, "Adele", "Hello [Remix]"))).isEmpty())
+        assertTrue(sameSongAs(wanted, listOf(song(4, "Adele", "Hello [Acoustic]"))).isEmpty())
+    }
+
+    /** However it is punctuated or capitalised, the duet tag is not part of the name. */
+    @Test
+    fun `the duet tag comes off whatever case it is written in`() {
+        val wanted = song(1, "ABBA", "Gimme! Gimme! Gimme!")
+        val found = listOf(
+            song(2, "ABBA", "Gimme! Gimme! Gimme! [duet]"),
+            song(3, "ABBA", "Gimme! Gimme! Gimme! [ DUET ]"),
+        )
+
+        assertEquals(listOf(2, 3), sameSongAs(wanted, found).map { it.songId })
+    }
+
+    /** A round bracket is part of the song, and the real card has one carrying both. */
+    @Test
+    fun `a round bracket survives while the duet tag beside it does not`() {
+        val wanted = song(1, "Disney", "A Whole New World (Album Version)")
+        val found = listOf(song(2, "Disney", "A Whole New World (Album Version) [DUET]"))
+
+        assertEquals(listOf(2), sameSongAs(wanted, found).map { it.songId })
+    }
+
     // -------------------------------------------------------------------------------------
     // What must never match
     // -------------------------------------------------------------------------------------

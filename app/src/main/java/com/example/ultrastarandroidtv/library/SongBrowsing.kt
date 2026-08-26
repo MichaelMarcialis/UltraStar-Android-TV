@@ -72,6 +72,13 @@ fun sortKeyOf(song: ScannedSong, sort: SongSort): String {
 fun songOrder(sort: SongSort): Comparator<ScannedSong> = compareBy(
     { sortKeyOf(it, sort).lowercase() },
     { sortKeyOf(it, if (sort == SongSort.Title) SongSort.Artist else SongSort.Title).lowercase() },
+    // Total, not merely sorted. Title and artist are not enough to separate two songs: a duet
+    // arrangement sits beside its original sharing both, and the scanner supports exactly that.
+    // Left tied they keep whatever order the card was walked in, which is not the same order
+    // twice, so the pair would silently swap places between rescans. The folder and then the
+    // chart's own document id break it, and both are as stable as the files themselves.
+    { it.folderName.lowercase() },
+    { it.textId },
 )
 
 fun matches(song: ScannedSong, filter: SongFilterState): Boolean = when (filter) {

@@ -141,6 +141,12 @@ private fun loosely(text: String): String = text
 /**
  * A title with USDB's own arrangement tag taken off, so `[DUET]` is not part of the name.
  *
+ * **That tag and no other.** Stripping every square bracket looked equivalent and is not: it makes
+ * "Song [Live]" and "Song [Remix]" compare equal to "Song", and this comparison decides whether a
+ * chart may *replace* another one — so a live recording could be downloaded against a studio
+ * chart's timing and the original folder deleted. Measured across the real card, the only
+ * square-bracket tag in any title is `[DUET]`, on four songs. Anything else is a name.
+ *
  * Titles are then compared for **equality**, not containment. Containment was the first rule
  * and it is dangerous in one specific way: "Hello" is contained in "Hello Again", so a song
  * whose music had gone could be replaced by a different song with a longer name -- and a wrong
@@ -153,7 +159,8 @@ private fun loosely(text: String): String = text
  */
 private fun withoutArrangementTag(title: String): String = title.replace(ARRANGEMENT_TAG, " ")
 
-private val ARRANGEMENT_TAG = Regex("""\[[^\]]*\]""")
+private val ARRANGEMENT_TAG =
+    Regex("""\[\s*DUET\s*\]""", RegexOption.IGNORE_CASE)
 
 /**
  * Whether two artist strings name the same act.

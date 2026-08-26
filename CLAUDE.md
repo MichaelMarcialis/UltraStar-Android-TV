@@ -376,6 +376,11 @@ A failed download stretched one row of the results list to the full height of th
 - The write path stopped at `remaining() >= 2` and **discarded a trailing odd byte**.
 Real PCM arrives frame-aligned so neither fired in the player, but a component that loses a byte on an odd-sized buffer is one bad assumption away from white noise. It now takes everything offered and keeps the low half of a split sample until its other half arrives. The test that found it asserts the property directly: **the same audio through the same processor gives the same bytes whatever size the input buffers are cut to.**
 
+**The last two, and the card settled both** (Copilot on PR #2, 2026-08-26). No new inline comments; two carried over from earlier passes, and each was answered by looking at the real library rather than reasoning about it.
+
+- **Only `[DUET]` comes off a title, not every square bracket.** Stripping them all looked equivalent and is not: it makes "Song [Live]" equal to "Song", and that comparison decides whether a chart may *replace* another — so a live recording could be downloaded against a studio chart's timing and the original folder deleted. **Measured across every chart on the card, `[DUET]` is the only square-bracket tag in any title**, on four songs; one of them, "A Whole New World (Album Version) [DUET]", carries a round bracket too and proves the distinction is real rather than theoretical.
+- **`songOrder` is a total order now.** Title and artist do not separate a duet arrangement from the original beside it — the scanner supports exactly that pairing — so the two were left tied and kept whatever order the card was walked in, which is not the same order twice. The folder name and then the chart's document id break it, and the KDoc's promise of a stable order is finally true rather than aspirational.
+
 **The made-for-kids hole is closed, and the answer was the obvious client** (`InnertubeClients.ANDROID_KIDS`, measured 2026-08-24 across the whole client table against a real Disney upload).
 
 - **`ANDROID_KIDS` answers `OK` where visionOS answers `UNPLAYABLE`**, with the **full format ladder** — itag 140 for sound and itag 137 for picture, the two this app already prefers — plain URLs, no JS player, no PO token, no cookies, no account.

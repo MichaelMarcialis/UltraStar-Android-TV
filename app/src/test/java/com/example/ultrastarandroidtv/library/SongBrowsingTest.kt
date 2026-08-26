@@ -56,6 +56,38 @@ class SongBrowsingTest {
         assertEquals("Some Folder", sortKeyOf(nameless, SongSort.Artist))
     }
 
+    /**
+     * The comparator has to be a *total* order, not merely a sort.
+     *
+     * A duet arrangement sits beside its original sharing both title and artist, which the scanner
+     * supports on purpose. Tied, the two keep whatever order the card happened to be walked in —
+     * and that is not the same order twice, so they would quietly swap places between rescans.
+     */
+    @Test
+    fun `two arrangements of one song keep their order between scans`() {
+        val original = song("Circle Of Life", "Elton John", folder = "Elton John - Circle Of Life")
+            .copy(textId = "text-original")
+        val duet = song("Circle Of Life", "Elton John", folder = "Elton John - Circle Of Life")
+            .copy(textId = "text-duet")
+
+        val oneWalk = listOf(original, duet).sortedWith(songOrder(SongSort.Title))
+        val theOther = listOf(duet, original).sortedWith(songOrder(SongSort.Title))
+
+        assertEquals(oneWalk.map { it.textId }, theOther.map { it.textId })
+    }
+
+    /** And the same holds when they are in different folders with the same name ordering. */
+    @Test
+    fun `songs sharing a title and artist are separated by their folder`() {
+        val a = song("Hello", "Adele", folder = "Adele - Hello").copy(textId = "t1")
+        val b = song("Hello", "Adele", folder = "Adele - Hello (2)").copy(textId = "t2")
+
+        assertEquals(
+            listOf("t1", "t2"),
+            listOf(b, a).sortedWith(songOrder(SongSort.Title)).map { it.textId },
+        )
+    }
+
     // -------------------------------------------------------------------------------------
     // Filtering
     // -------------------------------------------------------------------------------------
