@@ -87,11 +87,23 @@ class RepairQueue {
      */
     val current: List<RepairJob> get() = _jobs.filter { it.batch == batch }
 
-    /** Adds a job unless the same song is already here and has not failed. Retries are allowed. */
+    /**
+     * Adds a job unless this song is already on its way. Anything **finished** can be asked for
+     * again.
+     *
+     * Finished, rather than only failed, and the difference is a real one: a repair that got the
+     * music but not the artwork is reported as a success, because one asset of three is worth
+     * having. Refusing to re-queue it meant the rest of that plan could never be attempted again
+     * for the whole session — the song's button was hidden and "Repair N songs" skipped it — even
+     * though the next scan still says there is something to fetch.
+     *
+     * Nothing is re-queued that has nothing left to do: the caller only asks when
+     * [SongRepairer.plan] still returns one, which is recomputed from the card after every batch.
+     */
     fun add(song: ScannedSong, plan: RepairPlan): Boolean {
         val existing = _jobs.indexOfFirst { it.song.textId == song.textId }
         if (existing >= 0) {
-            if (_jobs[existing].status !is RepairStatus.Failed) return false
+            if (!_jobs[existing].isFinished) return false
             _jobs.removeAt(existing)
         }
         // A queue with nothing left to do is finished with, so the next thing asked for
@@ -101,8 +113,15 @@ class RepairQueue {
         return true
     }
 
+    /**
+     * Whether this song is on its way — queued or being worked on.
+     *
+     * Deliberately *not* "has ever been asked for". A screen uses this to decide whether to offer
+     * the button, and a finished repair must not hide one: a partial success leaves a plan behind,
+     * and a failure is worth retrying. Both are finished, and neither is held.
+     */
     fun holds(textId: String): Boolean =
-        _jobs.any { it.song.textId == textId && it.status !is RepairStatus.Failed }
+        _jobs.any { it.song.textId == textId && !it.isFinished }
 
     fun nextPending(): RepairJob? = _jobs.firstOrNull { it.isPending }
 

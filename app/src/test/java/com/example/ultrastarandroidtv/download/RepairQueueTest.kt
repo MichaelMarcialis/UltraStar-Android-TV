@@ -53,6 +53,37 @@ class RepairQueueTest {
         assertEquals(RepairStatus.Queued, queue.jobs.first().status)
     }
 
+    /**
+     * The case that made this "finished", not "failed".
+     *
+     * A repair that gets the music but not the artwork is a success — one asset of three is worth
+     * having — and it leaves a plan behind. Refusing to re-queue it meant the rest of that plan
+     * could never be attempted again for the whole session: the song's own button was hidden and
+     * "Repair N songs" skipped it, while the next scan went on saying there was something to fetch.
+     */
+    @Test
+    fun `a partially repaired song can be asked for again`() {
+        val queue = RepairQueue()
+        queue.add(song("First"), plan())
+        queue.jobs.first().status = RepairStatus.Done("Got the music")
+
+        assertFalse("a finished repair must not hide the button", queue.holds("text-First"))
+        assertTrue(queue.add(song("First"), plan(audio = false, cover = true)))
+        assertEquals(1, queue.jobs.size)
+        assertEquals(RepairStatus.Queued, queue.jobs.first().status)
+    }
+
+    /** While it is actually on its way, though, asking twice must still do nothing. */
+    @Test
+    fun `a song being worked on is not re-queued`() {
+        val queue = RepairQueue()
+        queue.add(song("First"), plan())
+        queue.jobs.first().status = RepairStatus.Working(RepairStage.Music)
+
+        assertTrue(queue.holds("text-First"))
+        assertFalse(queue.add(song("First"), plan()))
+    }
+
     @Test
     fun `holds only while a song is on its way`() {
         val queue = RepairQueue()
@@ -61,6 +92,9 @@ class RepairQueueTest {
 
         queue.jobs.first().status = RepairStatus.Failed("gone")
         assertFalse("a failure is not held -- it can be retried", queue.holds("text-First"))
+
+        queue.jobs.first().status = RepairStatus.Done("Got the music")
+        assertFalse("nor is a success -- it may still have a plan left", queue.holds("text-First"))
 
         assertFalse(queue.holds("text-Nothing"))
     }
