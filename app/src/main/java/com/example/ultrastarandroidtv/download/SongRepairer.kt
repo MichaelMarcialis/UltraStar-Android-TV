@@ -3,6 +3,7 @@ package com.example.ultrastarandroidtv.download
 import com.example.ultrastarandroidtv.library.DocumentTree
 import com.example.ultrastarandroidtv.library.DocumentWriter
 import com.example.ultrastarandroidtv.library.ScannedSong
+import com.example.ultrastarandroidtv.library.SongLibraryCache
 import com.example.ultrastarandroidtv.net.AudioLookup
 import com.example.ultrastarandroidtv.net.Http
 import com.example.ultrastarandroidtv.net.HttpFailure
@@ -52,6 +53,14 @@ data class RepairPlan(
     val needsBetterCover: Boolean,
     /** A full URL the chart names for its cover, when it names a fetchable one. */
     val coverUrl: String?,
+    /**
+     * Which reading of the card this was worked out from — see [SongLibraryCache.generation].
+     *
+     * A plan describes what a song was missing *at the time of a scan*, and running it makes
+     * it untrue. Carrying the scan is what lets [RepairQueue] refuse to run the same plan
+     * twice before anybody has looked at the card again.
+     */
+    val scan: Int = 0,
 ) {
     val isWorthDoing: Boolean
         get() = needsAudio || needsVideo || needsCover || needsBetterCover
@@ -138,7 +147,7 @@ class SongRepairer(
      * in the folder says where its media came from. A Repair button that answers "there is nothing
      * I can do" is worse than no button, so the question is asked before it is shown.
      */
-    fun plan(song: ScannedSong): RepairPlan? {
+    fun plan(song: ScannedSong, scan: Int = 0): RepairPlan? {
         val tags = mediaTagsFor(song)
         val videoId = tags.audioSource
 
@@ -154,6 +163,7 @@ class SongRepairer(
             coverUrl = tags.coverFile?.takeIf {
                 it.startsWith("http://", true) || it.startsWith("https://", true)
             },
+            scan = scan,
         )
         return plan.takeIf { it.isWorthDoing }
     }

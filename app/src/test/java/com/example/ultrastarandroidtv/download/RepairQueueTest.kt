@@ -54,49 +54,72 @@ class RepairQueueTest {
     }
 
     /**
-     * The case that made this "finished", not "failed".
+     * A partial repair leaves a plan behind, and it has to be reachable again — but only once
+     * somebody has looked at the card.
      *
-     * A repair that gets the music but not the artwork is a success — one asset of three is worth
-     * having — and it leaves a plan behind. Refusing to re-queue it meant the rest of that plan
-     * could never be attempted again for the whole session: the song's own button was hidden and
-     * "Repair N songs" skipped it, while the next scan went on saying there was something to fetch.
+     * Both halves matter, and getting either wrong is its own bug. Refusing forever meant the rest
+     * of the plan could never be attempted for the whole session. Allowing it immediately meant the
+     * *stale* plan could run: the screen keeps its plans until the batch ends and rescans, so
+     * pressing Repair mid-batch would fetch the music again, be handed a suffixed copy by SAF, and
+     * point the chart at that.
      */
     @Test
-    fun `a partially repaired song can be asked for again`() {
+    fun `a done song is held until the card has been read again`() {
         val queue = RepairQueue()
-        queue.add(song("First"), plan())
+        queue.add(song("First"), plan(scan = 7))
         queue.jobs.first().status = RepairStatus.Done("Got the music")
 
-        assertFalse("a finished repair must not hide the button", queue.holds("text-First"))
-        assertTrue(queue.add(song("First"), plan(audio = false, cover = true)))
+        assertTrue(
+            "the plan it ran is the only plan anybody has, and it is now untrue",
+            queue.holds("text-First", scan = 7),
+        )
+        assertFalse(
+            "a rescan makes whatever it asks for next a fresh question",
+            queue.holds("text-First", scan = 8),
+        )
+    }
+
+    @Test
+    fun `a stale plan cannot be queued a second time`() {
+        val queue = RepairQueue()
+        queue.add(song("First"), plan(scan = 7))
+        queue.jobs.first().status = RepairStatus.Done("Got the music")
+
+        assertFalse("the same scan asks the same question", queue.add(song("First"), plan(scan = 7)))
+        assertTrue(queue.add(song("First"), plan(audio = false, cover = true, scan = 8)))
         assertEquals(1, queue.jobs.size)
         assertEquals(RepairStatus.Queued, queue.jobs.first().status)
     }
 
-    /** While it is actually on its way, though, asking twice must still do nothing. */
+    /** While it is actually on its way, no scan makes asking twice reasonable. */
     @Test
     fun `a song being worked on is not re-queued`() {
         val queue = RepairQueue()
-        queue.add(song("First"), plan())
+        queue.add(song("First"), plan(scan = 7))
         queue.jobs.first().status = RepairStatus.Working(RepairStage.Music)
 
-        assertTrue(queue.holds("text-First"))
-        assertFalse(queue.add(song("First"), plan()))
+        assertTrue(queue.holds("text-First", scan = 99))
+        assertFalse(queue.add(song("First"), plan(scan = 99)))
+    }
+
+    /** A failure wrote nothing, so nothing can be written twice: a retry is always reasonable. */
+    @Test
+    fun `a failure is never in the way, whatever the scan`() {
+        val queue = RepairQueue()
+        queue.add(song("First"), plan(scan = 7))
+        queue.jobs.first().status = RepairStatus.Failed("no internet")
+
+        assertFalse(queue.holds("text-First", scan = 7))
+        assertTrue(queue.add(song("First"), plan(scan = 7)))
     }
 
     @Test
-    fun `holds only while a song is on its way`() {
+    fun `holds while a song is queued, and says nothing about one it has never seen`() {
         val queue = RepairQueue()
-        queue.add(song("First"), plan())
-        assertTrue(queue.holds("text-First"))
+        queue.add(song("First"), plan(scan = 1))
 
-        queue.jobs.first().status = RepairStatus.Failed("gone")
-        assertFalse("a failure is not held -- it can be retried", queue.holds("text-First"))
-
-        queue.jobs.first().status = RepairStatus.Done("Got the music")
-        assertFalse("nor is a success -- it may still have a plan left", queue.holds("text-First"))
-
-        assertFalse(queue.holds("text-Nothing"))
+        assertTrue(queue.holds("text-First", scan = 1))
+        assertFalse(queue.holds("text-Nothing", scan = 1))
     }
 
     @Test
@@ -259,14 +282,19 @@ class RepairQueueTest {
 
     // -------------------------------------------------------------------------------------
 
-    private fun plan(audio: Boolean = true, video: Boolean = true, cover: Boolean = true) =
-        RepairPlan(
+    private fun plan(
+        audio: Boolean = true,
+        video: Boolean = true,
+        cover: Boolean = true,
+        scan: Int = 0,
+    ) = RepairPlan(
             videoId = "VIDEO123",
             needsAudio = audio,
             needsVideo = video,
             needsCover = cover,
             needsBetterCover = false,
             coverUrl = null,
+            scan = scan,
         )
 
     private fun song(name: String) = ScannedSong(

@@ -47,15 +47,29 @@ class AlternateVersionsTest {
     }
 
     /**
-     * Learned on the iTunes cover search and true again here: requiring every word of an artist
-     * loses every soundtrack, because one chart bills a song to the film and another to the singer.
+     * The deliberate miss, written down so it is not mistaken for a bug later.
+     *
+     * An artist whose name merely *contains* another is not the same act, so a chart billed as
+     * plain "Moana" is not matched against one billed "Disney's Moana". That loses a genuine
+     * alternative now and then, and it is the right way round: the rule that would find it is the
+     * same rule that matches "Queen" to "Queens of the Stone Age", and a wrong replacement deletes
+     * the original folder. A missed alternative is a song somebody searches for by hand.
      */
     @Test
-    fun `a soundtrack billed two ways is still the same song`() {
+    fun `an artist that merely contains another is not the same act`() {
         val wanted = song(1, "Disney's Moana", "How Far I'll Go")
         val found = listOf(song(2, "Moana", "How Far I'll Go"))
 
-        assertEquals(listOf(2), sameSongAs(wanted, found).map { it.songId })
+        assertTrue(sameSongAs(wanted, found).isEmpty())
+    }
+
+    /** The pair that turned that from a judgement call into a rule. */
+    @Test
+    fun `Queen is not Queens of the Stone Age`() {
+        val wanted = song(1, "Queen", "Sail Away Sweet Sister")
+        val found = listOf(song(2, "Queens of the Stone Age", "Sail Away Sweet Sister"))
+
+        assertTrue(sameSongAs(wanted, found).isEmpty())
     }
 
     /**

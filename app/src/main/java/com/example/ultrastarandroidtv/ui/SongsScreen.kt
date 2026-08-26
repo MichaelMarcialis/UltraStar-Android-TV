@@ -198,7 +198,9 @@ fun SongsScreen(
         plan = null
         val song = selected ?: return@LaunchedEffect
         val fixer = repairer ?: return@LaunchedEffect
-        plan = withContext(Dispatchers.IO) { runCatching { fixer.plan(song) }.getOrNull() }
+        plan = withContext(Dispatchers.IO) {
+            runCatching { fixer.plan(song, cache.generation) }.getOrNull()
+        }
     }
 
     /**
@@ -219,7 +221,8 @@ fun SongsScreen(
         val fixer = repairer ?: return@LaunchedEffect
         repairable = if (songs.isEmpty()) emptyList() else withContext(Dispatchers.IO) {
             songs.mapNotNull { song ->
-                runCatching { fixer.plan(song) }.getOrNull()?.let { song to it }
+                runCatching { fixer.plan(song, cache.generation) }.getOrNull()
+                    ?.let { song to it }
             }
         }
     }
@@ -414,7 +417,9 @@ fun SongsScreen(
                     // buttons across the top wrapped "Main menu" into two lines, which is exactly
                     // the fault that made UltraStar Play unusable. It also belongs here -- it is a
                     // thing to do *about* what the filters are showing.
-                    val waiting = repairable.filterNot { downloads.repairs.holds(it.first.textId) }
+                    val waiting = repairable.filterNot {
+                        downloads.repairs.holds(it.first.textId, it.second.scan)
+                    }
                     if (waiting.isNotEmpty()) {
                         Spacer(Modifier.weight(1f))
                         Button(
@@ -571,7 +576,7 @@ fun SongsScreen(
                             Text("Back", modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
                         }
                         plan?.let { ready ->
-                            if (canModify && !downloads.repairs.holds(song.textId)) {
+                            if (canModify && !downloads.repairs.holds(song.textId, ready.scan)) {
                                 Spacer(Modifier.width(16.dp))
                                 Button(onClick = { downloads.repairs.add(song, ready) }) {
                                     Text(

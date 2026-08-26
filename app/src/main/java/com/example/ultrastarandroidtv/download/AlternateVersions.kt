@@ -154,24 +154,28 @@ private val ARRANGEMENT_TAG = Regex("""\[[^\]]*\]""")
 /**
  * Whether two artist strings name the same act.
  *
- * Compared on the **letters alone**, with spaces and punctuation gone, and asking only that one
- * name contains the other: two charts of one song rarely agree on how an artist is written, and
- * that survives "a-ha"/"aha" and "Guns N' Roses"/"Guns N Roses".
- *
- * **And again with the bracketed part removed**, which is what a soundtrack needs. Measured on the
- * real library: "How Far I'll Go" is on USDB twice, as *Disney's Moana (Auli'i Cravalho)* and as
- * *Disney's Moana (Alessia Cara)* — the same song from the same film, billed to two different
- * singers. Letters alone rejects that pair; letters without the qualifier accepts it. A bracket in
- * an *artist* is a performer credit, where a bracket in a **title** is usually part of the song —
+ * Compared on the **letters alone**, with spaces and punctuation gone, and then again with any
+ * bracketed credit removed. Two charts of one song rarely agree on how an artist is written, and
+ * that much survives "a-ha"/"aha", "Guns N' Roses"/"Guns N Roses", and the case measured on the
+ * real library: "How Far I'll Go" is on USDB as both *Disney's Moana (Auli'i Cravalho)* and
+ * *Disney's Moana (Alessia Cara)* — one song from one film, billed to two singers. A bracket in
+ * an *artist* is a performer credit, where a bracket in a **title** is usually part of the song,
  * which is why this rule lives here and not in the title comparison.
  *
- * A shared *word* was tried first and is wrong in a way worth recording: "The Monkees" and "The
- * Beatles" share "the", which would have matched two entirely different bands on a definite
- * article. Containment cannot make that mistake.
+ * **Equality, not containment**, and that is the whole of the safety here. Containment was tried
+ * and it merges names that happen to sit inside one another: "Queen" is inside "Queens of the
+ * Stone Age". With a shared title that would have downloaded the other act's chart *and deleted
+ * the original folder*, which is the worst thing in this file. The cost is a genuine miss — a
+ * soundtrack billed as plain "Moana" against another's "Disney's Moana" is not matched — and
+ * that is the right way round: a missed alternative is a song somebody searches for by hand,
+ * where a wrong one is a song that quietly disappears.
+ *
+ * A shared *word* was tried first and is wrong in its own way: "The Monkees" and "The Beatles"
+ * share "the", which matched two entirely different bands on a definite article.
  */
 private fun sameArtist(a: String, b: String): Boolean =
-    containsEitherWay(letters(a), letters(b)) ||
-        containsEitherWay(letters(withoutQualifier(a)), letters(withoutQualifier(b)))
+    sameLetters(letters(a), letters(b)) ||
+        sameLetters(letters(withoutQualifier(a)), letters(withoutQualifier(b)))
 
 private fun withoutQualifier(name: String): String = name.replace(QUALIFIER, " ")
 
@@ -179,7 +183,4 @@ private val QUALIFIER = Regex("""\([^)]*\)""")
 
 private fun letters(name: String): String = loosely(name).replace(" ", "")
 
-private fun containsEitherWay(a: String, b: String): Boolean = when {
-    a.length < 3 || b.length < 3 -> a.isNotEmpty() && a == b
-    else -> a.contains(b) || b.contains(a)
-}
+private fun sameLetters(a: String, b: String): Boolean = a.isNotEmpty() && a == b

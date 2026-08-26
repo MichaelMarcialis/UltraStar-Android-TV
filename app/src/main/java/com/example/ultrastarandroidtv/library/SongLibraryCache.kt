@@ -40,10 +40,23 @@ class SongLibraryCache {
     /** True when this already holds a scan of [tree] and nothing needs to be read again. */
     fun holds(tree: Uri?): Boolean = loaded && tree != null && tree == scannedTree
 
+    /**
+     * How many times the card has been read, which is what makes a *scan* something a
+     * decision can be pinned to.
+     *
+     * A repair plan is worked out from a scan and stops being true the moment the repair
+     * runs — the song now has the audio the plan said was missing. Stamping the plan with
+     * this is what lets a screen tell "there is still something to fetch" apart from "we
+     * have not looked since we fetched it".
+     */
+    var generation: Int by mutableStateOf(0)
+        private set
+
     fun put(tree: Uri?, found: List<ScannedSong>) {
         scannedTree = tree
         songs = found
         loaded = true
+        generation++
     }
 
     /** Drops one song, so removing it does not cost a rescan of the whole card. */

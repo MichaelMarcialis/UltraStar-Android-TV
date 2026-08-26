@@ -88,22 +88,19 @@ class RepairQueue {
     val current: List<RepairJob> get() = _jobs.filter { it.batch == batch }
 
     /**
-     * Adds a job unless this song is already on its way. Anything **finished** can be asked for
-     * again.
+     * Adds a job unless one for this song is already [blocking][blocks] the way.
      *
-     * Finished, rather than only failed, and the difference is a real one: a repair that got the
-     * music but not the artwork is reported as a success, because one asset of three is worth
-     * having. Refusing to re-queue it meant the rest of that plan could never be attempted again
-     * for the whole session — the song's button was hidden and "Repair N songs" skipped it — even
-     * though the next scan still says there is something to fetch.
-     *
-     * Nothing is re-queued that has nothing left to do: the caller only asks when
-     * [SongRepairer.plan] still returns one, which is recomputed from the card after every batch.
+     * A repair that got the music but not the artwork is a **success** — one asset of three is
+     * worth having — and it leaves a plan behind, so a finished job cannot simply be treated as
+     * done with. But nor can it be re-queued freely: the plan it ran says the audio is missing,
+     * and running it a second time would fetch the music again, be handed a *suffixed* copy by
+     * the Storage Access Framework, and point the chart at that. Which of the two it is turns on
+     * whether anybody has looked at the card since — see [blocks].
      */
     fun add(song: ScannedSong, plan: RepairPlan): Boolean {
         val existing = _jobs.indexOfFirst { it.song.textId == song.textId }
         if (existing >= 0) {
-            if (!_jobs[existing].isFinished) return false
+            if (_jobs[existing].blocks(plan.scan)) return false
             _jobs.removeAt(existing)
         }
         // A queue with nothing left to do is finished with, so the next thing asked for
@@ -114,14 +111,34 @@ class RepairQueue {
     }
 
     /**
-     * Whether this song is on its way — queued or being worked on.
+     * Whether a repair for this song should be offered, given what [scan] of the card knows.
      *
-     * Deliberately *not* "has ever been asked for". A screen uses this to decide whether to offer
-     * the button, and a finished repair must not hide one: a partial success leaves a plan behind,
-     * and a failure is worth retrying. Both are finished, and neither is held.
+     * Pass the generation of the scan the button's plan came from — see
+     * [com.example.ultrastarandroidtv.library.SongLibraryCache.generation].
      */
-    fun holds(textId: String): Boolean =
-        _jobs.any { it.song.textId == textId && !it.isFinished }
+    fun holds(textId: String, scan: Int): Boolean =
+        _jobs.any { it.song.textId == textId && it.blocks(scan) }
+
+    /**
+     * Whether this job stands in the way of asking again, for somebody working from [scan].
+     *
+     * Three answers, and each is a different situation:
+     *
+     * - **On its way** — queued or being worked on. Asking twice must do nothing.
+     * - **Failed** — never in the way. A retry after the network came back is reasonable, and
+     *   nothing was written, so nothing can be written twice.
+     * - **Done** — in the way until the card has been read again. This is the subtle one: the
+     *   plan it ran said the music was missing, and it is not missing any more, but the screen
+     *   goes on holding that plan until the batch finishes and rescans. Running it again in
+     *   that window would download the audio a second time, get a suffixed copy, and retarget
+     *   the chart at it. A newer scan means somebody has looked, so whatever it now asks for
+     *   is a fresh question.
+     */
+    private fun RepairJob.blocks(scan: Int): Boolean = when (status) {
+        is RepairStatus.Failed -> false
+        is RepairStatus.Done -> plan.scan >= scan
+        else -> true
+    }
 
     fun nextPending(): RepairJob? = _jobs.firstOrNull { it.isPending }
 
