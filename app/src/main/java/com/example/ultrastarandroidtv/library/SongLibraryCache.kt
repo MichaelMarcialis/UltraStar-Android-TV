@@ -95,6 +95,19 @@ class SongLibraryCache {
      */
     fun markStale() {
         loaded = false
+    }
+
+    /**
+     * The same, and **tell anybody already looking**.
+     *
+     * Split from [markStale] because the two happen at different rates. One song landing is
+     * news worth reacting to at once. Twenty-three songs landing one after another is the same
+     * news twenty-three times, and reacting to each would start a five-second scan of the whole
+     * card after every one of them — two minutes of scanning, running alongside the writes that
+     * are still going on. So a run of work invalidates quietly and publishes when it is done.
+     */
+    fun markChanged() {
+        loaded = false
         revision++
     }
 

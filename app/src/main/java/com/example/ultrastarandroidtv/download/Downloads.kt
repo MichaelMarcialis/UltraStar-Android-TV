@@ -129,7 +129,8 @@ class Downloads(private val context: Context) {
                 download.status = QueueStatus.Working(DownloadStage.FetchingChart)
                 download.status = runOne(download)
                 announce(download)
-                if (download.status is QueueStatus.Done) cache.markStale()
+                // One song, finished: worth telling a screen about immediately.
+                if (download.status is QueueStatus.Done) cache.markChanged()
                 continue
             }
 
@@ -141,7 +142,12 @@ class Downloads(private val context: Context) {
             repair.status = RepairStatus.Working(RepairStage.Looking)
             repair.status = runRepair(repair)
             announceRepair(repair)
-            if (repair.status is RepairStatus.Done) cache.markStale()
+            // A repair *run* publishes once, at the end. Repairing twenty-three songs and
+            // announcing each would rescan the whole card twenty-three times -- five seconds
+            // apiece, alongside the writes still going on.
+            if (repair.status is RepairStatus.Done) {
+                if (repairs.isBusy) cache.markStale() else cache.markChanged()
+            }
         }
     }
 

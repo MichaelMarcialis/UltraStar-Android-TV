@@ -107,6 +107,15 @@ fun downloadInChunks(
                 while (true) {
                     val read = source.stream.read(buffer)
                     if (read < 0) break
+                    // Only the start of a 206 was being checked, so a server that sent *more*
+                    // than the range asked for had every byte written: `written` ran past the
+                    // declared length, the outer loop simply stopped, and an overlong corrupt
+                    // file was reported as a finished one. A whole body is exempt because it is
+                    // allowed to be longer than one chunk -- it is checked against the declared
+                    // length instead.
+                    if (!wholeBody && written + read > end + 1) {
+                        throw HttpFailure("The server sent more than the range asked for.")
+                    }
                     out.write(buffer, 0, read)
                     written += read
                     got += read
@@ -140,6 +149,12 @@ fun downloadInChunks(
             }
             break
         }
+    }
+
+    // The loop can also end by simply running out of file, and that exit has to answer for
+    // the same bytes as the other two.
+    if (declaredLength > 0L && written != declaredLength) {
+        throw HttpFailure("The download gave $written bytes of a declared $declaredLength.")
     }
 
     return written

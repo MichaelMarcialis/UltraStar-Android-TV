@@ -406,6 +406,57 @@ class DownloadQueueTest {
         }))
     }
 
+    // -----------------------------------------------------------------------------------------
+    // One run at a time
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * The same bug the repair queue has a test for: a bar that opens nearly full.
+     *
+     * Finished entries are kept on purpose — a row saying "Added" or "Try again" is the most useful
+     * thing on the screen — but counting them into the *bar* meant a new download opened at nine
+     * tenths, having counted every song already fetched as progress towards it.
+     */
+    @Test
+    fun `a new run starts its bar at the beginning`() {
+        val queue = DownloadQueue()
+        repeat(5) { queue.add(song(it, "Old $it")) }
+        queue.entries.forEach { it.status = QueueStatus.Done("An Artist - ${it.song.title}") }
+        assertEquals(1f, queueProgress(queue)!!, 0.001f)
+
+        queue.add(song(99, "New"))
+
+        assertEquals(0f, queueProgress(queue)!!, 0.001f)
+        assertEquals("only the new one is being waited for", 1, queue.current.size)
+        assertEquals("New", queue.current.single().song.title)
+    }
+
+    /** And what has been added is counted for this run, not for the whole session. */
+    @Test
+    fun `what was saved is counted per run`() {
+        val queue = DownloadQueue()
+        queue.add(song(1, "Old"))
+        queue.entries.first().status = QueueStatus.Done("An Artist - Old")
+        assertEquals(1, queue.savedCount)
+
+        queue.add(song(2, "New"))
+
+        assertEquals(0, queue.savedCount)
+    }
+
+    /** Adding while a run is still going joins it rather than starting another. */
+    @Test
+    fun `adding to a busy queue joins the same run`() {
+        val queue = DownloadQueue()
+        queue.add(song(1, "First"))
+        queue.add(song(2, "Second"))
+
+        assertEquals(2, queue.current.size)
+
+        queue.entries.first().status = QueueStatus.Done("An Artist - First")
+        assertEquals(0.5f, queueProgress(queue)!!, 0.001f)
+    }
+
     private fun song(id: Int, title: String) = UsdbSong(
         songId = id,
         artist = "An Artist",

@@ -303,6 +303,24 @@ class RangedDownloadTest {
         assertTrue(thrown is HttpFailure)
     }
 
+    /**
+     * Only the *start* of a 206 was being checked.
+     *
+     * A server that sent more than the range asked for had every byte written: the running
+     * total ran past the declared length, the loop simply stopped, and an overlong corrupt
+     * file was returned as a finished one.
+     */
+    @Test
+    fun `a range that delivers more than it was asked for is refused`() {
+        val net = FakeRanges(ByteArray(900), overDeliver = true)
+
+        val thrown = runCatching {
+            downloadInChunks(net, URL, ByteArrayOutputStream(), declaredLength = 900, chunkBytes = 300)
+        }.exceptionOrNull()
+
+        assertTrue(thrown is HttpFailure)
+    }
+
     /** And a 206 for the wrong offset is a different piece of the file, not this one. */
     @Test
     fun `a range starting somewhere else is refused`() {
@@ -376,6 +394,8 @@ class RangedDownloadTest {
         private val ignoreRangeAfterRequests: Int = Int.MAX_VALUE,
         /** Answers with the right length from the wrong place. */
         private val answerFromOffset: Int? = null,
+        /** Answers with more bytes than the range asked for, as a careless CDN would. */
+        private val overDeliver: Boolean = false,
     ) : Http {
         val ranges = mutableListOf<Pair<Int, Int>>()
         var lastHeaders: Map<String, String> = emptyMap()
@@ -406,7 +426,8 @@ class RangedDownloadTest {
                 return if (refuseBeyondEnd) HttpReply(416, "", NO_HEADERS)
                 else HttpReply(206, ByteArray(0), NO_HEADERS)
             }
-            return HttpReply(206, body.copyOfRange(start, minOf(end + 1, body.size)), NO_HEADERS)
+            val last = if (overDeliver) body.size else minOf(end + 1, body.size)
+            return HttpReply(206, body.copyOfRange(start, last), NO_HEADERS)
         }
 
         private val NO_HEADERS = emptyMap<String, List<String>>()
