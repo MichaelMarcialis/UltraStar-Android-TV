@@ -224,6 +224,68 @@ class RangedDownloadTest {
     }
 
     // -------------------------------------------------------------------------------------
+    // A reply that is not the range that was asked for
+    // -------------------------------------------------------------------------------------
+
+    /**
+     * A whole body is a perfectly good answer to the *first* request, and nothing afterwards.
+     *
+     * A server, proxy or redirect that ignores `Range` answers 200 with the entire file. Appended
+     * to bytes already collected that writes the beginning of the file twice — and with no declared
+     * length to stop it, every pass appends the whole body again and the loop never ends.
+     */
+    @Test
+    fun `a server that ignores the range is accepted once and then done`() {
+        val body = ByteArray(900) { (it % 31).toByte() }
+        val net = FakeRanges(body, ignoreRange = true)
+        val out = ByteArrayOutputStream()
+
+        val written = downloadInChunks(net, URL, out, declaredLength = 900, chunkBytes = 300)
+
+        assertEquals(900L, written)
+        assertArrayEquals("the file must not have its start written twice", body, out.toByteArray())
+        assertEquals("one request was enough", 1, net.ranges.size)
+    }
+
+    /** The unbounded case: without a declared length this used to loop for ever. */
+    @Test
+    fun `an ignored range does not loop for ever when the length is unknown`() {
+        val body = ByteArray(900)
+        val net = FakeRanges(body, ignoreRange = true)
+
+        val written = downloadInChunks(
+            net, URL, ByteArrayOutputStream(), declaredLength = -1, chunkBytes = 300,
+        )
+
+        assertEquals(900L, written)
+        assertEquals(1, net.ranges.size)
+    }
+
+    /** Part way through, the same reply is a duplicate rather than an answer. */
+    @Test
+    fun `a whole body part way through a download is refused`() {
+        val net = FakeRanges(ByteArray(900), ignoreRangeAfterRequests = 1)
+
+        val thrown = runCatching {
+            downloadInChunks(net, URL, ByteArrayOutputStream(), declaredLength = 900, chunkBytes = 300)
+        }.exceptionOrNull()
+
+        assertTrue(thrown is HttpFailure)
+    }
+
+    /** And a 206 for the wrong offset is a different piece of the file, not this one. */
+    @Test
+    fun `a range starting somewhere else is refused`() {
+        val net = FakeRanges(ByteArray(900), answerFromOffset = 600)
+
+        val thrown = runCatching {
+            downloadInChunks(net, URL, ByteArrayOutputStream(), declaredLength = 900, chunkBytes = 300)
+        }.exceptionOrNull()
+
+        assertTrue(thrown is HttpFailure)
+    }
+
+    // -------------------------------------------------------------------------------------
     // Talking to a screen
     // -------------------------------------------------------------------------------------
 
@@ -278,6 +340,12 @@ class RangedDownloadTest {
         val body: ByteArray,
         private val refuseBeyondEnd: Boolean = false,
         private val failAfterRequests: Int = Int.MAX_VALUE,
+        /** Answers every request with the whole file and a 200, as a careless proxy would. */
+        private val ignoreRange: Boolean = false,
+        /** The same, but only once this many ranges have been served properly. */
+        private val ignoreRangeAfterRequests: Int = Int.MAX_VALUE,
+        /** Answers with the right length from the wrong place. */
+        private val answerFromOffset: Int? = null,
     ) : Http {
         val ranges = mutableListOf<Pair<Int, Int>>()
         var lastHeaders: Map<String, String> = emptyMap()
@@ -291,6 +359,18 @@ class RangedDownloadTest {
             val start = spec.substringBefore('-').toInt()
             val end = spec.substringAfter('-').toIntOrNull() ?: (body.size - 1)
             ranges += start to end
+
+            if (ignoreRange || ranges.size > ignoreRangeAfterRequests) {
+                return HttpReply(200, body, NO_HEADERS)
+            }
+            answerFromOffset?.let { from ->
+                val length = minOf(end + 1, body.size) - start
+                return HttpReply(
+                    206,
+                    body.copyOfRange(from, minOf(from + length, body.size)),
+                    mapOf("Content-Range" to listOf("bytes $from-${from + length - 1}/${body.size}")),
+                )
+            }
 
             if (start >= body.size) {
                 return if (refuseBeyondEnd) HttpReply(416, "", NO_HEADERS)

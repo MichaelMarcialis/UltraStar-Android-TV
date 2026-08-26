@@ -98,11 +98,15 @@ class AlternateVersions(
 /**
  * The other charts on USDB that are the same song as [song].
  *
- * **Compared loosely on purpose.** Charts are typed by different people over twenty years, so the
- * same song appears as "Kelly Clarkson" and "Kelly  Clarkson", with and without a `[DUET]` tag,
- * with and without punctuation. Comparing strictly would find nothing in exactly the cases this is
- * for. Comparing on *containment* rather than equality is what lets "Since U Been Gone" match
- * "Since U Been Gone [DUET]" without also matching some other song.
+ * **Normalised, then compared for equality.** Charts are typed by different people over twenty
+ * years, so the same song appears as "Kelly Clarkson" and "Kelly  Clarkson", with and without a
+ * `[DUET]` tag, with and without punctuation. All of that is normalised away — punctuation,
+ * spacing, and USDB's square-bracket arrangement tag — and what is left must then match exactly.
+ *
+ * **Not containment**, which is what this used to do and is unsafe in both fields: "Hello" is
+ * inside "Hello Again", and "Queen" is inside "Queens of the Stone Age". Either would let a song
+ * whose music had gone be replaced by a different song — and the replacement *deletes the
+ * original folder*, so nobody finds out until they press play on it.
  *
  * The original is always excluded — it is the one that just failed.
  */

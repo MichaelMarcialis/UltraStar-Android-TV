@@ -149,9 +149,7 @@ class SongLibraryScanner(
         videoId = findVideo(song.metadata.video, entries),
         coverId = findFile(song.metadata.cover, entries),
         backgroundId = findFile(song.metadata.background, entries),
-        sidecarId = entries.firstOrNull {
-            !it.isDirectory && it.name.endsWith(".usdb", ignoreCase = true)
-        }?.id,
+        sidecarId = loneSidecarIn(entries),
     )
 
     /**
@@ -178,6 +176,25 @@ class SongLibraryScanner(
             !it.isDirectory &&
                 it.name.substringAfterLast('.', "").lowercase() in VIDEO_EXTENSIONS
         }?.id
+
+    /**
+     * The folder's `.usdb` file, but only when there is exactly one of them.
+     *
+     * A folder can hold two arrangements of a song, and USDB Syncer writes a sidecar per
+     * download — so two charts can sit beside two sidecars, each naming a *different* video.
+     * Handing whichever the provider listed first to both charts would let a repair fetch one
+     * arrangement's music and point the other arrangement's chart at it, which is the
+     * out-of-time failure this project keeps a diagnostic tool for.
+     *
+     * Refusing to guess costs repairability for a folder like that, which is strictly better
+     * than repairing it wrongly. (A sidecar does name its own chart, in a `txt.fname` field —
+     * so they *could* be paired, at the cost of opening every one of them during a scan. Worth
+     * doing only if a real library ever turns out to contain the case.)
+     */
+    private fun loneSidecarIn(entries: List<TreeEntry>): String? =
+        entries.filter { !it.isDirectory && it.name.endsWith(".usdb", ignoreCase = true) }
+            .singleOrNull()
+            ?.id
 
     private fun looksLikeSong(text: String): Boolean =
         text.lineSequence().take(40).any { it.trimStart().startsWith("#TITLE:", ignoreCase = true) }

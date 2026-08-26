@@ -438,7 +438,11 @@ fun SongsScreen(
                 Spacer(Modifier.height(14.dp))
 
                 val arranged = remember(songs, sort, filter) { arrange(songs, sort, filter) }
-                val letters = remember(songs, sort) { indexLetters(songs, sort) }
+                // Indexed from the *filtered* list, which is the one a letter jumps into.
+                // Taken from the whole library instead, a filter like "No music" left letters on
+                // the rail with nothing behind them: pressing one found no song and silently did
+                // nothing, which on a remote is indistinguishable from a broken button.
+                val letters = remember(arranged, sort) { indexLetters(arranged, sort) }
                 val gridState = rememberLazyGridState()
 
                 // Re-sorting starts at the top.

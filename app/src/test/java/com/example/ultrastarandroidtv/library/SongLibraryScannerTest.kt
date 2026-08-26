@@ -376,6 +376,30 @@ class SidecarScanningTest {
     }
 
     /** Two arrangements share a folder, and so they share its sidecar. */
+    /**
+     * Two arrangements can sit in one folder, and USDB Syncer writes a sidecar per download —
+     * so two charts can sit beside two sidecars naming *different* videos. Handing whichever
+     * was listed first to both would let a repair fetch one arrangement's music and point the
+     * other's chart at it, which is the out-of-time failure this project has a tool for.
+     */
+    @Test
+    fun `two sidecars in a folder means neither is trusted`() {
+        val tree = tree {
+            dir("Song") {
+                file("Song.txt", SONG)
+                file("Song (Duet).txt", SONG)
+                file("Song.mp3")
+                file("AAA111.usdb", "{}")
+                file("BBB222.usdb", "{}")
+            }
+        }
+
+        val songs = SongLibraryScanner(tree).scan().songs
+
+        assertEquals(2, songs.size)
+        assertTrue("guessing is worse than not repairing", songs.all { it.sidecarId == null })
+    }
+
     @Test
     fun `both songs in a folder get the sidecar it holds`() {
         val tree = tree {

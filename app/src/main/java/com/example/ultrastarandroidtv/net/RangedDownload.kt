@@ -83,8 +83,27 @@ fun downloadInChunks(
         val end = if (declaredLength > 0L) minOf(wanted, declaredLength - 1) else wanted
         var got = 0L
 
+        var wholeBody = false
+
         try {
             http.openStream(url, headers + ("Range" to "bytes=$written-$end")).use { source ->
+                // The request was bounded; the *reply* has to be checked as well.
+                //
+                // A server, a proxy or a redirect that ignores `Range` answers 200 with the
+                // whole file, and `openStream` accepts any 2xx. Appended to bytes already
+                // collected that writes the beginning of the file twice -- and with no declared
+                // length to stop it, every pass appends the whole body again and the loop never
+                // ends. Taken as the *first* piece it is simply the whole file, which is a
+                // perfectly good answer, so that one case is allowed and then finishes.
+                wholeBody = source.status == HTTP_WHOLE_BODY
+                if (wholeBody && written > 0L) {
+                    throw HttpFailure("The server ignored the range that was asked for.")
+                }
+                val start = source.rangeStart
+                if (start != null && start != written) {
+                    throw HttpFailure("The server sent bytes from $start, not $written.")
+                }
+
                 while (true) {
                     val read = source.stream.read(buffer)
                     if (read < 0) break
@@ -114,6 +133,9 @@ fun downloadInChunks(
             }
             break
         }
+
+        // A whole body answered the first request, so there is nothing left to ask for.
+        if (wholeBody) break
     }
 
     return written
@@ -165,3 +187,4 @@ fun fetchInChunks(
 const val MAX_IN_MEMORY_BYTES: Long = 64L * 1024 * 1024
 
 private const val RANGE_NOT_SATISFIABLE = 416
+private const val HTTP_WHOLE_BODY = 200

@@ -121,6 +121,31 @@ class SongBrowsingTest {
         assertEquals(listOf('#', 'A', 'Z'), indexLetters(songs, SongSort.Title))
     }
 
+    /**
+     * The rail has to be built from the list a letter jumps *into*.
+     *
+     * Built from the whole library instead, a filter like "No music" left letters on the rail
+     * with nothing behind them — pressing one found no song and silently did nothing, which on
+     * a remote cannot be told apart from a broken button.
+     */
+    @Test
+    fun `every letter offered has something behind it`() {
+        val songs = listOf(
+            song("Apple", "X", audio = null),
+            song("Banana", "Y", audio = "a"),
+            song("Cherry", "Z", audio = "a"),
+        )
+        val broken = arrange(songs, SongSort.Title, SongFilterState.MissingMusic)
+
+        assertEquals(listOf('A'), indexLetters(broken, SongSort.Title))
+        for (letter in indexLetters(broken, SongSort.Title)) {
+            assertTrue(
+                "the rail must not offer a letter that jumps nowhere",
+                firstIndexUnder(broken, SongSort.Title, letter) >= 0,
+            )
+        }
+    }
+
     @Test
     fun `a letter jumps to the first song filed under it`() {
         val songs = listOf(song("Apple", "X"), song("Banana", "Y"), song("Blossom", "Z"))

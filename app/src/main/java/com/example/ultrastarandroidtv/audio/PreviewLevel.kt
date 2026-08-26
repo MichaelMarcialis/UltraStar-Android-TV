@@ -77,6 +77,9 @@ class PreviewLevel(
     private var fadedFrames = 0
     private var samplesWritten = 0L
 
+    /** The low half of a sample whose other half has not arrived yet, or -1. */
+    private var pendingByte = -1
+
     override fun onConfigure(
         inputAudioFormat: AudioProcessor.AudioFormat,
     ): AudioProcessor.AudioFormat {
@@ -98,11 +101,15 @@ class PreviewLevel(
         if (available == 0) return
 
         if (!decided) {
-            // Aligned to whole frames. A split sample would leave a stray byte behind and shift
-            // every sample after it by one, which is not a quiet fault -- it is white noise.
-            val room = held.size - heldBytes
-            val offered = minOf(room, available)
-            val taking = if (offered >= frameBytes) offered - offered % frameBytes else offered
+            // Everything on offer that will fit, however it happens to be cut up.
+            //
+            // This used to round down to whole frames, on the theory that a split sample must not
+            // be left half-read. The theory was right and the cure was worse: the bytes it declined
+            // to take were then *dropped*, because nothing returns to collect them -- so an input
+            // buffer whose length was not a multiple of the frame size quietly lost the remainder.
+            // Splitting a sample across two calls costs nothing: the halves are stored in order and
+            // read back in order, and the window itself is a whole number of frames.
+            val taking = minOf(held.size - heldBytes, available)
             inputBuffer.get(held, heldBytes, taking)
             heldBytes += taking
 
@@ -115,7 +122,8 @@ class PreviewLevel(
         }
 
         // Everything held back, then whatever is left of this buffer, in one go.
-        val output = replaceOutputBuffer(heldBytes + inputBuffer.remaining())
+        // Room for one extra sample: a half kept from last time completes into a whole one.
+        val output = replaceOutputBuffer(heldBytes + inputBuffer.remaining() + 2)
         output.order(ByteOrder.LITTLE_ENDIAN)
         if (heldBytes > 0) {
             writeScaled(ByteBuffer.wrap(held, 0, heldBytes).order(ByteOrder.LITTLE_ENDIAN), output)
@@ -135,7 +143,7 @@ class PreviewLevel(
         if (heldBytes == 0) return
         if (!decided) decide()
 
-        val output = replaceOutputBuffer(heldBytes)
+        val output = replaceOutputBuffer(heldBytes + 2)
         output.order(ByteOrder.LITTLE_ENDIAN)
         writeScaled(ByteBuffer.wrap(held, 0, heldBytes).order(ByteOrder.LITTLE_ENDIAN), output)
         heldBytes = 0
@@ -148,6 +156,7 @@ class PreviewLevel(
         gain = 1f
         fadedFrames = 0
         samplesWritten = 0L
+        pendingByte = -1
     }
 
     override fun onReset() {
@@ -160,22 +169,40 @@ class PreviewLevel(
         decided = true
     }
 
-    /** Copies [from] into [into], scaled by the chosen gain and by the opening ramp. */
+    /**
+     * Copies [from] into [into], scaled by the chosen gain and by the opening ramp.
+     *
+     * **A sample may be split across two buffers**, and the half has to be kept rather than
+     * dropped. Real PCM arrives a whole number of frames at a time, so this never happens in the
+     * player — but a component that silently loses a byte whenever it is handed an odd-sized buffer
+     * is one bad assumption away from white noise, and the assumption belongs to somebody else.
+     */
     private fun writeScaled(from: ByteBuffer, into: ByteBuffer) {
         from.order(ByteOrder.LITTLE_ENDIAN)
-        val channels = frameBytes / 2
-        while (from.remaining() >= 2) {
-            val sample = from.short.toInt()
-            var scaled = sample * gain
-            if (fadedFrames < fadeFrames) scaled *= fadedFrames.toFloat() / fadeFrames
-            into.putShort(scaled.toInt().coerceIn(-32768, 32767).toShort())
 
-            // Counted rather than read off the buffer's position, which starts wherever the last
-            // read left it. The ramp advances once per *frame* so the two channels of a stereo
-            // pair are never scaled by different amounts.
-            samplesWritten++
-            if (samplesWritten % channels == 0L && fadedFrames < fadeFrames) fadedFrames++
+        val waiting = pendingByte
+        if (waiting >= 0 && from.hasRemaining()) {
+            pendingByte = -1
+            emit(((from.get().toInt() shl 8) or waiting).toShort().toInt(), into)
         }
+
+        while (from.remaining() >= 2) emit(from.short.toInt(), into)
+
+        if (from.hasRemaining()) pendingByte = from.get().toInt() and 0xFF
+    }
+
+    /** One sample out, at the settled gain and wherever the opening ramp has got to. */
+    private fun emit(sample: Int, into: ByteBuffer) {
+        var scaled = sample * gain
+        if (fadedFrames < fadeFrames) scaled *= fadedFrames.toFloat() / fadeFrames
+        into.putShort(scaled.toInt().coerceIn(-32768, 32767).toShort())
+
+        // Counted rather than read off the buffer's position, which starts wherever the last read
+        // left it. The ramp advances once per *frame*, so the two channels of a stereo pair are
+        // never scaled by different amounts.
+        samplesWritten++
+        val channels = frameBytes / 2
+        if (samplesWritten % channels == 0L && fadedFrames < fadeFrames) fadedFrames++
     }
 }
 
