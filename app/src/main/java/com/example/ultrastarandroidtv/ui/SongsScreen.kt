@@ -424,7 +424,9 @@ fun SongsScreen(
                         Spacer(Modifier.weight(1f))
                         Button(
                             onClick = {
-                                waiting.forEach { downloads.repairs.add(it.first, it.second) }
+                                waiting.forEach {
+                                    downloads.repairs.add(it.first, it.second, treeUri?.toString())
+                                }
                             },
                         ) {
                             Text(
@@ -582,7 +584,11 @@ fun SongsScreen(
                         plan?.let { ready ->
                             if (canModify && !downloads.repairs.holds(song.textId, ready.scan)) {
                                 Spacer(Modifier.width(16.dp))
-                                Button(onClick = { downloads.repairs.add(song, ready) }) {
+                                Button(
+                                    onClick = {
+                                        downloads.repairs.add(song, ready, treeUri?.toString())
+                                    },
+                                ) {
                                     Text(
                                         repairLabel(ready),
                                         modifier = Modifier.padding(

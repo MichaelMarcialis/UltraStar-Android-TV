@@ -114,7 +114,13 @@ class SafDocumentTree(
         // nothing to restore is strictly worse than refusing, because the caller can report
         // a failed repair and clean up after itself, where a destroyed chart is a song that
         // cannot be sung again.
-        val original = runCatching { readBytes(documentId) }.getOrNull() ?: return false
+        //
+        // **Not [readBytes]**, which stops at [MAX_TEXT_BYTES] and says nothing about having
+        // done so. That is right for a chart and wrong for a rollback: this also replaces
+        // cover artwork, and a picture larger than the cap would be "backed up" as its first
+        // few megabytes and then restored that way -- destroying the original in the course
+        // of protecting it. A file too large to copy faithfully is refused instead.
+        val original = wholeFileOrNull(documentId) ?: return false
 
         val written = runCatching {
             resolver.openOutputStream(uriFor(documentId), "wt")?.use { it.write(bytes) } != null
@@ -129,6 +135,32 @@ class SafDocumentTree(
         }
         return false
     }
+
+    /**
+     * The whole of a file, or null when it will not fit — never a silently shortened part.
+     *
+     * The limit is the same one [readBytes] uses, and everything this is asked about is a
+     * chart or a cover: kilobytes and hundreds of kilobytes. Anything bigger is refused rather
+     * than half-read, because the only caller is a rollback and half a rollback is corruption.
+     */
+    private fun wholeFileOrNull(documentId: String, limit: Int = MAX_TEXT_BYTES): ByteArray? =
+        runCatching {
+            resolver.openInputStream(uriFor(documentId))?.use { input ->
+                val collected = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                var tooBig = false
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    if (collected.size() + read > limit) {
+                        tooBig = true
+                        break
+                    }
+                    collected.write(buffer, 0, read)
+                }
+                if (tooBig) null else collected.toByteArray()
+            }
+        }.getOrNull()
 
     override fun writeFile(
         parentId: String,

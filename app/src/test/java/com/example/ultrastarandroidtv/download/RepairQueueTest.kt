@@ -151,6 +151,31 @@ class RepairQueueTest {
         assertEquals(listOf("Waiting"), queue.jobs.map { it.song.folderName })
     }
 
+    /**
+     * A job carries document ids, and a document id only means anything inside the tree it came
+     * from. Changing the song folder while a batch is queued would apply the old ids to the new
+     * tree: at best the rest of the batch fails, at worst an id that exists under both grants
+     * points at a different song and the repair writes into it.
+     */
+    @Test
+    fun `a job remembers which folder it was queued from`() {
+        val queue = RepairQueue()
+
+        queue.add(song("First"), plan(), tree = "content://card/UltraStar")
+
+        assertEquals("content://card/UltraStar", queue.jobs.first().tree)
+    }
+
+    /** Nothing recorded means nothing to check, which is what the queue's own tests want. */
+    @Test
+    fun `a job queued without a folder records none`() {
+        val queue = RepairQueue()
+
+        queue.add(song("First"), plan())
+
+        assertNull(queue.jobs.first().tree)
+    }
+
     // -------------------------------------------------------------------------------------
     // One run at a time
     // -------------------------------------------------------------------------------------

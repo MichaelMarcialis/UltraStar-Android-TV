@@ -395,6 +395,13 @@ Real PCM arrives frame-aligned so neither fired in the player, but a component t
 
 **Nine review rounds, twenty-six distinct findings, all addressed.** Worth recording the shape of it, because it is the useful lesson: the first round found bugs in the feature, and **most of the rest found bugs in the fixes** — every change that widened what repair or downloading could do widened something downstream that then needed narrowing. Two of the best findings came not from a comment at all but from writing the tests one asked for.
 
+**The last two, both about a promise the code could not keep** (Copilot on PR #2, 2026-08-26).
+
+- **`readBytes` stops at 4 MiB and says nothing about having done so**, which is right for a chart and wrong for a rollback. `overwrite` also replaces cover artwork, so a picture over the cap would have been "backed up" as its first few megabytes and restored that way — destroying the original in the course of protecting it. The backup is now read whole or not at all, and a file too large to copy faithfully is refused rather than half-read.
+- **A repair job carries document ids and no record of which tree they came from.** The worker resolves the granted folder when each job *starts*, so changing the song folder mid-batch would apply the old ids to the new tree: at best the rest of the batch fails, at worst an id that exists under both grants points at a different song and the repair writes into it. Each job is stamped with the folder it was queued from and refused if that has changed.
+
+**Ten review rounds, twenty-eight findings, all addressed** — and the pattern held to the end: both of these are places where a comment claimed a guarantee the code did not actually provide.
+
 **The made-for-kids hole is closed, and the answer was the obvious client** (`InnertubeClients.ANDROID_KIDS`, measured 2026-08-24 across the whole client table against a real Disney upload).
 
 - **`ANDROID_KIDS` answers `OK` where visionOS answers `UNPLAYABLE`**, with the **full format ladder** — itag 140 for sound and itag 137 for picture, the two this app already prefers — plain URLs, no JS player, no PO token, no cookies, no account.

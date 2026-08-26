@@ -36,6 +36,16 @@ class RepairJob(
     val plan: RepairPlan,
     /** Which run of the queue this was asked for in — see [RepairQueue.current]. */
     val batch: Int = 0,
+    /**
+     * The granted folder this song was found in, as a string, or null when nobody said.
+     *
+     * A job carries document ids and nothing else, and a document id only means anything
+     * inside the tree it came from. The worker resolves the *current* folder when a job
+     * starts, so changing it while repairs are queued would apply the old ids to the new
+     * tree: at best every remaining job fails, at worst an id that exists in both places
+     * points at a different song and the repair writes into it.
+     */
+    val tree: String? = null,
 ) {
 
     private var current: RepairStatus by mutableStateOf(RepairStatus.Queued)
@@ -97,7 +107,7 @@ class RepairQueue {
      * the Storage Access Framework, and point the chart at that. Which of the two it is turns on
      * whether anybody has looked at the card since — see [blocks].
      */
-    fun add(song: ScannedSong, plan: RepairPlan): Boolean {
+    fun add(song: ScannedSong, plan: RepairPlan, tree: String? = null): Boolean {
         val existing = _jobs.indexOfFirst { it.song.textId == song.textId }
         if (existing >= 0) {
             if (_jobs[existing].blocks(plan.scan)) return false
@@ -106,7 +116,7 @@ class RepairQueue {
         // A queue with nothing left to do is finished with, so the next thing asked for
         // starts a new run rather than joining the last one.
         if (!isBusy) batch++
-        _jobs.add(RepairJob(song, plan, batch))
+        _jobs.add(RepairJob(song, plan, batch, tree))
         return true
     }
 

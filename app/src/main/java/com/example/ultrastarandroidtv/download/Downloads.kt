@@ -1,6 +1,7 @@
 package com.example.ultrastarandroidtv.download
 
 import android.content.Context
+import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -152,6 +153,17 @@ class Downloads(private val context: Context) {
     }
 
     private suspend fun runRepair(job: RepairJob): RepairStatus {
+        // The ids in this job describe one tree, and only that tree. Somebody changing the
+        // song folder while a batch is queued would otherwise have the rest of it read and
+        // write ids that mean nothing here -- or, where the same relative path exists under
+        // both grants, mean somebody else's song.
+        val here = cardUri()?.toString()
+        if (job.tree != null && job.tree != here) {
+            return RepairStatus.Failed(
+                "The song folder changed while this was waiting. Try repairing it again.",
+            )
+        }
+
         val card = card() ?: return RepairStatus.Failed(
             "Choose your song folder again on the Songs screen before repairing.",
         )
@@ -404,9 +416,14 @@ class Downloads(private val context: Context) {
      * evening is picked up without anything having to be told about it.
      */
     private fun card(): SafDocumentTree? {
+        val uri = cardUri() ?: return null
+        return SafDocumentTree(context.contentResolver, uri)
+    }
+
+    /** The granted folder as it stands right now, or null when there is not a writable one. */
+    fun cardUri(): Uri? {
         val location = LibraryLocation(context)
         if (!location.canModify()) return null
-        val uri = location.saved() ?: return null
-        return SafDocumentTree(context.contentResolver, uri)
+        return location.saved()
     }
 }
