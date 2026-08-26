@@ -307,6 +307,67 @@ class SongRepairerTest {
         assertFalse(outcome.cover)
     }
 
+    /**
+     * One sidecar and two arrangements: it belongs to one of them, and says which.
+     *
+     * USDB Syncer writes a sidecar per download and records the chart in `txt.fname`. Believed by
+     * both, a repair would fetch one arrangement's recording and point the other's chart at it,
+     * which is the out-of-time failure this project keeps a diagnostic tool for.
+     */
+    @Test
+    fun `a sidecar is only believed by the chart it names`() {
+        val card = FakeFolder(
+            chart = CHART_WITHOUT_VIDEO,
+            sidecar = sidecarNaming("David Bowie - Golden Years.txt"),
+            extraChart = "Something Else.txt",
+        )
+
+        assertEquals("Qn-8ieevpkA", repairerFor(card).plan(card.song(audio = null))?.videoId)
+    }
+
+    @Test
+    fun `a sidecar naming a different arrangement is not used`() {
+        val card = FakeFolder(
+            chart = CHART_WITHOUT_VIDEO,
+            sidecar = sidecarNaming("Something Else.txt"),
+            extraChart = "Something Else.txt",
+        )
+
+        // Artwork is still fetchable from the song's own name, so the plan survives -- but the
+        // media half of it must not, because nothing here knows where this chart's music lives.
+        val plan = repairerFor(card).plan(card.song(audio = null))!!
+
+        assertNull(
+            "guessing which recording belongs to which chart is the one thing not to do",
+            plan.videoId,
+        )
+        assertFalse(plan.needsAudio)
+        assertFalse(plan.needsVideo)
+    }
+
+    /** With nothing to disambiguate and two charts present, nothing is assumed. */
+    @Test
+    fun `a sidecar that names no chart is not used when there are two`() {
+        val card = FakeFolder(
+            chart = CHART_WITHOUT_VIDEO,
+            sidecar = SIDECAR,
+            extraChart = "Something Else.txt",
+        )
+
+        val plan = repairerFor(card).plan(card.song(audio = null))!!
+
+        assertNull(plan.videoId)
+        assertFalse(plan.needsAudio)
+    }
+
+    /** A folder holding one song needs no disambiguating: the sidecar in it is its own. */
+    @Test
+    fun `a lone chart trusts the sidecar beside it`() {
+        val card = FakeFolder(chart = CHART_WITHOUT_VIDEO, sidecar = SIDECAR)
+
+        assertEquals("Qn-8ieevpkA", repairerFor(card).plan(card.song(audio = null))?.videoId)
+    }
+
     // -------------------------------------------------------------------------------------
     // The sidecar itself
     // -------------------------------------------------------------------------------------
@@ -350,6 +411,8 @@ class SongRepairerTest {
         chart: String,
         sidecar: String?,
         private val refuseChartRewrite: Boolean = false,
+        /** A second arrangement sharing the folder, which is what makes a sidecar ambiguous. */
+        extraChart: String? = null,
     ) : DocumentTree, DocumentWriter {
 
         override val rootId = "root"
@@ -360,6 +423,7 @@ class SongRepairerTest {
 
         init {
             put("David Bowie - Golden Years.txt", chart.toByteArray())
+            extraChart?.let { put(it, chart.toByteArray()) }
             sidecar?.let { put("R0V2tgk2txI.usdb", it.toByteArray()) }
         }
 
@@ -457,6 +521,12 @@ class SongRepairerTest {
 
         val CHART_WITH_NOTES = "#TITLE:Golden Years\n#ARTIST:David Bowie\n#BPM:435.04\n" +
             ": 0 3 31 Gol\n" + ": 8 3 28 den \n" + "- 20\nE"
+
+        /** The same, but saying which chart it was written for. */
+        fun sidecarNaming(chart: String) = SIDECAR.replace(
+            "\"pinned\": false",
+            "\"txt\": { \"fname\": \"" + chart + "\" }, \"pinned\": false",
+        )
 
         /** Trimmed from a real one off the card, which is what makes it worth having. */
         val SIDECAR = """

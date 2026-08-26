@@ -15,6 +15,7 @@ import com.example.ultrastarandroidtv.net.downloadInChunks
 import com.example.ultrastarandroidtv.net.fetchInChunks
 import com.example.ultrastarandroidtv.library.SongTextDecoder
 import com.example.ultrastarandroidtv.usdb.UsdbMetaTags
+import com.example.ultrastarandroidtv.usdb.UsdbSidecar
 import com.example.ultrastarandroidtv.usdb.metaTagsFrom
 import com.example.ultrastarandroidtv.usdb.readUsdbSidecar
 
@@ -195,7 +196,31 @@ class SongRepairer(
         val sidecarId = song.sidecarId ?: return UsdbMetaTags()
         val text = runCatching { SongTextDecoder.decode(tree.readBytes(sidecarId)) }.getOrNull()
             ?: return UsdbMetaTags()
-        return readUsdbSidecar(text)?.metaTags ?: UsdbMetaTags()
+        val sidecar = readUsdbSidecar(text) ?: return UsdbMetaTags()
+        return if (belongsTo(song, sidecar)) sidecar.metaTags else UsdbMetaTags()
+    }
+
+    /**
+     * Whether this sidecar was written for *this* chart.
+     *
+     * A folder holding one song needs no checking — the sidecar in it is the sidecar for it.
+     * A folder holding two arrangements does: USDB Syncer writes one sidecar per download and
+     * records the chart it belongs to, so believing it for both would let a repair fetch one
+     * arrangement's recording and point the other's chart at it. That is the out-of-time
+     * failure `tools/check_song_sync.py` exists to diagnose, arrived at from inside the app.
+     *
+     * When the sidecar does not say which chart it is for and there is more than one, nothing
+     * is assumed: no repair is offered, which is worse than a repair and far better than the
+     * wrong one.
+     */
+    private fun belongsTo(song: ScannedSong, sidecar: UsdbSidecar): Boolean {
+        val entries = runCatching { tree.list(song.folderId) }.getOrNull() ?: return false
+        val charts = entries.count { !it.isDirectory && it.name.endsWith(".txt", true) }
+        if (charts <= 1) return true
+
+        val named = sidecar.chartFile ?: return false
+        val mine = entries.firstOrNull { it.id == song.textId }?.name ?: return false
+        return named.equals(mine, ignoreCase = true)
     }
 
     fun repair(

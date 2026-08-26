@@ -145,7 +145,7 @@ fun SongPickerScreen(
         }
     }
 
-    LaunchedEffect(treeUri) {
+    LaunchedEffect(treeUri, cache.revision) {
         val currentTree = tree ?: run {
             status = "Choose the folder your songs are in."
             return@LaunchedEffect

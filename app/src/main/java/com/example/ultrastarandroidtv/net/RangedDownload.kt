@@ -125,17 +125,21 @@ fun downloadInChunks(
         // *short read*, and treating it as the end would write a truncated song and call it
         // finished. That is the same corruption a declared-length 416 is already rejected
         // for, and it has to be rejected the same way rather than saved silently.
-        if (got == 0L) {
-            if (declaredLength > 0L && written < declaredLength) {
+        // Two ways this loop ends, and both have to account for every declared byte.
+        //
+        // A range that came back empty is the end of the file; a whole body answered the
+        // whole request and leaves nothing to ask for. Either way, a length that was
+        // *declared* and not met is a truncated file being reported as a finished one --
+        // which is the corruption this guard exists for, and letting the whole-body exit
+        // slip past it put the hole straight back.
+        if (got == 0L || wholeBody) {
+            if (declaredLength > 0L && written != declaredLength) {
                 throw HttpFailure(
-                    "The download stopped after $written of $declaredLength bytes.",
+                    "The download gave $written bytes of a declared $declaredLength.",
                 )
             }
             break
         }
-
-        // A whole body answered the first request, so there is nothing left to ask for.
-        if (wholeBody) break
     }
 
     return written

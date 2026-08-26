@@ -52,6 +52,21 @@ class SongLibraryCache {
     var generation: Int by mutableStateOf(0)
         private set
 
+    /**
+     * How many times the card has been declared out of date — **observable**, unlike [loaded].
+     *
+     * A screen that is already on the television cannot see a plain flag change. Downloads now
+     * outlive the screen that starts them, so a song can land while the Songs grid is open: the
+     * notice said it had been added and the grid went on not showing it until somebody pressed
+     * Rescan or walked away and came back. Keying the scan effects on this is what turns
+     * "the card changed" into something a composition reacts to.
+     *
+     * Separate from [generation] on purpose: that counts *readings* of the card and this counts
+     * *invalidations*, so a scan triggered by one cannot bump the other and loop.
+     */
+    var revision: Int by mutableStateOf(0)
+        private set
+
     fun put(tree: Uri?, found: List<ScannedSong>) {
         scannedTree = tree
         songs = found
@@ -80,6 +95,7 @@ class SongLibraryCache {
      */
     fun markStale() {
         loaded = false
+        revision++
     }
 
     /** Forgets everything, so the next visit scans. Use when the *folder* changed. */

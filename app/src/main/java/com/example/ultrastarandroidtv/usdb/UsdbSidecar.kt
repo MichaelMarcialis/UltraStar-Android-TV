@@ -26,6 +26,14 @@ data class UsdbSidecar(
     val songId: Int?,
     /** The meta tags as they were in the chart — which is where the media ids live. */
     val metaTags: UsdbMetaTags,
+    /**
+     * The chart this sidecar was written for, from its `txt.fname` field.
+     *
+     * Worth reading because a folder can hold two arrangements and USDB Syncer writes one
+     * sidecar per download: without this, the one sidecar would be believed by both charts,
+     * and a repair could fetch one arrangement's recording for the other.
+     */
+    val chartFile: String?,
 )
 
 /** Reads a `.usdb` file, or null when it is not one. */
@@ -41,6 +49,7 @@ fun readUsdbSidecar(text: String): UsdbSidecar? {
     return UsdbSidecar(
         songId = songId,
         metaTags = tags?.let { metaTagsFrom(it) } ?: UsdbMetaTags(),
+        chartFile = root.optJSONObject("txt")?.optString("fname")?.takeIf { it.isNotBlank() },
     )
 }
 

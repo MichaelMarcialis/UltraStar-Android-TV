@@ -273,6 +273,36 @@ class RangedDownloadTest {
         assertTrue(thrown is HttpFailure)
     }
 
+    /**
+     * A whole body is only an answer if it is the *whole* file.
+     *
+     * Accepting a 200 as "nothing left to ask for" walked straight around the short-read
+     * guard: a server that ignored the range and returned a truncated body ended the loop
+     * with a success, saving corrupt media. The two exits have to account for the same bytes.
+     */
+    @Test
+    fun `a whole body shorter than the declared length is refused`() {
+        val net = FakeRanges(ByteArray(400), ignoreRange = true)
+
+        val thrown = runCatching {
+            downloadInChunks(net, URL, ByteArrayOutputStream(), declaredLength = 900, chunkBytes = 300)
+        }.exceptionOrNull()
+
+        assertTrue("a truncated file must not pass as complete", thrown is HttpFailure)
+    }
+
+    /** And a body longer than declared is not this file either. */
+    @Test
+    fun `a whole body longer than the declared length is refused`() {
+        val net = FakeRanges(ByteArray(1_500), ignoreRange = true)
+
+        val thrown = runCatching {
+            downloadInChunks(net, URL, ByteArrayOutputStream(), declaredLength = 900, chunkBytes = 300)
+        }.exceptionOrNull()
+
+        assertTrue(thrown is HttpFailure)
+    }
+
     /** And a 206 for the wrong offset is a different piece of the file, not this one. */
     @Test
     fun `a range starting somewhere else is refused`() {
