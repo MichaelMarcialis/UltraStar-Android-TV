@@ -211,3 +211,50 @@ fun foldToOctaveNear(midi: Float, targetMidi: Int): Float {
     while (targetMidi - folded > 6f) folded += 12f
     return folded
 }
+
+/**
+ * How much worse an octave is allowed to be before the arrow will leave the one it is in.
+ *
+ * Without a band here the fold flips on an exact tie, and both ways of reaching that tie happen
+ * constantly. A voice sitting a tritone from the note crosses the boundary on ordinary wobble and
+ * the arrow teleports an octave and back. Worse, the *reference* moves: the arrow folds against
+ * whichever note is under it, so a melody leaping a fifth re-folds a completely steady voice and
+ * throws the arrow twelve semitones with nobody having sung anything.
+ *
+ * Neither is smoothing's job — they are jumps in the target, and easing a teleport just draws it
+ * more slowly. A semitone and a half is enough to sit out the wobble and the ordinary leap, and
+ * small enough that a singer who has genuinely changed octave is followed.
+ */
+const val OCTAVE_FOLD_HYSTERESIS: Float = 1.5f
+
+/**
+ * As [foldToOctaveNear], but reluctant to leave the octave the arrow is already drawn in.
+ *
+ * [previous] is where the arrow currently sits, in the same folded coordinates; NaN means it has
+ * no place yet and the nearest octave is taken outright. The returned value may be up to
+ * `6 + hysteresis` from the note rather than the usual tritone — that extra is the price of the
+ * arrow not teleporting, and it is paid in the honest direction: the arrow stays where the voice
+ * was last drawn instead of moving somewhere the voice never went.
+ */
+fun foldToOctaveNear(
+    midi: Float,
+    targetMidi: Int,
+    previous: Float,
+    hysteresisSemitones: Float = OCTAVE_FOLD_HYSTERESIS,
+): Float {
+    val nearest = foldToOctaveNear(midi, targetMidi)
+    if (nearest.isNaN() || previous.isNaN()) return nearest
+
+    var best = nearest
+    var bestDistance = kotlin.math.abs(nearest - previous)
+    for (shift in intArrayOf(-12, 12)) {
+        val candidate = nearest + shift
+        if (kotlin.math.abs(candidate - targetMidi) > 6f + hysteresisSemitones) continue
+        val distance = kotlin.math.abs(candidate - previous)
+        if (distance < bestDistance) {
+            best = candidate
+            bestDistance = distance
+        }
+    }
+    return best
+}

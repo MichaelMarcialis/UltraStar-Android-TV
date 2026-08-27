@@ -21,19 +21,16 @@ private const val MAX_STEP_SECONDS = 0.05
  * becomes a twitching arrow that looks like the detector is unsure when it is not. The worst of
  * those outliers are already gone by here — `GameSession.Singer` medians them first.
  *
- * **The easing is a sixtieth of a second, and it is the only smoothing left.** The history is
- * the argument: median-of-5 plus a twentieth of a second put the arrow 150 ms behind the voice,
- * and since the scorer reads the *raw* pitch, notes lit up well before the arrow reached them —
- * which makes the game look like it is guessing, and makes any judgement about whether the
- * scoring is fair impossible, because what the app heard cannot be told from what the animation
- * did to it. Stripped to nothing the arrow was honest and jittery; a median of three fixed the
- * spikes and still read as glitchy, because what a median does to a step is hold the old value
- * for a whole reading and then jump. This never jumps, and costs 17 ms.
+ * **The position easing is deliberately tiny and the lean's is not.** They are separate numbers
+ * because they answer different questions: the position is a measurement and every millisecond it
+ * lags is a millisecond of the instrument lying, while the lean is advice, and advice that
+ * changes six times a second is noise. See [tiltSecondsToSettle].
  *
- * The easing remains available and is still tested, because the argument for it was real: raw
- * YIN on a real voice is honest rather than tidy, and drawn literally a held note wanders. If it
- * comes back it should come back as a *small* number — the history here is 150 ms, then 83 ms,
- * then none, each because the previous one was felt from the sofa.
+ * The history is the argument for keeping the position number small: median-of-5 plus a twentieth
+ * of a second put the arrow 150 ms behind the voice, and since the scorer reads the *raw* pitch,
+ * notes lit up well before the arrow reached them — which makes the game look like it is guessing,
+ * and makes any judgement about whether the scoring is fair impossible, because what the app heard
+ * cannot be told from what the animation did to it.
  *
  * **[alpha] still fades, because presence is not placement.** A voice stops and starts
  * constantly — between syllables, between breaths — and an arrow that blinks in and out on every
@@ -51,7 +48,24 @@ private const val MAX_STEP_SECONDS = 0.05
  */
 class ArrowMotion(
     /** Zero draws the reading as it arrives. */
-    private val secondsToSettle: Double = 0.015,
+    private val secondsToSettle: Double = 0.02,
+    /**
+     * How long the *lean* takes to settle, which is deliberately far longer than the position.
+     *
+     * The two are separate because they are answering different questions. The position is a
+     * measurement — where this voice is — and every millisecond it lags is a millisecond of
+     * the instrument lying. The tilt is *advice*: sing higher, sing lower. Advice that changes
+     * six times a second is not advice, it is noise, and the tilt amplifies whatever the
+     * position does — at 26 degrees across three semitones, a third of a semitone of ordinary
+     * wobble on a held note swings the arrow three degrees.
+     *
+     * It also has a step to absorb that the position never has. When the note under the arrow
+     * changes, the *target* moves by the interval between the two notes even though the singer
+     * has not moved at all, so the lean jumped by up to its full deflection between one frame
+     * and the next. Sharing the position's time constant made that jump instantaneous. This is
+     * what makes it a turn.
+     */
+    private val tiltSecondsToSettle: Double = 0.13,
     /** A silence longer than this is treated as a fresh start rather than a continuation. */
     private val snapAfterSilenceSeconds: Double = 0.35,
     /** Roughly how long the arrow takes to fade in or out. Zero switches the arrow outright. */
@@ -69,6 +83,14 @@ class ArrowMotion(
 
     /** True when there is anything worth drawing this frame. */
     val isVisible: Boolean get() = alpha > 0.01f && !shown.isNaN()
+
+    /**
+     * Where the arrow is drawn right now, or NaN before it has a place.
+     *
+     * Read by the octave fold, which needs to know which octave the arrow is *already* in before
+     * deciding whether the new reading is worth moving it out of — see [foldToOctaveNear].
+     */
+    val shownMidi: Float get() = shown
 
     /**
      * Returns where to draw the arrow, or NaN if it has never had a position.
@@ -120,7 +142,7 @@ class ArrowMotion(
      * very visible as a rotation.
      */
     fun tiltTowards(targetDegrees: Float): Float {
-        shownTilt += (targetDegrees - shownTilt) * approach(lastStep, secondsToSettle)
+        shownTilt += (targetDegrees - shownTilt) * approach(lastStep, tiltSecondsToSettle)
         return shownTilt
     }
 

@@ -207,6 +207,9 @@ fun AppRoot() {
             } else {
                 GameplayScreen(
                     song = ready.song,
+                    // What this song's record is filed under. The `.txt` document id is already
+                    // the library's own identity for a song, so nothing new had to be invented.
+                    songId = ready.songId,
                     audioUri = ready.audioUri,
                     videoUri = ready.videoUri,
                     settings = settings,

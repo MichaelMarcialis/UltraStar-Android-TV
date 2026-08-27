@@ -1,7 +1,10 @@
 package com.example.ultrastarandroidtv.game
 
+import android.graphics.Bitmap
 import android.view.TextureView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.runtime.Composable
@@ -14,7 +17,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -35,109 +44,146 @@ private const val MAX_DRIFT_SECONDS = 0.4
 /** Drift is checked a few times a second rather than every frame; it accumulates slowly. */
 private const val SYNC_INTERVAL_MS = 250L
 
-/** When the picture is sampled for bars, and how many times. Spread out; see the effect below. */
-private const val LETTERBOX_FIRST_MS = 2000L
-private const val LETTERBOX_INTERVAL_MS = 2000L
-private const val LETTERBOX_SAMPLES = 6
+/**
+ * Size of the wash drawn behind the video, in pixels, before it is stretched over the screen.
+ *
+ * Tiny on purpose: stretching a 32x18 image across a 4K television *is* the blur, and it costs
+ * one bilinear upscale rather than a shader. Larger starts to resolve edges, which is the one
+ * thing this must not do — it is a glow, and anything you can make out in it competes with the
+ * picture it sits behind.
+ */
+private const val AMBIENT_WIDTH = 32
+private const val AMBIENT_HEIGHT = 18
+
+/** What the frame is grabbed at before being averaged down. A little detail to average away. */
+private const val AMBIENT_SOURCE_WIDTH = 64
+private const val AMBIENT_SOURCE_HEIGHT = 36
+
+/** How often the wash is re-read. Six times a second is well under what the eye tracks. */
+private const val AMBIENT_INTERVAL_MS = 160L
 
 /**
- * How finely the frame is sampled.
+ * How much of a new sample is taken each time.
  *
- * Each sampled row is one seventy-second of the height, so a bar has to be about 1.5 % of the
- * picture before it can be seen at all — which is roughly where a bar stops being visible on a
- * television anyway. The coarser 64x36 this started at could not resolve the 22-pixel bars that
- * several files in this library actually have.
+ * The wash has to lag the picture heavily. A cut between two shots is instant, and a wash that
+ * followed it exactly would flash the whole room; at this rate a cut takes about a second to
+ * arrive, which reads as the light in the scene changing rather than as the screen blinking.
  */
-private const val SAMPLE_WIDTH = 128
-private const val SAMPLE_HEIGHT = 72
-
-/** Anything this dark counts as a black bar rather than a dark shot. */
-private const val BAR_LUMA = 20
+private const val AMBIENT_BLEND = 0.16f
 
 /**
- * How much of a line has to be dark for it to count as bar.
+ * Fraction of each edge of the frame the wash ignores.
  *
- * Not all of it. A bar is black because it was encoded black, but compression leaves noise along
- * the edge where it meets the picture, and requiring every single pixel means one stray bright
- * one hides a bar a hundred and thirty pixels thick.
+ * Videos in this library carry black bars *inside* the picture — 1920x1080 files holding a
+ * 2.39:1 image with 138-pixel bands, measured with ffmpeg cropdetect over the card. Sampling
+ * those would derive the colour of a scene from its letterbox and put a black glow behind a
+ * bright shot. The middle of a frame is always picture.
  */
-private const val BAR_PURITY = 0.97f
+private const val AMBIENT_INSET = 0.18f
 
-/** Refuse to crop more than this; past it, the picture is dark rather than letterboxed. */
-private const val MAX_CROP = 1.5f
-
-/** Safety margin on a measured crop, so a coarsely sampled bar cannot leave a sliver behind. */
-private const val CROP_MARGIN = 1.02f
+/** How bright the wash is drawn. It is a suggestion of the picture, not a second copy of it. */
+private const val AMBIENT_ALPHA = 0.5f
 
 /**
- * Works out how much of the picture is black bar, and returns the scale that removes it.
+ * The soft glow behind a letterboxed video, in the colours of the video itself.
  *
- * Aspect ratio alone cannot answer this, and on this library it is not even close. Measured with
- * `ffmpeg cropdetect` over a sample of the card: about half the videos carry bars *inside* the
- * frame — 1920x1080 files holding 2.35:1 pictures with 130-pixel bands top and bottom, and one
- * holding a 4:3 picture with 278-pixel bands at the sides. Every dimension the player reports for
- * those files says 16:9. The only evidence is the pixels.
- *
- * Returns 1 when there is nothing to crop, null when the frame is too dark to judge, and never
- * more than [MAX_CROP] — a shot that opens on black would otherwise be mistaken for a letterbox
- * and the video zoomed to nothing.
+ * Rebuilt in place every sample: one small bitmap, one accumulator, nothing allocated per frame.
+ * The accumulator is kept apart from the pixels because the blend needs more precision than
+ * eight bits — at [AMBIENT_BLEND] a step of one level would never round its way to the next one,
+ * and the wash would stick a few levels short of the colour it is chasing.
  */
-private fun measureLetterbox(view: TextureView): Float? {
-    val width = SAMPLE_WIDTH
-    val height = SAMPLE_HEIGHT
-    val frame = runCatching { view.getBitmap(width, height) }.getOrNull() ?: return null
+private class AmbientWash {
+    private val accumulator = FloatArray(AMBIENT_WIDTH * AMBIENT_HEIGHT * 3)
+    private val pixels = IntArray(AMBIENT_WIDTH * AMBIENT_HEIGHT)
+    private var seeded = false
 
-    fun dark(x: Int, y: Int): Boolean {
-        val pixel = frame.getPixel(x, y)
-        val luma = ((pixel shr 16 and 0xFF) * 299 + (pixel shr 8 and 0xFF) * 587 +
-            (pixel and 0xFF) * 114) / 1000
-        return luma <= BAR_LUMA
+    /** The current wash, or null until a frame has been read. Compose state, so drawing follows. */
+    var image by mutableStateOf<ImageBitmap?>(null)
+        private set
+
+    fun sample(view: TextureView) {
+        val frame = runCatching {
+            view.getBitmap(AMBIENT_SOURCE_WIDTH, AMBIENT_SOURCE_HEIGHT)
+        }.getOrNull() ?: return
+
+        val insetX = (AMBIENT_SOURCE_WIDTH * AMBIENT_INSET).toInt()
+        val insetY = (AMBIENT_SOURCE_HEIGHT * AMBIENT_INSET).toInt()
+        val usableWidth = AMBIENT_SOURCE_WIDTH - 2 * insetX
+        val usableHeight = AMBIENT_SOURCE_HEIGHT - 2 * insetY
+
+        for (y in 0 until AMBIENT_HEIGHT) {
+            val sourceY = insetY + y * usableHeight / AMBIENT_HEIGHT
+            for (x in 0 until AMBIENT_WIDTH) {
+                val sourceX = insetX + x * usableWidth / AMBIENT_WIDTH
+                val pixel = frame.getPixel(sourceX, sourceY)
+                val at = (y * AMBIENT_WIDTH + x) * 3
+                val red = (pixel shr 16 and 0xFF).toFloat()
+                val green = (pixel shr 8 and 0xFF).toFloat()
+                val blue = (pixel and 0xFF).toFloat()
+
+                // The first frame is taken whole. Easing up from black would fade the room in
+                // over a second at the start of every song, which looks like the video loading.
+                if (!seeded) {
+                    accumulator[at] = red
+                    accumulator[at + 1] = green
+                    accumulator[at + 2] = blue
+                } else {
+                    accumulator[at] += (red - accumulator[at]) * AMBIENT_BLEND
+                    accumulator[at + 1] += (green - accumulator[at + 1]) * AMBIENT_BLEND
+                    accumulator[at + 2] += (blue - accumulator[at + 2]) * AMBIENT_BLEND
+                }
+
+                pixels[y * AMBIENT_WIDTH + x] = (0xFF shl 24) or
+                    (accumulator[at].toInt() shl 16) or
+                    (accumulator[at + 1].toInt() shl 8) or
+                    accumulator[at + 2].toInt()
+            }
+        }
+        frame.recycle()
+        seeded = true
+
+        image = Bitmap.createBitmap(pixels, AMBIENT_WIDTH, AMBIENT_HEIGHT, Bitmap.Config.ARGB_8888)
+            .asImageBitmap()
     }
+}
 
-    fun rowDark(y: Int) = (0 until width).count { dark(it, y) } >= width * BAR_PURITY
-    fun columnDark(x: Int) = (0 until height).count { dark(x, it) } >= height * BAR_PURITY
-
-    var top = 0
-    while (top < height / 2 && rowDark(top)) top++
-    var bottom = 0
-    while (bottom < height / 2 && rowDark(height - 1 - bottom)) bottom++
-    var left = 0
-    while (left < width / 2 && columnDark(left)) left++
-    var right = 0
-    while (right < width / 2 && columnDark(width - 1 - right)) right++
-
-    frame.recycle()
-
-    // A frame that is black all over is a fade, not a letterbox. Try again later.
-    if (top + bottom >= height / 2 || left + right >= width / 2) return null
-
-    val verticalScale = height.toFloat() / (height - top - bottom)
-    val horizontalScale = width.toFloat() / (width - left - right)
-    val needed = maxOf(verticalScale, horizontalScale)
-
-    // A hair over what the measurement says: a bar can be a fraction of a sampled row thicker
-    // than it looks, and a sliver of black at the edge is far more noticeable than one per cent
-    // more crop.
-    return if (needed <= 1.001f) 1f else (needed * CROP_MARGIN).coerceAtMost(MAX_CROP)
+/** Stretches the wash over the whole screen. The upscale is what turns 32x18 into a blur. */
+private fun DrawScope.drawAmbient(wash: ImageBitmap) {
+    drawImage(
+        image = wash,
+        srcOffset = IntOffset.Zero,
+        srcSize = IntSize(wash.width, wash.height),
+        dstOffset = IntOffset.Zero,
+        dstSize = IntSize(size.width.toInt(), size.height.toInt()),
+        alpha = AMBIENT_ALPHA,
+        filterQuality = FilterQuality.High,
+    )
 }
 
 /**
  * The song's music video, behind the game.
  *
- * **Its own player, and silent.** The obvious approach — play the `.mp4` and take the audio from
- * it too — would quietly invalidate everything: the notes are timed against the `.mp3`, the
- * 127 ms round trip was measured against that same path, and a video file's audio track is very
- * often a different master with a different offset. So the mp3 stays the single source of both
- * sound and truth, and this player is muted and told where to be.
+ * **Its own player, and silent.** The obvious approach — play the mp4 and take the audio from it
+ * too — would quietly invalidate everything: the notes are timed against the mp3, the 127 ms
+ * round trip was measured against that same path, and a video file's audio track is very often a
+ * different master with a different offset. So the mp3 stays the single source of both sound and
+ * truth, and this player is muted and told where to be.
  *
- * `#VIDEOGAP` says how long *after* the audio the video starts, so the video's position is the
- * song position minus that. It is in **seconds**, unlike `#GAP` which is in milliseconds — an
- * inconsistency in the UltraStar format itself, and one that cost this app a bug before video
- * was ever wired up.
+ * VIDEOGAP says how long *after* the audio the video starts, so the video's position is the song
+ * position minus that. It is in **seconds**, unlike GAP which is in milliseconds — an
+ * inconsistency in the UltraStar format itself, and one that cost this app a bug before video was
+ * ever wired up.
  *
- * Sized to **cover** the screen rather than fit inside it, and then cropped further by whatever
- * black bars are baked into the file — see [measureLetterbox]. A letterboxed music video behind
- * a game reads as a mistake, and losing a few per cent of a decorative background does not.
+ * **The picture is shown whole.** It used to be sized to *cover* the screen and then cropped
+ * further by however much black bar could be measured in the frame — a lot of machinery aimed at
+ * never showing a bar, and wrong about which cost was worse. A crop that guesses takes the top of
+ * somebody's head off, and it guesses hardest on the videos that are hardest to measure. Most of
+ * this library is standard-definition 4:3, so covering a 16:9 screen meant throwing away a
+ * quarter of every one of those pictures for a whole song.
+ *
+ * The bars are filled with the video's own colours instead — a heavily blurred, heavily lagged
+ * wash taken from the middle of the frame, the way YouTube does it. The screen stays full and
+ * nothing is cut off. See [AmbientWash].
  *
  * Played at full brightness. Contrast for the game comes from panels behind the game, not from
  * dimming the picture.
@@ -156,10 +202,8 @@ fun SongVideo(
 
     val context = LocalContext.current
     var aspect by remember { mutableFloatStateOf(16f / 9f) }
-
-    /** Extra scale that crops away black bars baked into the file. 1 until measured. */
-    var crop by remember(videoUri) { mutableFloatStateOf(1f) }
     var surface by remember(videoUri) { mutableStateOf<TextureView?>(null) }
+    val wash = remember(videoUri) { AmbientWash() }
 
     val player = remember(videoUri) {
         ExoPlayer.Builder(context).build().apply {
@@ -212,18 +256,31 @@ fun SongVideo(
         }
     }
 
-    // Clipping here is what makes "cover" work: the video is deliberately sized larger than the
-    // screen in one direction and the overflow is cut off.
-    BoxWithConstraints(modifier.clipToBounds()) {
-        val boxAspect = maxWidth / maxHeight
-        val width = (if (aspect > boxAspect) maxHeight * aspect else maxWidth) * crop
-        val height = (if (aspect > boxAspect) maxHeight else maxWidth / aspect) * crop
+    // Keeps the wash following the picture. Reading a frame is a copy of 64x36 pixels, so it is
+    // affordable several times a second; what makes it look right is the lag, not the rate.
+    LaunchedEffect(player) {
+        while (true) {
+            delay(AMBIENT_INTERVAL_MS)
+            surface?.let(wash::sample)
+        }
+    }
 
-        // A TextureView rather than a SurfaceView. A SurfaceView is a separate compositor layer
-        // that is not reliably clipped by its parent, so sizing it past the screen edge — which
-        // is exactly what filling the screen requires — is not something it can be trusted to
-        // do. A TextureView is an ordinary view and obeys the clip. It costs an extra copy per
-        // frame, which the Shield does not notice.
+    BoxWithConstraints(modifier.clipToBounds()) {
+        // Behind the picture, filling everything the picture does not.
+        wash.image?.let { image ->
+            Canvas(modifier = Modifier.fillMaxSize()) { drawAmbient(image) }
+        }
+
+        // Contain, not cover: whichever dimension runs out first decides, and the other follows
+        // from the aspect ratio. Nothing is cut off.
+        val boxAspect = maxWidth / maxHeight
+        val width = if (aspect > boxAspect) maxWidth else maxHeight * aspect
+        val height = if (aspect > boxAspect) maxWidth / aspect else maxHeight
+
+        // A TextureView rather than a SurfaceView. A TextureView is an ordinary view and can be
+        // read back a frame at a time, which is what the ambient wash needs; a SurfaceView is a
+        // separate compositor layer with nothing to read from and no reliable clipping. It costs
+        // an extra copy per frame, which the Shield does not notice.
         AndroidView(
             factory = {
                 TextureView(it).also { view ->
@@ -231,33 +288,10 @@ fun SongVideo(
                     surface = view
                 }
             },
-            // requiredSize, not size. `size` is clamped by the incoming constraints, so a view
-            // deliberately sized past the screen edge — which is exactly what covering means —
-            // silently snapped back to the screen, and a TextureView stretches its content to
-            // whatever bounds it ends up with. Every video was being squashed to 16:9, and the
-            // letterbox crop below could never take effect either, since it multiplies a size
-            // that was being clamped away.
+            // requiredSize, not size: `size` is clamped by the incoming constraints, and a
+            // TextureView stretches its content to whatever bounds it ends up with — so a
+            // clamped size silently squashes the picture rather than letterboxing it.
             modifier = Modifier.requiredSize(width, height).align(Alignment.Center),
         )
-    }
-
-    // Measure the letterbox once the picture is running, and crop it away.
-    //
-    // Several samples, and the **smallest** crop any of them asked for wins. A bar is in every
-    // frame of the file, so a real one survives every sample; a dark sky at the top of one shot
-    // does not, and taking the first answer would have zoomed the whole video for the rest of the
-    // song on the strength of it. Applied as it goes rather than at the end, because bars left up
-    // for twelve seconds while the evidence is gathered is the thing being fixed.
-    LaunchedEffect(player) {
-        delay(LETTERBOX_FIRST_MS)
-        var smallest = Float.MAX_VALUE
-        repeat(LETTERBOX_SAMPLES) {
-            val measured = surface?.let(::measureLetterbox)
-            if (measured != null && measured < smallest) {
-                smallest = measured
-                crop = measured
-            }
-            delay(LETTERBOX_INTERVAL_MS)
-        }
     }
 }

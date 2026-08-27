@@ -415,8 +415,15 @@ private fun DrawScope.drawArrows(
     traces.forEachIndexed { index, trace ->
         val motion = motions.getOrNull(index) ?: return@forEachIndexed
         val raw = trace.currentMidi()
-        val folded =
-            if (raw.isNaN() || referenceMidi == null) raw else foldToOctaveNear(raw, referenceMidi)
+        // Folded with hysteresis, against where this arrow already is. Both the reference note
+        // and the voice cross the tritone boundary constantly, and each crossing flips the fold
+        // by a whole octave — a jump in the *target*, which no amount of easing can smooth,
+        // only draw more slowly.
+        val folded = if (raw.isNaN() || referenceMidi == null) {
+            raw
+        } else {
+            foldToOctaveNear(raw, referenceMidi, motion.shownMidi)
+        }
 
         val midi = motion.update(folded, nowSeconds)
         if (!motion.isVisible) return@forEachIndexed

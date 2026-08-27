@@ -1,8 +1,12 @@
 package com.example.ultrastarandroidtv.game
 
 import android.content.Context
+import android.util.Log
 import androidx.media3.common.audio.AudioProcessor
+import com.example.ultrastarandroidtv.audio.GainProcessor
+import com.example.ultrastarandroidtv.audio.LoudnessCache
 import com.example.ultrastarandroidtv.audio.SpectrumTap
+import com.example.ultrastarandroidtv.audio.gainFor
 import com.example.ultrastarandroidtv.mic.OpenMic
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.pitch.PitchTracker
@@ -19,21 +23,25 @@ import java.nio.ByteBuffer
 private const val TAIL_SECONDS = 2.0
 
 /**
- * Readings behind the arrow's median filter. **One means no filter**, which is what it is set to:
- * the smoothing the arrow has is `ArrowMotion`'s easing, and this is not in the way of it.
+ * Readings behind the arrow's median filter. One would mean no filter.
  *
- * Both were tried alone. The median discards a wild reading outright where the easing only slows
- * it down, which is the better argument on paper — but on the television the median still read as
- * glitchy, because what it does to a *step* is hold the old value for a whole reading and then
- * jump. Easing at a sixtieth of a second never jumps.
+ * **Three, because a median is the only thing here that can remove a spike rather than slow it
+ * down.** Easing at a fiftieth of a second still travels most of the way to a lone wild reading
+ * before turning round, which is exactly the twitch that was still being seen from the sofa;
+ * a median discards that reading outright, and being a median rather than a mean it does not
+ * drag a held note off its pitch to do it.
  *
- * **Zero here also lines the arrow up exactly with the scoring front**, which is not a
- * coincidence but arithmetic: the arrow is drawn at `drawTime - arrowLagSeconds`, which works out
- * as `playerPosition - totalLatency - MEDIAN_LAG_SECONDS`, and the scorer's cursor sits at
- * `playerPosition - totalLatency`. Any median at all puts the fill ahead of the arrow that is
- * supposed to be earning it.
+ * **It costs no apparent lag, and that is arithmetic rather than optimism.** A median of three
+ * lags the raw reading by one hop ([MEDIAN_LAG_SECONDS], 21 ms), and [arrowLagSeconds] already
+ * carries that term — so the arrow is *drawn* 21 ms further left, which is where the audio it
+ * is showing actually belongs. The note fill is gated on the same instant (`drawHits` measures
+ * `passed` against `arrowNow`), so the fill cannot get ahead of the arrow that earned it.
+ *
+ * The history is worth keeping because this went the other way once: median-of-five plus a
+ * twentieth of a second of easing put the arrow 150 ms behind the voice and notes lit up before
+ * the arrow reached them. That was a *lag* problem, and the fix was the lag, not the median.
  */
-private const val MEDIAN_WINDOW = 1
+private const val MEDIAN_WINDOW = 3
 
 /**
  * Delay the median filter itself adds, in seconds.
@@ -105,7 +113,25 @@ class GameSession(
      */
     val spectrum: SpectrumTap = SpectrumTap()
 
-    val player = SongPlayer(context, arrayOf<AudioProcessor>(spectrum))
+    /**
+     * Brings this recording to the same loudness as every other song in the library.
+     *
+     * Left at unity until [normalizeVolume] has measured the file, which is deliberate: a gain
+     * guessed from the header would be wrong, and wrong in a way nobody could hear the cause of.
+     */
+    val gain: GainProcessor = GainProcessor()
+
+    /**
+     * Gain first, then the tap.
+     *
+     * The tap drives the visualiser, and the visualiser should move to what the room is actually
+     * hearing — so it sees the song after normalisation, not before. It is also the correct order
+     * for the rule the tap documents: everything downstream of the gain is still pass-through.
+     */
+    val player = SongPlayer(context, arrayOf<AudioProcessor>(gain, spectrum))
+
+    private val appContext = context.applicationContext
+    private val loudness = LoudnessCache(appContext)
 
     /**
      * A song with separate P1/P2 parts *and* two people to sing them.
@@ -299,28 +325,63 @@ class GameSession(
             MEDIAN_LAG_SECONDS
 
     /**
-     * Whether the song is over.
+     * Whether there is nothing left to sing.
      *
-     * Both halves are needed. A chart's last note plus its tail can fall *after* the end of the
-     * audio file, and once the audio ends the clock stops advancing — so waiting on the position
-     * alone waits forever, and the results screen never appears. Equally, a file with a long
-     * silent outro would leave everyone staring at an empty track, so the notes running out
-     * counts too.
+     * True through an outro, a fade, or the thirty seconds of guitar a lot of songs end on. The
+     * song is *not* over at this point and the results deliberately do not appear — see
+     * [isFinished] — but this is the moment a skip becomes worth offering, because from here
+     * nothing anyone does can change the score.
+     */
+    val isVocalFinished: Boolean
+        get() = playerPositionSeconds() >= songEndSeconds
+
+    /**
+     * Whether the song is over — **the recording, not the chart**.
+     *
+     * The last note running out used to count, and cutting to the results the instant it did was
+     * abrupt: an outro is part of the song, the video is still playing, and being thrown to a
+     * scoreboard mid-phrase of the guitar solo reads as a crash. So this now waits for the audio,
+     * and [isVocalFinished] covers the stretch in between with a way out for anyone who does not
+     * want to sit through it.
+     *
+     * The audio is the only thing that can be waited on here, and both tests of it are needed. A
+     * player's final reported position rarely lands exactly on the duration, and once the audio
+     * ends the clock stops advancing — so a position that has frozen just short of the finish
+     * line has to count as the finish line. Measured, not guessed: the log read
+     * `42.5/42.8 s ended=false`.
+     *
+     * The fallback matters too. A chart's last note plus its tail can fall *after* the end of the
+     * file, and a player that never reports a duration would otherwise leave the results screen
+     * unreachable — so a song whose length is unknown falls back to the chart running out.
      */
     val isFinished: Boolean
         get() {
             if (player.isEnded) return true
 
             val position = playerPositionSeconds()
-            if (position >= songEndSeconds) return true
-
-            // The chart can outlast the recording. "Steve's Lava Chicken" ends its last note
-            // 0.3 s after the audio stops, and once the audio stops the clock stops with it —
-            // so the position freezes just short of the finish line and the results screen
-            // never appears. Measured, not guessed: the log read `42.5/42.8 s ended=false`.
             val duration = player.durationSeconds
-            return duration > 0.0 && position >= duration - END_TOLERANCE_SECONDS
+            if (duration <= 0.0) return position >= songEndSeconds
+            return position >= duration - END_TOLERANCE_SECONDS
         }
+
+    /**
+     * Measures how loud this recording is and sets [gain] to match the rest of the library.
+     *
+     * **Blocking, and it does real decoding — call it off the main thread**, and preferably
+     * before the music starts. It is cheap after the first play of a song, because the answer is
+     * kept ([LoudnessCache]), and it is safe to call late: the gain ramps rather than steps.
+     */
+    fun normalizeVolume() {
+        val measured = loudness.measure(appContext, audioUri)
+        val factor = gainFor(measured)
+        gain.gain = factor
+        Log.i(
+            "Loudness",
+            "%s: %.1f dBFS rms, peak %.2f -> gain %.2fx".format(
+                song.metadata.title, measured.rmsDbfs, measured.peak, factor,
+            ),
+        )
+    }
 
     fun start() {
         // The microphones are already open; this only points them at the scorers.

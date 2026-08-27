@@ -80,6 +80,21 @@ import kotlinx.coroutines.withContext
 private const val PREVIEW_DELAY_MS = 450L
 
 /**
+ * How loud the thirty-second samples on this screen are played.
+ *
+ * **Not measured, unlike everywhere else, and the reason is that there is nothing to measure.**
+ * Every sample here comes from the same place — iTunes, by way of USDB's search results — so they
+ * are already consistent with each other, which is the whole problem normalisation solves. What
+ * they are not is consistent with the *song picker*, whose previews are now pulled down to a level
+ * you can talk over; this is the offset that puts the two screens at about the same loudness, on
+ * the basis that an iTunes master sits around -13 dBFS.
+ *
+ * Measuring them properly would mean downloading each one before it could be played, which is a
+ * second of silence per row for a difference nobody can hear between two rows of the same list.
+ */
+private const val PREVIEW_VOLUME = 0.5f
+
+/**
  * How long a result must stay focused before its availability is checked.
  *
  * Longer than the preview delay: hearing a song is the point of pausing on it, whereas this is a
@@ -252,7 +267,7 @@ fun AddSongsScreen(
         runCatching {
             preview.setMediaItem(MediaItem.fromUri(sample))
             preview.prepare()
-            preview.volume = 0.75f
+            preview.volume = PREVIEW_VOLUME
             preview.play()
         }
     }
