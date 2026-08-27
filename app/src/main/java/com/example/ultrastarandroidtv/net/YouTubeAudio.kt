@@ -36,14 +36,17 @@ import org.json.JSONObject
  * is exactly why the client is a value and not a hard-coded request. The failure is loud and
  * specific: every lookup starts returning [RefusalKind.NEEDS_SIGN_IN] or [RefusalKind.NO_AUDIO_STREAM].
  *
- * ## The known hole: "made for kids"
+ * ## "Made for kids", which used to be the known hole
  *
- * The visionOS client cannot see videos flagged made-for-kids — it answers `UNPLAYABLE` with
- * *"This video is not available"*, while still returning the title and duration. Measured on this
- * library: of 19 charts with no audio, 13 resolve and the 6 that do not are all Disney/Trolls
- * uploads, alive and readable by the `android` client, whose *streams* then demand a PO token.
- * So those are genuinely out of reach here, and the practical fix is the one the Add-songs screen
- * offers anyway — search for a different upload of the same song.
+ * The visionOS client cannot see videos flagged made-for-kids: it answers `UNPLAYABLE` with *"This
+ * video is not available"* while still returning the title and duration. That is not a quirk — the
+ * content is gated per client, and only clients YouTube has certified as COPPA-compliant are served
+ * it. The very thing that makes visionOS useful here, being lightly provisioned, is why it is not
+ * on that list.
+ *
+ * **[InnertubeClients.ANDROID_KIDS] closes it**, measured on 2026-08-24 across the whole client
+ * table. It is the fallback in [InnertubeClients.preferred], and it costs one extra request only
+ * where a lookup was going to fail anyway.
  *
  * Refusals are values, not exceptions, because "this video says no" is a normal answer a screen
  * has to render. Exceptions are reserved for the network or YouTube itself being broken, which is
@@ -161,12 +164,47 @@ object InnertubeClients {
     )
 
     /**
-     * Tried in order. One entry today on purpose: every other client measured on 2026-08-20 either
-     * returned no formats or demanded a PO token for the stream, and a client that cannot deliver
-     * bytes only adds a request and a delay to every failure. Add to this list when a new one is
-     * shown to work, not in anticipation.
+     * YouTube Kids, which is the one client allowed to serve made-for-kids uploads.
+     *
+     * **This is the hole in [VISION_OS] closed.** Videos flagged made-for-kids are gated per
+     * client — a client is only served them if YouTube has certified it implements the COPPA
+     * restrictions — and visionOS is not certified, so it answers `UNPLAYABLE` for every Disney and
+     * DreamWorks upload. The whole reason visionOS is useful here is that it is lightly
+     * provisioned; lightly provisioned is also why it cannot see those.
+     *
+     * The kids client is the obvious candidate and it measures clean (2026-08-24), which is not
+     * true of the near neighbours: `IOS` and `ANDROID` refuse the request outright, `WEB_KIDS`,
+     * `ANDROID_VR`, `TVHTML5` and `MWEB` all answer `UNPLAYABLE`, and the music clients demand a
+     * sign-in. `ANDROID_KIDS` answers `OK` with **the full format ladder** — itag 140 for the sound
+     * and itag 137 for the picture, the same two this app already prefers — with plain URLs
+     * needing no JS player, no PO token, no cookies and no account.
+     *
+     * It also has none of the limits the `IOS` client turned out to have: **no 256 KB cap**, whole
+     * files fetched in one request, and **no User-Agent requirement** — the stream serves the same
+     * bytes to no UA at all, which is how this app fetches. And it answers for ordinary videos too,
+     * so it is a genuine fallback rather than a special case.
+     *
+     * Second rather than first because visionOS is the one proven across the whole library; this
+     * costs one extra request only on the path that was failing anyway.
      */
-    val preferred: List<InnertubeClient> = listOf(VISION_OS)
+    val ANDROID_KIDS = InnertubeClient(
+        clientName = "ANDROID_KIDS",
+        clientVersion = "7.36.1",
+        clientId = 27,
+        userAgent = "com.google.android.apps.youtube.kids/7.36.1 (Linux; U; Android 11) gzip",
+        osName = "Android",
+        osVersion = "11",
+    )
+
+    /**
+     * Tried in order, first one that produces audio wins.
+     *
+     * Deliberately short. Every other client measured on 2026-08-20 and again on 2026-08-24 either
+     * returned no formats, demanded a PO token, or wanted an account — and a client that cannot
+     * deliver bytes only adds a request and a delay to every failure. Add to this list when a new
+     * one is *shown* to work, not in anticipation.
+     */
+    val preferred: List<InnertubeClient> = listOf(VISION_OS, ANDROID_KIDS)
 }
 
 /** One downloadable audio stream. */
@@ -183,19 +221,15 @@ data class AudioFormat(
     val container: String get() = containerFor(mimeType)
 
     /**
-     * Headers this stream must be fetched with.
+     * Headers a fetch of this stream needs beyond its `Range`, which is empty today.
      *
-     * **The `Range` header is not an optimisation, it is the difference between working and not.**
-     * Measured on 2026-08-20 against the same URL: a plain `GET` came back at **31 KB/s**, and the
-     * identical request carrying `Range: bytes=0-` came back at **10.1 MB/s**. Google throttles
-     * whole-file requests to roughly playback speed — sensible for a video player, ruinous for a
-     * download — and asking for a range opts out of it. Without this a four-megabyte song takes
-     * about two minutes and looks exactly like a hang.
-     *
-     * `bytes=0-` asks for the whole file, so the reply is a `206` carrying everything; there is no
-     * chunking to reassemble. Do not "simplify" this away.
+     * **The `Range` itself belongs to [com.example.ultrastarandroidtv.net.downloadInChunks] and
+     * must not be set here.** A plain `GET` of a YouTube media URL is served at about 31 KB/s, so
+     * one is always required — but a single request carrying `Range: bytes=0-` is throttled just
+     * as hard once the file passes 10 MiB, which is measured in detail on that function. The size
+     * of each response is the thing that matters, and only the chunked fetch can bound it.
      */
-    val fetchHeaders: Map<String, String> get() = mapOf("Range" to "bytes=0-")
+    val fetchHeaders: Map<String, String> get() = emptyMap()
 
     /** Codec string YouTube declared, e.g. `mp4a.40.2` or `opus`. Empty when it did not say. */
     val codec: String
@@ -216,8 +250,8 @@ data class VideoFormat(
     /** File extension to save this as: `mp4`, `webm`. */
     val container: String get() = containerFor(mimeType)
 
-    /** The same header for the same measured reason — see [AudioFormat.fetchHeaders]. */
-    val fetchHeaders: Map<String, String> get() = mapOf("Range" to "bytes=0-")
+    /** The same, for the same reason — see [AudioFormat.fetchHeaders]. */
+    val fetchHeaders: Map<String, String> get() = emptyMap()
 
     /** Codec string YouTube declared, e.g. `avc1.4d401f` or `vp9`. Empty when it did not say. */
     val codec: String

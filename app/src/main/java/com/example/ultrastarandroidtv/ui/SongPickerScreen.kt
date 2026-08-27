@@ -53,17 +53,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
-import com.example.ultrastarandroidtv.audio.LoudnessCache
-import com.example.ultrastarandroidtv.audio.gainFor
 import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.example.ultrastarandroidtv.audio.previewPlayer
 import com.example.ultrastarandroidtv.game.GameTheme
 import com.example.ultrastarandroidtv.library.CoverLoader
 import com.example.ultrastarandroidtv.library.LibraryLocation
 import com.example.ultrastarandroidtv.library.SafDocumentTree
 import com.example.ultrastarandroidtv.library.ScannedSong
 import com.example.ultrastarandroidtv.library.SongLibraryCache
+import com.example.ultrastarandroidtv.library.SongSort
+import com.example.ultrastarandroidtv.library.songOrder
 import com.example.ultrastarandroidtv.library.SongLibraryScanner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -83,14 +84,6 @@ private const val PREVIEW_DELAY_MS = 450L
 
 /** Where to start a preview when the song does not say. Far enough in to be past the intro. */
 private const val FALLBACK_PREVIEW_SECONDS = 45.0
-
-/**
- * How loud a preview is played, before normalisation.
- *
- * Below the target the game itself uses, because this plays while somebody is *choosing* rather
- * than singing, and it has to be possible to talk over it.
- */
-private const val PREVIEW_TARGET_DBFS = -19.0
 
 /**
  * Pick a song.
@@ -152,7 +145,7 @@ fun SongPickerScreen(
         }
     }
 
-    LaunchedEffect(treeUri) {
+    LaunchedEffect(treeUri, cache.revision) {
         val currentTree = tree ?: run {
             status = "Choose the folder your songs are in."
             return@LaunchedEffect
@@ -178,7 +171,7 @@ fun SongPickerScreen(
 
         // The cache keeps everything, including songs with no audio: those are what the Songs
         // screen exists to explain, and re-finding them would mean walking the card again.
-        cache.put(treeUri, found.songs.sortedBy { it.song.metadata.title.lowercase() })
+        cache.put(treeUri, found.songs.sortedWith(songOrder(SongSort.Title)))
         songs = cache.playable
         scanning = false
         status = summarise(songs.size)
@@ -205,8 +198,8 @@ fun SongPickerScreen(
 
     // One player for the whole screen, reused as focus moves. Building an ExoPlayer is not
     // cheap and doing it per card would be felt.
-    val preview = remember { ExoPlayer.Builder(context).build() }
-    val loudness = remember { LoudnessCache(context) }
+    // Levelled: previews are mastered decades apart and run 8.6 dB apart on this library.
+    val preview = remember { previewPlayer(context) }
     DisposableEffect(Unit) {
         onDispose { preview.release() }
     }
@@ -219,23 +212,14 @@ fun SongPickerScreen(
 
         delay(PREVIEW_DELAY_MS)
 
-        val uri = currentTree.uriFor(audioId)
-
-        // Measured *before* the preview starts rather than applied to one already playing: a
-        // volume that jumps a fraction of a second in is more distracting than the difference it
-        // is correcting. The measurement is kept, so this is instant for anything sung before.
-        //
-        // Attenuation only, since a plain player volume cannot boost — which is why the target
-        // here is well below the game's. A quiet recording is simply left alone.
-        val loudnessOf = withContext(Dispatchers.IO) { loudness.measure(context, uri.toString()) }
-        val level = gainFor(loudnessOf, targetDbfs = PREVIEW_TARGET_DBFS).coerceIn(0.05f, 1f)
-
         runCatching {
-            preview.setMediaItem(MediaItem.fromUri(uri))
+            preview.setMediaItem(MediaItem.fromUri(currentTree.uriFor(audioId)))
             preview.prepare()
             val start = song.song.metadata.previewStartSeconds ?: FALLBACK_PREVIEW_SECONDS
             preview.seekTo((start * 1000).toLong())
-            preview.volume = level
+            // Full scale here, because PreviewLevel has already brought the clip to a
+            // fixed loudness -- turning it down again would only undo half of that.
+            preview.volume = 1f
             preview.play()
         }
     }

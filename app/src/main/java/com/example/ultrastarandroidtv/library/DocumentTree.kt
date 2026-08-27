@@ -71,6 +71,17 @@ interface DocumentWriter {
         }.getOrNull()
     }
 
+    /**
+     * Replaces what is already in [documentId], rather than making a new file.
+     *
+     * Separate from [writeFile] because they are genuinely different acts and the wrong one is
+     * quietly destructive: the Storage Access Framework resolves a name clash by *suffixing*, so
+     * writing a chart back under its own name leaves the old one there and adds
+     * `Artist - Title (1).txt` beside it — which the scanner then reads as a second song, and the
+     * picker offers twice.
+     */
+    fun overwrite(documentId: String, bytes: ByteArray): Boolean
+
     /** Removes a document, or a folder and everything in it. False rather than throwing. */
     fun delete(documentId: String): Boolean
 }

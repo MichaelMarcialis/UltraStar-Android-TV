@@ -1,13 +1,16 @@
 package com.example.ultrastarandroidtv.ui
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import com.example.ultrastarandroidtv.download.Downloads
 import com.example.ultrastarandroidtv.game.GameSession
 import com.example.ultrastarandroidtv.game.GameplayScreen
 import com.example.ultrastarandroidtv.library.LibraryLocation
@@ -60,6 +63,12 @@ fun AppRoot() {
         onDispose { micSession.stop() }
     }
 
+    // Downloading lives here for the same reason the microphones do: it has to outlive the screen
+    // that starts it. A download used to be cancelled by pressing Back, which made queueing songs
+    // pointless -- the whole value of a queue is being able to go and do something else.
+    val downloads = remember { Downloads(context) }
+    LaunchedEffect(downloads) { downloads.work(library) }
+
     /**
      * Whether a song folder has been chosen. Held here rather than read where it is needed,
      * because choosing one has to enable Play immediately, on the screen already on the TV.
@@ -104,6 +113,12 @@ fun AppRoot() {
         screen = Screen.Claim
     }
 
+    // Held for the whole of a song, not just at its start: gameplay costs half a core with video,
+    // and a download is network plus a burst of writes to the same card the song is streaming
+    // from. One in flight finishes its current step and then waits -- see [Downloads].
+    LaunchedEffect(screen) { downloads.paused = screen == Screen.Playing }
+
+    Box {
     when (screen) {
         Screen.Menu -> MainMenuScreen(
             // Live, so plugging a mic in on this screen enables Play without a relaunch.
@@ -121,6 +136,7 @@ fun AppRoot() {
         // which cannot be sung, and the only one that can remove it.
         Screen.Songs -> SongsScreen(
             cache = library,
+            downloads = downloads,
             onAddSongs = { screen = Screen.AddSongs },
             onMenu = {
                 // A folder can be chosen or changed here, which is what unblocks Play.
@@ -133,6 +149,7 @@ fun AppRoot() {
         // library management, and it is the same folder and the same cache that screen owns.
         Screen.AddSongs -> AddSongsScreen(
             cache = library,
+            downloads = downloads,
             // Back to Songs, which rescans if anything was downloaded -- the cache is cleared on
             // every successful save, so the new songs are found without anybody pressing Rescan.
             onBack = { screen = Screen.Songs },
@@ -221,5 +238,10 @@ fun AppRoot() {
                 )
             }
         }
+    }
+
+        // Over everything, focusable by nothing. A song that lands while somebody is choosing the
+        // next one is worth a line; a song that lands mid-performance can wait until it is over.
+        DownloadNotice(downloads = downloads, visible = screen != Screen.Playing)
     }
 }

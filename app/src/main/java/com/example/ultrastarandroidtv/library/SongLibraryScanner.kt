@@ -14,6 +14,15 @@ data class ScannedSong(
     val videoId: String?,
     val coverId: String?,
     val backgroundId: String?,
+    /**
+     * The `.usdb` file USDB Syncer left in the folder, if there is one.
+     *
+     * Kept because it is where a broken song's media ids survive — see
+     * [com.example.ultrastarandroidtv.usdb.UsdbSidecar]. Recorded during the walk rather than
+     * looked up later: the folder listing is already in hand here and asking for it again is a
+     * round trip through the Storage Access Framework, which is most of what a scan costs.
+     */
+    val sidecarId: String? = null,
 ) {
     /** A song whose audio is missing cannot be played, however well it parsed. */
     val isPlayable: Boolean get() = audioId != null
@@ -140,6 +149,7 @@ class SongLibraryScanner(
         videoId = findVideo(song.metadata.video, entries),
         coverId = findFile(song.metadata.cover, entries),
         backgroundId = findFile(song.metadata.background, entries),
+        sidecarId = loneSidecarIn(entries),
     )
 
     /**
@@ -166,6 +176,25 @@ class SongLibraryScanner(
             !it.isDirectory &&
                 it.name.substringAfterLast('.', "").lowercase() in VIDEO_EXTENSIONS
         }?.id
+
+    /**
+     * The folder's `.usdb` file, but only when there is exactly one of them.
+     *
+     * A folder can hold two arrangements of a song, and USDB Syncer writes a sidecar per
+     * download — so two charts can sit beside two sidecars, each naming a *different* video.
+     * Handing whichever the provider listed first to both charts would let a repair fetch one
+     * arrangement's music and point the other arrangement's chart at it, which is the
+     * out-of-time failure this project keeps a diagnostic tool for.
+     *
+     * Refusing to guess costs repairability for a folder like that, which is strictly better
+     * than repairing it wrongly. (A sidecar does name its own chart, in a `txt.fname` field —
+     * so they *could* be paired, at the cost of opening every one of them during a scan. Worth
+     * doing only if a real library ever turns out to contain the case.)
+     */
+    private fun loneSidecarIn(entries: List<TreeEntry>): String? =
+        entries.filter { !it.isDirectory && it.name.endsWith(".usdb", ignoreCase = true) }
+            .singleOrNull()
+            ?.id
 
     private fun looksLikeSong(text: String): Boolean =
         text.lineSequence().take(40).any { it.trimStart().startsWith("#TITLE:", ignoreCase = true) }
