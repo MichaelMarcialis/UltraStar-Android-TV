@@ -676,6 +676,27 @@ ffmpeg -hide_banner -ss 30 -t 20 -i v.mp4 -vf cropdetect=limit=24:round=2:reset=
 
 **Reaching the picker from `adb` needs a temporary bypass.** It sits behind the claim screen, which waits for a real voice, so `Screen.Players` was pointed straight at `Screen.Picker` for testing and put back afterwards — the same trick as the probe rows on the settings screen. Worth remembering: it is the only way to see this screen without somebody singing.
 
+**A microphone that "isn't being recognized", and it was never the microphone** (reported from the sofa 2026-08-29, diagnosed and fixed the same morning).
+
+One of the two mics did nothing on the claim screen, and unplugging and replugging the hub did not help. It was not any of the gameplay changes — nothing on that branch touches `mic/`, `cpp/`, `pitch/`, `MicClaim.kt` or `ClaimScreen.kt`. `dumpsys usb` settled it in one read:
+
+```
+alsa_manager={ ... address=/dev/bus/usb/001/017 ... address=/dev/bus/usb/001/016 }
+permissions_manager={ device_permissions={ device_name=/dev/bus/usb/001/017  uids=10101 } }
+```
+
+Both mics enumerated perfectly — `046d:0a03`, endpoint `0x82`, 208-byte packets, the lot — and the app held a USB permission grant for exactly **one** of them. A `uiautomator dump` found the other one's permission dialog still on screen, unanswered from the night before; pressing OK started it capturing immediately.
+
+- **An Android USB grant is keyed on the device *path*** (`/dev/bus/usb/001/016`), which is handed out afresh on every enumeration. So every replug, and every reboot, invalidates every grant — **replugging is what causes this, which is why replugging could not fix it.**
+- **The bug was asking for both at once.** Two requests put two identical system dialogs on top of one another. Somebody answers the one they can see, the second is never mentioned again, and the app is left with one working microphone and one that looks broken — on the one device where "the microphone is broken" is a conclusion everybody is already primed to reach. Permission is now asked for **one microphone at a time**: `UsbMicSession` holds `asking` (a port, not an index, because the list renumbers on every hot-plug) and starts the next request only when the previous one is answered. `asking` is cleared before anything else can return early, and cleared again if that mic is unplugged while its dialog is up — otherwise one dismissed dialog would strand every microphone queued behind it.
+- **A refusal was a dead end, and that was the worse half.** Nothing re-asked, and nothing on screen said why: `ClaimScreen` never read `OpenMic.status` at all, so a refused mic sat in the list with a silent meter, indistinguishable from a dead one. There is now `MicState` — an enum, because screens have to *act* on this and matching on prose stops working the day somebody rewords a message — plus `usableMics`, `refusedMics` and `askAgain()`.
+- **The claim screen is where a refusal is resolved, and the screens before it deliberately do not know about it.** Gating the main menu and the singer count on *usable* mics was the first attempt and it was wrong twice over: it made "Two singers needs a second microphone. Only one is plugged in" into a lie told to somebody looking at two microphones, and — much worse — with both mics refused it disabled Play, which is the only route to the button that undoes it. Those screens count what is **plugged in**, exactly as before. The claim screen blocks only when the refusal actually matters (`usableMics.size < playerCount`), so a spare nobody allowed is not a warning, and it says what is wrong, hides the meter that cannot move, and puts "Allow microphone" first with the focus on it.
+- **`askAgain` starts what is already allowed as well as asking for what is not.** Re-asking alone leaves a microphone that somebody granted from elsewhere sitting silent for ever, because there is nothing left to ask it. `startGranted()` is shared with `refresh()`, which is also why a relaunch needs no dialogs at all.
+- `OpenMic.state` is Compose state rather than a plain field: the offer has to appear and disappear on its own. Only the main thread writes it — the broadcast receiver and the hot-plug refresh — so no capture thread races a redraw.
+
+**A USB grant cannot be revoked from `adb`**, which is worth knowing before trying: there is no `cmd usb`, the Shield is not rooted, and the only things that clear one are a physical replug or uninstalling the app — and uninstalling would take the SAF folder grant, the profiles and the high scores with it. So the queue itself is verified by construction and by the one-at-a-time logs; the *screen* was verified with a temporary probe forcing one mic into `Refused`, which found a real bug in `askAgain` before it shipped. Probe removed; the same trick as the settings screen's extra rows.
+
+
 **Still unverified on hardware**: everything from the claim screen onwards. Reaching gameplay needs a microphone claimed by an actual voice, which cannot be driven with `input keyevent` — so the arrow, the praise, the point animation, the video crop and its fades, the stars, the high scores and the loudness normalisation have never been seen on the television by this session. The settings screen itself *is* verified there, difficulty dial included. `adb logcat -s Gameplay Loudness` reports the settings in effect — difficulty and tolerance among them — and the measured gain, once per song.
 
 **Not started:** nothing from the original roadmap. Next work is whatever testing turns up.

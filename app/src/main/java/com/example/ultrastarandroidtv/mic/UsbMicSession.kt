@@ -9,13 +9,40 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.core.content.ContextCompat
 import java.nio.ByteBuffer
 
 private const val TAG = "UsbMicSession"
 private const val ACTION_USB_PERMISSION = "com.example.ultrastarandroidtv.USB_PERMISSION"
+
+/**
+ * Where one microphone has got to.
+ *
+ * An enum rather than the display string, because screens have to *act* on this — a refused
+ * microphone has to be offered a second chance and must not be counted as a singer — and matching
+ * on prose is how that quietly stops working the day somebody rewords a message.
+ */
+enum class MicState {
+    /** Found, nothing asked for yet. */
+    Waiting,
+
+    /** A permission dialog is on screen for this one. Only ever one at a time; see [UsbMicSession]. */
+    Asking,
+
+    /** Permission was refused, or the dialog was dismissed. It can be asked for again. */
+    Refused,
+
+    /** Producing audio. */
+    Capturing,
+
+    /** Permission was given and opening it still failed. */
+    Failed,
+}
 
 /** One mic the session is looking after. */
 class OpenMic internal constructor(
@@ -35,7 +62,18 @@ class OpenMic internal constructor(
     var index: Int = index
         internal set
 
-    /** Plain-language state: waiting on permission, capturing, or why it failed. */
+    /**
+     * What this mic is doing, for anything that has to make a decision about it.
+     *
+     * Compose state rather than a plain field, because screens have to follow it: the claim
+     * screen offers a refused microphone a second chance, and that offer has to appear and
+     * disappear on its own. Only the main thread writes it -- the broadcast receiver and the
+     * hot-plug refresh -- so there is no capture thread racing a redraw.
+     */
+    var state: MicState by mutableStateOf(MicState.Waiting)
+        internal set
+
+    /** Plain-language state, for the diagnostic screens. */
     @Volatile
     var status: String = "waiting…"
         internal set
@@ -54,9 +92,18 @@ class OpenMic internal constructor(
  * arrives asynchronously through a broadcast, so mics show up in [mics] straight away but only
  * start producing audio once the user says yes.
  *
+ * **Permission is asked for one microphone at a time**, and that is the whole reason this class
+ * carries a queue rather than a loop. Android keys a grant on the device *path*
+ * (`/dev/bus/usb/001/016`), which is handed out afresh on every enumeration — so unplugging the
+ * hub, or rebooting, means every microphone needs granting again. Asking for two at once stacks
+ * two identical system dialogs on top of one another: somebody answers the one they can see, the
+ * second is never mentioned again, and the app is left holding one working microphone and one
+ * that looks broken. Reported from the sofa on 2026-08-29 as a mic that "isn't being recognized",
+ * and replugging could not fix it, because replugging is what causes it.
+ *
  * [onAudio] is called on each mic's own capture thread, with a buffer that is only valid for
  * the duration of the call. [onChanged] fires on whichever thread noticed, whenever a mic's
- * [OpenMic.status] changes, so a UI can redraw.
+ * [OpenMic.state] changes, so a UI can redraw.
  */
 class UsbMicSession(
     private val context: Context,
@@ -79,6 +126,14 @@ class UsbMicSession(
     private val targets = mutableListOf<UsbAudioTarget>()
 
     /**
+     * The port a permission dialog is currently up for, or null if none is.
+     *
+     * Held by port rather than by index because the list is renumbered whenever anything is
+     * plugged in or pulled out, and an index would then be answering about a different mic.
+     */
+    private var asking: String? = null
+
+    /**
      * The mics attached right now.
      *
      * A snapshot list rather than a fixed one, so a screen that reads it redraws when somebody
@@ -89,6 +144,18 @@ class UsbMicSession(
     val mics: List<OpenMic> = mutableStateListOf()
 
     private val live get() = mics as SnapshotStateList<OpenMic>
+
+    /**
+     * Mics that could still become singers — everything except the ones permission was refused for.
+     *
+     * A refused mic is present, listed, and can never make a sound, so counting it would let the
+     * menu offer two-player and then leave the claim screen waiting on a voice that cannot
+     * arrive. One still being asked about does count: an answer to it is a single press away.
+     */
+    val usableMics: List<OpenMic> get() = mics.filter { it.state != MicState.Refused }
+
+    /** Mics whose permission was refused, so a screen can offer to ask again. */
+    val refusedMics: List<OpenMic> get() = mics.filter { it.state == MicState.Refused }
 
     /** One line describing what is attached, for a status area. */
     val summary: String
@@ -109,15 +176,22 @@ class UsbMicSession(
 
                 ACTION_USB_PERMISSION -> {
                     val device: UsbDevice? = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                    val index = targets.indexOfFirst { it.device.deviceName == device?.deviceName }
-                    if (index < 0) return
+                    // The dialog has been answered, whatever it said, so the next one may go up.
+                    // Cleared before anything below can return early: one dismissed dialog must
+                    // not stop every microphone queued behind it from ever being asked about.
+                    if (asking == device?.deviceName) asking = null
 
-                    if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
-                        begin(index)
-                    } else {
-                        mics[index].status = "permission denied"
-                        onChanged()
+                    val index = targets.indexOfFirst { it.device.deviceName == device?.deviceName }
+                    if (index >= 0) {
+                        if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                            begin(index)
+                        } else {
+                            mark(mics[index], MicState.Refused, "permission refused")
+                            Log.i(TAG, "${mics[index].portId}: permission refused")
+                        }
                     }
+                    askNext()
+                    onChanged()
                 }
             }
         }
@@ -139,6 +213,23 @@ class UsbMicSession(
     }
 
     /**
+     * Asks again for every microphone whose permission was refused.
+     *
+     * Refusing has to be recoverable, because the dialog can be dismissed by accident — on a
+     * remote, Back is one press from anywhere — and the only other way out is knowing to unplug
+     * the hub, which is not something anybody should have to know.
+     */
+    fun askAgain() {
+        mics.forEach { if (it.state == MicState.Refused) mark(it, MicState.Waiting, "waiting…") }
+        // Not only asking: a grant can arrive while a mic is sitting refused -- Android hands one
+        // out for a device the moment anybody allows it -- and a microphone that is already
+        // allowed has nothing left to ask about, so asking alone would leave it silent for ever.
+        startGranted()
+        askNext()
+        onChanged()
+    }
+
+    /**
      * Brings [mics] into line with what is actually plugged in.
      *
      * Deliberately additive: a mic that is still there is left completely alone, capture thread
@@ -155,6 +246,10 @@ class UsbMicSession(
         for (i in mics.indices.reversed()) {
             if (found.none { it.portId == mics[i].portId }) {
                 Log.i(TAG, "${mics[i].portId}: unplugged")
+                // A mic pulled out while its dialog is up will never answer it, and a queue left
+                // pointing at it would strand every other mic behind a dialog for a device that
+                // is no longer there.
+                if (asking == mics[i].portId) asking = null
                 mics[i].capture?.stop()
                 live.removeAt(i)
                 targets.removeAt(i)
@@ -179,16 +274,42 @@ class UsbMicSession(
 
         if (changed) mics.forEachIndexed { index, mic -> mic.index = index }
 
-        targets.forEachIndexed { index, target ->
-            if (mics[index].capture != null) return@forEachIndexed
-            if (manager.hasPermission(target.device)) {
-                begin(index)
-            } else if (mics[index].status != "awaiting permission…") {
-                mics[index].status = "awaiting permission…"
-                manager.requestPermission(target.device, permissionIntent(context))
-            }
-        }
+        startGranted()
+        askNext()
         onChanged()
+    }
+
+    /**
+     * Opens every mic that is already allowed.
+     *
+     * A grant lasts as long as the device keeps its path, so this is the ordinary case for a
+     * microphone nobody has unplugged, and the reason a relaunch needs no dialogs at all.
+     */
+
+    private fun startGranted() {
+        targets.forEachIndexed { index, target ->
+            if (mics[index].capture == null && manager.hasPermission(target.device)) begin(index)
+        }
+    }
+
+    /**
+     * Puts the permission dialog up for one microphone, if none is up already.
+     *
+     * The queue is the point — see the note on [UsbMicSession] for what stacking them costs.
+     */
+    private fun askNext() {
+        if (asking != null) return
+
+        val index = targets.indices.firstOrNull { i ->
+            mics[i].capture == null &&
+                mics[i].state != MicState.Refused &&
+                !manager.hasPermission(targets[i].device)
+        } ?: return
+
+        asking = targets[index].portId
+        mark(mics[index], MicState.Asking, "awaiting permission…")
+        Log.i(TAG, "${mics[index].portId}: asking for permission")
+        manager.requestPermission(targets[index].device, permissionIntent(context))
     }
 
     private fun begin(index: Int) {
@@ -198,14 +319,19 @@ class UsbMicSession(
         val capture = UsbIsoCapture(manager, targets[index])
         val failure = capture.start { buffer, count -> onAudio?.invoke(mic, buffer, count) }
         if (failure != null) {
-            mic.status = "FAILED: $failure"
+            mark(mic, MicState.Failed, "FAILED: $failure")
             Log.e(TAG, "${mic.portId}: $failure")
         } else {
             mic.capture = capture
-            mic.status = "capturing"
+            mark(mic, MicState.Capturing, "capturing")
             Log.i(TAG, "${mic.portId}: capture started")
         }
         onChanged()
+    }
+
+    private fun mark(mic: OpenMic, state: MicState, status: String) {
+        mic.state = state
+        mic.status = status
     }
 }
 
