@@ -104,8 +104,20 @@ class Profiles(context: Context) {
         prefs.edit().putString(KEY_NAMES, updated.joinToString(SEPARATOR)).apply()
     }
 
-    private fun clean(name: String): String = name.trim().take(MAX_NAME_LENGTH)
+    private fun clean(name: String): String = cleanName(name)
 }
+
+/**
+ * A name as it will be stored: trimmed, and no longer than [MAX_NAME_LENGTH].
+ *
+ * The one place that decides what a name *is*, because more than one store keeps them and they
+ * have to agree. A profile is saved cleaned and a high score used to be saved exactly as typed,
+ * so a name entered with a stray space created a profile called "Mia" and a record held by
+ * " Mia " — and deleting that profile then left the record behind, since the two no longer
+ * matched. Comparisons trim as well, so this is belt and braces on purpose: the comparison
+ * catches what is already stored, and this stops any more of it being written.
+ */
+fun cleanName(name: String): String = name.trim().take(MAX_NAME_LENGTH)
 
 /**
  * True when [name] belongs to somebody else already singing this game.

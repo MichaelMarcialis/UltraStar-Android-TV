@@ -52,7 +52,8 @@ fun ProfilesScreen(profiles: Profiles, onBack: () -> Unit) {
     // A name is not only a name: the library credits each song's record to one. So the two things
     // this screen can do to a name have to be done to the records as well, or the library goes on
     // naming somebody who has been deleted, or somebody whose typo was corrected everywhere else.
-    val records = HighScores(LocalContext.current)
+    val context = LocalContext.current
+    val records = remember { HighScores(context) }
 
     var mode by remember { mutableStateOf(Mode.List) }
     var selected by remember { mutableStateOf("") }

@@ -45,6 +45,7 @@ import com.example.ultrastarandroidtv.game.MicClaim
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.settings.Profiles
+import com.example.ultrastarandroidtv.settings.cleanName
 import com.example.ultrastarandroidtv.settings.isNameTaken
 import com.example.ultrastarandroidtv.settings.namesAvailable
 import java.nio.ByteBuffer
@@ -246,7 +247,10 @@ fun ClaimScreen(
                     taken = claimed.map { it.name }.filter { it.isNotBlank() }.toSet(),
                     onPicked = { name ->
                         profiles.use(name)
-                        claimed[beingNamed] = claimed[beingNamed].copy(name = name)
+                        // Cleaned, because this is the name the score is filed under and the
+                        // profile is saved cleaned. Storing what was typed would put " Mia " on
+                        // a record that deleting the profile "Mia" could no longer find.
+                        claimed[beingNamed] = claimed[beingNamed].copy(name = cleanName(name))
                         naming = null
                         if (claimed.size >= target) onReady(claimed.toList())
                     },

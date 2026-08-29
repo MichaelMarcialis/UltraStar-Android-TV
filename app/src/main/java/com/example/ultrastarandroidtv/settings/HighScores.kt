@@ -29,10 +29,9 @@ class HighScores(context: Context) {
     /** The record for [songId], or null if the song has never been finished. */
     fun best(songId: String, duet: Boolean): HighScore? {
         val stored = prefs.getString(key(songId, duet), null) ?: return null
-        val split = stored.indexOf(':')
-        if (split <= 0) return null
-        val points = stored.substring(0, split).toIntOrNull() ?: return null
-        return HighScore(points, stored.substring(split + 1))
+        val points = pointsOf(stored) ?: return null
+        val holder = holderOf(stored) ?: return null
+        return HighScore(points, holder)
     }
 
     /**
@@ -47,7 +46,10 @@ class HighScores(context: Context) {
         if (previous != null && points <= previous.points) return false
         // A song nobody scored anything on has not set a record; it has been abandoned.
         if (points <= 0) return false
-        prefs.edit().putString(key(songId, duet), "$points:$name").apply()
+        // Stored as the profile stores it. A record has to be findable by the name on the
+        // profile screen, because deleting or renaming somebody there is what clears or moves it
+        // -- and a holder written with a stray space would match neither.
+        prefs.edit().putString(key(songId, duet), "$points:${cleanName(name)}").apply()
         return true
     }
 
@@ -101,18 +103,34 @@ class HighScores(context: Context) {
 
     private fun key(songId: String, duet: Boolean): String =
         if (duet) "$songId|duet" else songId
+}
 
-    private fun pointsOf(stored: String): Int? {
-        val split = stored.indexOf(':')
-        if (split <= 0) return null
-        return stored.substring(0, split).toIntOrNull()
-    }
+/**
+ * The points out of one stored record, or null if it cannot be read.
+ *
+ * File-level and `internal` rather than private methods, for the reason [scoreIfKnown] gives:
+ * reading a record needs no `Context`, and these are the two halves of a rule that decides
+ * whether somebody's records survive their profile being deleted. That is worth a test.
+ */
+internal fun pointsOf(stored: String): Int? {
+    val split = stored.indexOf(':')
+    if (split <= 0) return null
+    return stored.substring(0, split).toIntOrNull()
+}
 
-    private fun holderOf(stored: String): String? {
-        val split = stored.indexOf(':')
-        if (split <= 0) return null
-        return stored.substring(split + 1)
-    }
+/**
+ * Who holds one stored record, or null if it cannot be read.
+ *
+ * **Trimmed on the way out**, which is not tidiness. Records are matched against profile names,
+ * which are stored trimmed, so a holder saved with padding by an older build would be invisible
+ * to both [HighScores.forget] and [HighScores.rename] — surviving the deletion of the very
+ * profile it names, with nothing anywhere able to remove it. Writing is normalised too; this is
+ * what reaches the records already on disk.
+ */
+internal fun holderOf(stored: String): String? {
+    val split = stored.indexOf(':')
+    if (split <= 0) return null
+    return stored.substring(split + 1).trim()
 }
 
 /**

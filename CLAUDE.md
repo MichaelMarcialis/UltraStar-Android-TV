@@ -402,6 +402,16 @@ Real PCM arrives frame-aligned so neither fired in the player, but a component t
 
 **Ten review rounds, twenty-eight findings, all addressed** — and the pattern held to the end: both of these are places where a comment claimed a guarantee the code did not actually provide.
 
+**A review round on the gameplay branch, and all three were about one name** (Copilot on PR #3, 2026-08-29).
+
+- **A record was stored exactly as typed, and looked for trimmed.** A profile is saved through `clean()`; a high score was saved with the raw string. So a name entered with a stray space created the profile "Mia" and a record held by " Mia " — and `forget` and `rename` compare against the trimmed profile name, so **deleting that profile left its record behind**, invisible to `scoreIfKnown` and removable from nowhere in the app. That is precisely the failure `forget` was written to prevent, defeated by a space. `cleanName` is now the one place that decides what a name is, `Profiles.clean` delegates to it, `HighScores.record` writes through it, and `ClaimScreen` puts the cleaned name in the slot so what is displayed, what is filed and what is on the profile are the same string.
+- **`holderOf` now trims on the way out as well**, which is belt and braces on purpose: cleaning at the write side stops any more bad records being made, and this is what reaches the ones already on disk from an older build.
+- **`pointsOf` and `holderOf` are file-level and `internal` rather than private methods**, for the reason `scoreIfKnown` gives — reading a record needs no `Context`, and these two halves decide whether somebody's records survive their profile being deleted. `best()` reads through them too, so one place decides how a record is read. Seven tests, including a name containing a colon (points split at the *first* one, so a name is never truncated at one of its own).
+- **`HighScores` was rebuilt on every recomposition** of the profiles screen, where `GameplayScreen` and `SongPickerScreen` both remember it. Harmless — `getSharedPreferences` is cached per name — but an inconsistency, and that screen recomposes on every focus move.
+
+Verified on the device against the four real records on it: they read back unchanged.
+
+
 **The made-for-kids hole is closed, and the answer was the obvious client** (`InnertubeClients.ANDROID_KIDS`, measured 2026-08-24 across the whole client table against a real Disney upload).
 
 - **`ANDROID_KIDS` answers `OK` where visionOS answers `UNPLAYABLE`**, with the **full format ladder** — itag 140 for sound and itag 137 for picture, the two this app already prefers — plain URLs, no JS player, no PO token, no cookies, no account.
