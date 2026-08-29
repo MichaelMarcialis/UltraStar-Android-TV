@@ -51,6 +51,83 @@ class HighScores(context: Context) {
         return true
     }
 
+    /**
+     * Forgets every record held by [name], for when that profile is deleted.
+     *
+     * **A record outliving the person it names is the failure this prevents.** The library shows
+     * who holds each song, and a name nobody can pick any more is worse than no name at all: it
+     * cannot be beaten by the person it belongs to, cannot be explained to a child asking who
+     * that is, and cannot be got rid of from anywhere in the app.
+     *
+     * The whole store is walked rather than an index kept per person. There are as many entries
+     * as there are songs somebody has finished, this happens once when a profile is deleted, and
+     * an index would be a second thing to keep true.
+     */
+    fun forget(name: String) {
+        val editor = prefs.edit()
+        var changed = false
+        for ((key, value) in prefs.all) {
+            val stored = value as? String ?: continue
+            if (holderOf(stored)?.equals(name.trim(), ignoreCase = true) == true) {
+                editor.remove(key)
+                changed = true
+            }
+        }
+        if (changed) editor.apply()
+    }
+
+    /**
+     * Moves every record held by [from] over to [to].
+     *
+     * Renaming a profile is a correction rather than a new person, so their records come with
+     * them. Without this a typo fixed on the profile screen would leave the library crediting a
+     * name that no longer exists — and, since [forget] runs on deletion, one that could then only
+     * be cleared by deleting a profile that is not there.
+     */
+    fun rename(from: String, to: String) {
+        val target = to.trim()
+        if (target.isEmpty()) return
+        val editor = prefs.edit()
+        var changed = false
+        for ((key, value) in prefs.all) {
+            val stored = value as? String ?: continue
+            val points = pointsOf(stored) ?: continue
+            if (holderOf(stored)?.equals(from.trim(), ignoreCase = true) != true) continue
+            editor.putString(key, "$points:$target")
+            changed = true
+        }
+        if (changed) editor.apply()
+    }
+
     private fun key(songId: String, duet: Boolean): String =
         if (duet) "$songId|duet" else songId
+
+    private fun pointsOf(stored: String): Int? {
+        val split = stored.indexOf(':')
+        if (split <= 0) return null
+        return stored.substring(0, split).toIntOrNull()
+    }
+
+    private fun holderOf(stored: String): String? {
+        val split = stored.indexOf(':')
+        if (split <= 0) return null
+        return stored.substring(split + 1)
+    }
+}
+
+/**
+ * [score], but only when a profile of that name still exists.
+ *
+ * The library credits records by name, and the rule is that it only ever names somebody the app
+ * still knows. [HighScores.forget] is what actually clears a deleted profile's records, and this
+ * is the guard in front of the display: records written before that existed, or by a build that
+ * spelled things differently, would otherwise go on naming a stranger for ever with nothing
+ * anywhere able to remove them.
+ *
+ * A free function rather than a method because the rule needs no `Context` and this is what lets
+ * it be tested — the same reason `isNameTaken` lives beside [Profiles] rather than inside it.
+ */
+fun scoreIfKnown(score: HighScore?, known: Collection<String>): HighScore? {
+    if (score == null) return null
+    return if (known.any { it.equals(score.name.trim(), ignoreCase = true) }) score else null
 }

@@ -2,6 +2,7 @@ package com.example.ultrastarandroidtv.ui
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Button
@@ -21,10 +22,12 @@ fun Chip(
     selected: Boolean,
     onClick: () -> Unit,
     enabled: Boolean = true,
+    modifier: Modifier = Modifier,
 ) {
     Button(
         onClick = onClick,
         enabled = enabled,
+        modifier = modifier,
         colors = ButtonDefaults.colors(
             containerColor = if (selected) GameTheme.playerColors[0] else GameTheme.trackBackground,
             contentColor = if (selected) GameTheme.background else GameTheme.lyricIdle,

@@ -132,3 +132,140 @@ fun indexLetters(songs: List<ScannedSong>, sort: SongSort): List<Char> =
 /** Where [letter] starts in an already-arranged list, or -1 when nothing files under it. */
 fun firstIndexUnder(arranged: List<ScannedSong>, sort: SongSort, letter: Char): Int =
     arranged.indexOfFirst { indexLetterOf(sortKeyOf(it, sort)) == letter }
+
+/**
+ * How two singers will be marked against each other, as something to filter on.
+ *
+ * Only ever asked with two people in the room: on your own a duet collapses to a single line, so
+ * the distinction has nothing to say and the control is not shown at all.
+ */
+enum class SongMode(val label: String) {
+    Any("Any"),
+    Duet("Duet"),
+    Versus("Versus"),
+}
+
+/** True when the chart deals its lines out to two parts rather than one. */
+fun isDuetChart(song: ScannedSong): Boolean = song.song.voiceParts.size >= 2
+
+/**
+ * Compares two genre names as the same thing without merging genres that are not.
+ *
+ * Real charts write the field by hand, so this library holds "Pop Rock" and "Pop-Rock" as separate
+ * spellings of one genre. Folding a hyphen into a space fixes that and cannot fold "Rock" into
+ * "Pop Rock", which is the mistake a looser rule would make. Nothing more clever is attempted:
+ * deciding that "Alternative" and "Alternative Rock" are the same genre is an opinion, and one the
+ * person who wrote the chart did not share.
+ */
+private fun genreKey(genre: String): String =
+    genre.lowercase()
+        .replace('-', ' ')
+        .split(' ')
+        .filter { it.isNotEmpty() }
+        .joinToString(" ")
+
+/**
+ * The genres a song claims, which is very often more than one.
+ *
+ * `#GENRE` is free text and this card uses it as a list: "Soundtrack, K-Pop" is four songs here,
+ * and reading it as a single genre would file them under a name nothing else shares. Splitting is
+ * therefore not a nicety — without it the commonest real combination becomes its own dead end.
+ */
+fun genresOf(song: ScannedSong): List<String> =
+    song.song.metadata.genre
+        ?.split(',', ';', '/')
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
+        .orEmpty()
+
+/** The decade a song belongs to, or null when the chart does not say what year it is from. */
+fun decadeOf(song: ScannedSong): Int? =
+    song.song.metadata.year?.let { if (it in 1000..9999) it / 10 * 10 else null }
+
+/**
+ * Everything the library row is narrowed by at once.
+ *
+ * One object rather than four pieces of screen state because it is also what gets *cleared*: a
+ * "Clear" that had to remember to reset four separate things would eventually forget one, and a
+ * filter still quietly in force is indistinguishable from a library that has lost songs.
+ */
+data class LibraryFilter(
+    val query: String = "",
+    val genre: String? = null,
+    val decade: Int? = null,
+    val mode: SongMode = SongMode.Any,
+) {
+    /** True when nothing is being hidden, which is what decides whether to offer a way out. */
+    val isEmpty: Boolean
+        get() = query.isBlank() && genre == null && decade == null && mode == SongMode.Any
+}
+
+/**
+ * Whether a song answers to what somebody typed.
+ *
+ * Title **and** artist, because half of remembering a song is remembering who sang it, and on a
+ * remote nobody wants to be told which of the two field they are in. Plain containment rather than
+ * anything cleverer: the query is arriving one directional-pad press per letter, so it is short,
+ * and a fuzzy match on two letters would return the library.
+ */
+fun matchesQuery(song: ScannedSong, query: String): Boolean {
+    val needle = query.trim()
+    if (needle.isEmpty()) return true
+    val metadata = song.song.metadata
+    return metadata.title.contains(needle, ignoreCase = true) ||
+        metadata.artist.contains(needle, ignoreCase = true)
+}
+
+fun matchesFilter(song: ScannedSong, filter: LibraryFilter): Boolean {
+    if (!matchesQuery(song, filter.query)) return false
+    filter.genre?.let { wanted ->
+        if (genresOf(song).none { genreKey(it) == genreKey(wanted) }) return false
+    }
+    filter.decade?.let { if (decadeOf(song) != it) return false }
+    return when (filter.mode) {
+        SongMode.Any -> true
+        SongMode.Duet -> isDuetChart(song)
+        SongMode.Versus -> !isDuetChart(song)
+    }
+}
+
+/** The library as the picker should show it: narrowed, then filed under the chosen name. */
+fun browse(
+    songs: List<ScannedSong>,
+    sort: SongSort,
+    filter: LibraryFilter,
+): List<ScannedSong> = songs
+    .filter { matchesFilter(it, filter) }
+    .sortedWith(songOrder(sort))
+
+/**
+ * The genres worth offering, commonest first.
+ *
+ * **Built from the library rather than from a fixed list**, which is the opposite of the call the
+ * add-songs screen made — and for the opposite reason. That list has to keep its shape while
+ * search results arrive underneath it, so it cannot be derived from them; this one describes a
+ * library that only changes on a rescan, and a fixed list would offer genres nobody here has while
+ * hiding the ones they do. Commonest first because a remote pays per press.
+ *
+ * Case and hyphens are folded, and the spelling kept is the one used most.
+ */
+fun genreChoices(songs: List<ScannedSong>): List<String> {
+    val counts = LinkedHashMap<String, MutableMap<String, Int>>()
+    for (song in songs) {
+        for (genre in genresOf(song)) {
+            counts.getOrPut(genreKey(genre)) { LinkedHashMap() }
+                .merge(genre, 1, Int::plus)
+        }
+    }
+    return counts.values
+        .map { spellings -> spellings.maxBy { it.value }.key to spellings.values.sum() }
+        .sortedWith(compareByDescending<Pair<String, Int>> { it.second }.thenBy { it.first.lowercase() })
+        .map { it.first }
+}
+
+/** The decades this library actually covers, oldest first. Songs with no year are not one. */
+fun decadeChoices(songs: List<ScannedSong>): List<Int> =
+    songs.mapNotNull(::decadeOf).distinct().sorted()
+
+/** How a decade is written on a chip. */
+fun decadeLabel(decade: Int): String = "${decade}s"
