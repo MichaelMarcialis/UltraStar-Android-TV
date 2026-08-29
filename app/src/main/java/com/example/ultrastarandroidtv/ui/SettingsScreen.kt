@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.game.GameTheme
+import com.example.ultrastarandroidtv.settings.Difficulty
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.settings.SettingsRange
 import kotlin.math.roundToInt
@@ -62,21 +63,53 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .background(GameTheme.background)
-            .padding(horizontal = 72.dp, vertical = 32.dp),
+            .padding(horizontal = 72.dp, vertical = 24.dp),
     ) {
-        Text(
-            "Settings",
-            style = MaterialTheme.typography.headlineLarge,
-            color = GameTheme.lyricActive,
+        // The heading and the instruction share a line, and the instruction is *here* rather than
+        // at the foot of the screen. It used to sit at the bottom, and adding a fifth setting
+        // pushed it off the television — the same overflow that made UltraStar Play unusable, and
+        // the reason each row explains itself only while it is focused. A line anchored under the
+        // title cannot be pushed anywhere by whatever is added below it.
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                "Settings",
+                style = MaterialTheme.typography.headlineLarge,
+                color = GameTheme.lyricActive,
+            )
+            Spacer(Modifier.width(28.dp))
+            Text(
+                "Left and right to adjust.  Back to return.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = GameTheme.lyricIdle,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+
+        // First, and the only one here that changes what a performance is worth. Everything
+        // below it describes the room and the hardware and is set once by whoever put this
+        // together; this one belongs to whoever is about to sing.
+        SettingRow(
+            label = "Difficulty",
+            explanation = "How close to the note you have to be for a beat to count. The note " +
+                "bars are drawn exactly as tall as the window that scores them, so an easier " +
+                "setting has visibly fatter notes to aim at — what you see is what is being " +
+                "judged. Easy is roughly twice the room of Hard.",
+            value = settings.difficulty.ordinal.toDouble(),
+            range = 0.0..Difficulty.entries.lastIndex.toDouble(),
+            step = 1.0,
+            format = { Difficulty.entries[it.toIndex()].label },
+            onChange = { settings.updateDifficulty(Difficulty.entries[it.toIndex()]) },
+            modifier = Modifier.focusRequester(first),
         )
-        Spacer(Modifier.height(20.dp))
 
         SettingRow(
             label = "Display lead",
             explanation = "Every television waits a moment before it shows a frame, and this " +
                 "draws that far ahead to cancel it out. Raise it if the words arrive at the line " +
                 "just after you hear them sung, lower it if they arrive early. Changes only " +
-                "what you see — never what you score.",
+                "what you see — never what you score. It also widens the shaded band behind " +
+                "the arrows, which is the stretch of song being judged right now.",
             value = settings.displayLeadSeconds,
             range = SettingsRange.lead,
             // Ten milliseconds, not five. The range is three hundred, so a five-millisecond step
@@ -85,7 +118,6 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
             step = 0.01,
             format = { "%d ms".format((it * 1000).roundToInt()) },
             onChange = settings::updateLead,
-            modifier = Modifier.focusRequester(first),
         )
 
         SettingRow(
@@ -130,14 +162,11 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
             onChange = { settings.updateDuetMicSensitivity(it.toFloat()) },
         )
 
-        Spacer(Modifier.height(24.dp))
-        Text(
-            "Left and right to adjust.  Back to return.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = GameTheme.lyricIdle,
-        )
     }
 }
+
+/** Nearest whole step of a dial that steps through a list rather than a range of numbers. */
+private fun Double.toIndex(): Int = roundToInt().coerceIn(0, Difficulty.entries.lastIndex)
 
 /**
  * One dial: a label, a bar, and a value, adjusted with left and right.
@@ -162,10 +191,10 @@ private fun SettingRow(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp)
+            .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(if (focused) GameTheme.trackBackground else GameTheme.background)
-            .padding(horizontal = 20.dp, vertical = 14.dp)
+            .padding(horizontal = 20.dp, vertical = 11.dp)
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .onPreviewKeyEvent { event ->

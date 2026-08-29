@@ -54,6 +54,21 @@ private const val MEDIAN_WINDOW = 3
 private const val MEDIAN_LAG_SECONDS = ((MEDIAN_WINDOW - 1) / 2) * (1024.0 / 48_000.0)
 
 /**
+ * How old the reading in hand already is when a frame draws it, in seconds.
+ *
+ * `PitchTracker` publishes a reading once per hop — 1024 samples, 21 ms — and the draw pass
+ * takes whatever the latest one is. At an arbitrary frame that reading was published anywhere
+ * between nothing and a whole hop ago, so it averages **half a hop** old, and that is on top of
+ * [SyncCalibration.captureLatencySeconds], which describes only where the analysis window's
+ * centre sits relative to its end.
+ *
+ * It belongs to the arrow and to nothing else. Scoring never pays it: a reading is timestamped
+ * on the capture thread at the moment it is produced, so it is judged against the song position
+ * it genuinely describes however long it then waits to be drawn.
+ */
+private const val READING_AGE_SECONDS = (1024.0 / 48_000.0) / 2.0
+
+/**
  * How close to the end of the audio counts as the end.
  *
  * A player's final reported position rarely lands exactly on the duration, and the difference
@@ -309,20 +324,32 @@ class GameSession(
      *
      *  - [SyncCalibration.captureLatencySeconds] — the reading describes the centre of its
      *    analysis window, not its end.
+     *  - [READING_AGE_SECONDS] — and then it sits there, on average half a hop, until a frame
+     *    happens to draw it.
+     *  - [MEDIAN_LAG_SECONDS] — the display filter's own delay.
+     *  - [ArrowMotion.POSITION_SETTLE_SECONDS] — the easing's, which is a one-pole lag and so
+     *    is exactly its time constant.
      *  - [SyncCalibration.displayLeadSeconds] — the notes are already drawn this far *ahead* to
      *    beat the TV's own processing, so the arrow is that much further behind them.
-     *  - [MEDIAN_LAG_SECONDS] — the display filter's own delay.
      *
-     * Every term here is *fixed*, which is what makes a constant offset the right shape for it.
-     * `ArrowMotion`'s easing never belonged in it for exactly that reason — how long that takes
-     * depends on how far the pitch just moved, and compensating a variable delay with a constant
-     * would be wrong in both directions instead of one. That is moot now that the easing is off
-     * by default, and it is the reason to keep it out if it ever comes back.
+     * **The test for belonging here is whether a delay hits the arrow and not the notes.** The
+     * last three terms are exactly that. What does *not* belong, and was nearly added: the frame
+     * period. A frame is seen about half of one after it is drawn, but the arrow and the notes
+     * are drawn in the same frame and seen in the same instant, so it moves both together and
+     * cancels out of the gap between them.
+     *
+     * The last two terms were missing until 2026-08-28 and came to about 31 ms between them —
+     * reported from the sofa as the arrow "not making proper contact with the notes at the
+     * proper time", worst in fast songs, which is exactly where 31 ms is most of a beat. The
+     * easing was left out on the argument that its delay varies with the size of the step. It
+     * does not: settling time varies, delay does not, because the filter is linear.
      */
     val arrowLagSeconds: Double
         get() = calibration.captureLatencySeconds +
             calibration.displayLeadSeconds +
-            MEDIAN_LAG_SECONDS
+            MEDIAN_LAG_SECONDS +
+            READING_AGE_SECONDS +
+            ArrowMotion.POSITION_SETTLE_SECONDS
 
     /**
      * Whether there is nothing left to sing.

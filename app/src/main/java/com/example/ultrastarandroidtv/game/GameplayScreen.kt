@@ -58,6 +58,7 @@ import com.example.ultrastarandroidtv.playback.SyncCalibration
 import com.example.ultrastarandroidtv.score.ScoreSnapshot
 import com.example.ultrastarandroidtv.score.combined
 import com.example.ultrastarandroidtv.score.missBreakdown
+import com.example.ultrastarandroidtv.score.ScoringConfig
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.settings.HighScores
 import com.example.ultrastarandroidtv.song.UltraStarSong
@@ -120,6 +121,13 @@ fun GameplayScreen(
             micSession = micSession,
             lineup = lineup,
             micThreshold = settings.micThresholdFor(lineup.size),
+            // The difficulty setting, and the only thing it touches. It is handed in here rather
+            // than read where scoring happens so that the note track can be drawn from the same
+            // number — a note is exactly as tall as the window that scores it, and an easier
+            // setting has to be *seen* to be easier rather than quietly being so.
+            scoring = ScoringConfig(
+                toleranceSemitones = settings.difficulty.toleranceSemitones,
+            ),
         )
     }
 
@@ -199,10 +207,13 @@ fun GameplayScreen(
         // too small to see look identical from the sofa, and this is the difference.
         Log.i(
             TAG,
-            "settings in effect: lead=%.0fms window=%.2fs micGate=%.3f -> arrowLag=%.0fms".format(
+            ("settings in effect: lead=%.0fms window=%.2fs micGate=%.3f difficulty=%s " +
+                "tolerance=%.2f -> arrowLag=%.0fms").format(
                 session.calibration.displayLeadSeconds * 1000,
                 settings.windowSeconds,
                 settings.micThresholdFor(lineup.size),
+                settings.difficulty.name,
+                session.scoring.toleranceSemitones,
                 session.arrowLagSeconds * 1000,
             ),
         )

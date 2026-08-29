@@ -47,8 +47,8 @@ private const val MAX_STEP_SECONDS = 0.05
  * Not thread-safe; owned by the draw pass.
  */
 class ArrowMotion(
-    /** Zero draws the reading as it arrives. */
-    private val secondsToSettle: Double = 0.02,
+    /** Zero draws the reading as it arrives. See [POSITION_SETTLE_SECONDS]. */
+    private val secondsToSettle: Double = POSITION_SETTLE_SECONDS,
     /**
      * How long the *lean* takes to settle, which is deliberately far longer than the position.
      *
@@ -65,7 +65,7 @@ class ArrowMotion(
      * and the next. Sharing the position's time constant made that jump instantaneous. This is
      * what makes it a turn.
      */
-    private val tiltSecondsToSettle: Double = 0.13,
+    private val tiltSecondsToSettle: Double = TILT_SETTLE_SECONDS,
     /** A silence longer than this is treated as a fresh start rather than a continuation. */
     private val snapAfterSilenceSeconds: Double = 0.35,
     /** Roughly how long the arrow takes to fade in or out. Zero switches the arrow outright. */
@@ -163,4 +163,34 @@ class ArrowMotion(
      */
     private fun approach(step: Double, timeConstant: Double): Float =
         if (timeConstant <= 0.0) 1f else (1.0 - exp(-step / timeConstant)).toFloat()
+
+    companion object {
+        /**
+         * How long the arrow's *position* takes to settle — and, exactly, how far behind the
+         * voice it therefore sits.
+         *
+         * Public because `GameSession.arrowLagSeconds` has to add it on. This is a one-pole
+         * lag, and a one-pole lag's delay is its time constant: a steadily moving input comes
+         * out this many seconds late whatever it is doing. An earlier note here claimed the
+         * opposite — that the delay "depends on how far the pitch just moved", so a constant
+         * offset could not compensate it — and that confused *settling* with *delay*. How long
+         * the arrow takes to arrive after a leap does depend on the size of the leap; how far
+         * it trails a voice already in motion does not, because the filter is linear.
+         *
+         * Left uncounted it was 20 ms of the arrow being drawn to the right of the note its
+         * reading actually came from, which is most of a beat in a fast song.
+         */
+        const val POSITION_SETTLE_SECONDS: Double = 0.02
+
+        /**
+         * The same for the lean, which is deliberately six times slower — see the
+         * `tiltSecondsToSettle` parameter.
+         *
+         * **This one is not compensated and must not be.** Where the arrow is drawn is a claim
+         * about *when* the singer sang; the lean is advice about the note it is pointing at.
+         * Shifting the whole arrow to account for how slowly its angle turns would move the
+         * measurement in order to flatter the advice.
+         */
+        const val TILT_SETTLE_SECONDS: Double = 0.13
+    }
 }
