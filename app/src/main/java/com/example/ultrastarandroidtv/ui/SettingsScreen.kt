@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -63,13 +65,17 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .background(GameTheme.background)
-            .padding(horizontal = 72.dp, vertical = 24.dp),
+            .padding(horizontal = 72.dp, vertical = 32.dp),
     ) {
-        // The heading and the instruction share a line, and the instruction is *here* rather than
-        // at the foot of the screen. It used to sit at the bottom, and adding a fifth setting
-        // pushed it off the television — the same overflow that made UltraStar Play unusable, and
-        // the reason each row explains itself only while it is focused. A line anchored under the
-        // title cannot be pushed anywhere by whatever is added below it.
+        // The heading and the instruction share a line, and both sit **outside** the scrolling
+        // part below — so the one line telling you how to work this screen can never be scrolled
+        // off it. The instruction used to be at the foot of the list, where a fifth setting
+        // pushed it off the television entirely.
+        //
+        // The hint takes the leftover width, so a longer one wraps onto a second line rather than
+        // running off the right edge. **Nothing on this screen may ever scroll sideways.** Down
+        // the page is fine as long as it works; across is not, and horizontal overflow is half of
+        // what made UltraStar Play unusable on this television.
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 "Settings",
@@ -78,13 +84,27 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
             )
             Spacer(Modifier.width(28.dp))
             Text(
-                "Left and right to adjust.  Back to return.",
+                "Left and right to adjust.  Up and down to move.  Back to return.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = GameTheme.lyricIdle,
-                modifier = Modifier.padding(bottom = 6.dp),
+                modifier = Modifier.weight(1f).padding(bottom = 6.dp),
             )
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(16.dp))
+
+        // Scrolls vertically, which is the whole answer to "what happens when there are more
+        // settings than fit". Explaining only the focused row already keeps the screen a constant
+        // height, so this is a safety net rather than the normal case — but a safety net that has
+        // to actually hold, because a control nobody can reach is worse than one that is not
+        // there at all.
+        //
+        // **A plain Column, not a LazyColumn.** A lazy list does not compose what is off screen,
+        // so there would be nothing below the last visible row for the focus search to find and
+        // the remote would simply stop moving — the same dead end a disabled TV button creates,
+        // and the same trap the song picker and the results list both document. Every row here
+        // exists, so pressing down always has somewhere to go, and Compose brings the newly
+        // focused row into view by itself.
+        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
 
         // First, and the only one here that changes what a performance is worth. Everything
         // below it describes the room and the hardware and is set once by whoever put this
@@ -161,7 +181,7 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
             format = { "%d%%".format((it * 100).roundToInt()) },
             onChange = { settings.updateDuetMicSensitivity(it.toFloat()) },
         )
-
+        }
     }
 }
 
@@ -191,10 +211,10 @@ private fun SettingRow(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(vertical = 6.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(if (focused) GameTheme.trackBackground else GameTheme.background)
-            .padding(horizontal = 20.dp, vertical = 11.dp)
+            .padding(horizontal = 20.dp, vertical = 14.dp)
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .onPreviewKeyEvent { event ->
