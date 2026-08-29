@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.ultrastarandroidtv.game.DEFAULT_WINDOW_SECONDS
 import com.example.ultrastarandroidtv.playback.SyncCalibration
@@ -13,6 +14,7 @@ private const val KEY_LEAD = "display_lead_seconds"
 private const val KEY_WINDOW = "window_seconds"
 private const val KEY_MIC_SOLO = "mic_threshold_solo"
 private const val KEY_MIC_DUET = "mic_threshold_duet"
+private const val KEY_DIFFICULTY = "difficulty"
 
 /** Bounds for the sliders, and the reason each one has the range it does. */
 object SettingsRange {
@@ -87,6 +89,13 @@ class GameSettings(context: Context) {
     )
         private set
 
+    /**
+     * How forgiving the judging is. See [Difficulty] — it is the only thing here that changes
+     * what a performance is worth, and it changes what the notes look like at the same time.
+     */
+    var difficulty by mutableStateOf(Difficulty.byName(prefs.getString(KEY_DIFFICULTY, null)))
+        private set
+
     /** The gate that applies to a game with [playerCount] singers in it. */
     fun micThresholdFor(playerCount: Int): Float =
         if (playerCount >= 2) duetMicThreshold else soloMicThreshold
@@ -99,6 +108,11 @@ class GameSettings(context: Context) {
     fun updateWindow(seconds: Double) {
         windowSeconds = seconds.coerceIn(SettingsRange.window)
         prefs.edit().putFloat(KEY_WINDOW, windowSeconds.toFloat()).apply()
+    }
+
+    fun updateDifficulty(value: Difficulty) {
+        difficulty = value
+        prefs.edit().putString(KEY_DIFFICULTY, value.name).apply()
     }
 
     fun updateSoloMicThreshold(level: Float) {

@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.game.GameTheme
+import com.example.ultrastarandroidtv.settings.Difficulty
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.settings.SettingsRange
 import kotlin.math.roundToInt
@@ -64,19 +67,69 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
             .background(GameTheme.background)
             .padding(horizontal = 72.dp, vertical = 32.dp),
     ) {
-        Text(
-            "Settings",
-            style = MaterialTheme.typography.headlineLarge,
-            color = GameTheme.lyricActive,
+        // The heading and the instruction share a line, and both sit **outside** the scrolling
+        // part below — so the one line telling you how to work this screen can never be scrolled
+        // off it. The instruction used to be at the foot of the list, where a fifth setting
+        // pushed it off the television entirely.
+        //
+        // The hint takes the leftover width, so a longer one wraps onto a second line rather than
+        // running off the right edge. **Nothing on this screen may ever scroll sideways.** Down
+        // the page is fine as long as it works; across is not, and horizontal overflow is half of
+        // what made UltraStar Play unusable on this television.
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                "Settings",
+                style = MaterialTheme.typography.headlineLarge,
+                color = GameTheme.lyricActive,
+            )
+            Spacer(Modifier.width(28.dp))
+            Text(
+                "Left and right to adjust.  Up and down to move.  Back to return.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = GameTheme.lyricIdle,
+                modifier = Modifier.weight(1f).padding(bottom = 6.dp),
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+
+        // Scrolls vertically, which is the whole answer to "what happens when there are more
+        // settings than fit". Explaining only the focused row already keeps the screen a constant
+        // height, so this is a safety net rather than the normal case — but a safety net that has
+        // to actually hold, because a control nobody can reach is worse than one that is not
+        // there at all.
+        //
+        // **A plain Column, not a LazyColumn.** A lazy list does not compose what is off screen,
+        // so there would be nothing below the last visible row for the focus search to find and
+        // the remote would simply stop moving — the same dead end a disabled TV button creates,
+        // and the same trap the song picker and the results list both document. Every row here
+        // exists, so pressing down always has somewhere to go, and Compose brings the newly
+        // focused row into view by itself.
+        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+
+        // First, and the only one here that changes what a performance is worth. Everything
+        // below it describes the room and the hardware and is set once by whoever put this
+        // together; this one belongs to whoever is about to sing.
+        SettingRow(
+            label = "Difficulty",
+            explanation = "How close to the note you have to be for a beat to count. The note " +
+                "bars are drawn exactly as tall as the window that scores them, so an easier " +
+                "setting has visibly fatter notes to aim at — what you see is what is being " +
+                "judged. Easy is roughly twice the room of Hard.",
+            value = settings.difficulty.ordinal.toDouble(),
+            range = 0.0..Difficulty.entries.lastIndex.toDouble(),
+            step = 1.0,
+            format = { Difficulty.entries[it.toIndex()].label },
+            onChange = { settings.updateDifficulty(Difficulty.entries[it.toIndex()]) },
+            modifier = Modifier.focusRequester(first),
         )
-        Spacer(Modifier.height(20.dp))
 
         SettingRow(
             label = "Display lead",
             explanation = "Every television waits a moment before it shows a frame, and this " +
                 "draws that far ahead to cancel it out. Raise it if the words arrive at the line " +
                 "just after you hear them sung, lower it if they arrive early. Changes only " +
-                "what you see — never what you score.",
+                "what you see — never what you score. It also widens the shaded band behind " +
+                "the arrows, which is the stretch of song being judged right now.",
             value = settings.displayLeadSeconds,
             range = SettingsRange.lead,
             // Ten milliseconds, not five. The range is three hundred, so a five-millisecond step
@@ -85,7 +138,6 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
             step = 0.01,
             format = { "%d ms".format((it * 1000).roundToInt()) },
             onChange = settings::updateLead,
-            modifier = Modifier.focusRequester(first),
         )
 
         SettingRow(
@@ -129,15 +181,12 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
             format = { "%d%%".format((it * 100).roundToInt()) },
             onChange = { settings.updateDuetMicSensitivity(it.toFloat()) },
         )
-
-        Spacer(Modifier.height(24.dp))
-        Text(
-            "Left and right to adjust.  Back to return.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = GameTheme.lyricIdle,
-        )
+        }
     }
 }
+
+/** Nearest whole step of a dial that steps through a list rather than a range of numbers. */
+private fun Double.toIndex(): Int = roundToInt().coerceIn(0, Difficulty.entries.lastIndex)
 
 /**
  * One dial: a label, a bar, and a value, adjusted with left and right.

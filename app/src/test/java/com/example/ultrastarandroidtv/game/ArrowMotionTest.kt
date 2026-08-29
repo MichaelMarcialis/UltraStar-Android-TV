@@ -8,9 +8,8 @@ import org.junit.Test
 class ArrowMotionTest {
 
     /**
-     * The smoothing is off by default now, so everything below that is *about* smoothing has
-     * to ask for it. The behaviour is still supported and still worth pinning: it was removed
-     * because it put the arrow behind the score, not because it was wrong in itself.
+     * A little slower than the shipped position easing, so that "it moved but has not arrived"
+     * is testable in whole frames. The shipped number is deliberately tiny — see [ArrowMotion].
      */
     private val motion = ArrowMotion(secondsToSettle = 0.03, fadeSeconds = 0.12)
 
@@ -156,5 +155,54 @@ class ArrowMotionTest {
         motion.reset()
 
         assertEquals(72f, motion.update(72f, 0.1), 1e-4f)
+    }
+
+    /**
+     * The lean is advice, not a measurement, and it has a step to absorb that the position never
+     * has: when the note under the arrow changes, the *target* angle moves by the interval
+     * between the two notes even though the singer has not moved at all. Sharing the position's
+     * time constant made that jump instantaneous, which is what read as jarring from the sofa.
+     */
+    @Test
+    fun `the lean settles far more slowly than the position`() {
+        val arrow = ArrowMotion(secondsToSettle = 0.02, tiltSecondsToSettle = 0.13)
+
+        arrow.update(60f, 0.0)
+        arrow.update(67f, 0.016)
+        val position = arrow.update(67f, 0.032)
+        val lean = arrow.tiltTowards(26f)
+
+        val positionProgress = (position - 60f) / 7f
+        val leanProgress = lean / 26f
+        assertTrue("position should be most of the way there, was $positionProgress", positionProgress > 0.7f)
+        assertTrue("lean should be barely started, was $leanProgress", leanProgress < 0.2f)
+    }
+
+    @Test
+    fun `the lean does get there, and within a fraction of a second`() {
+        val arrow = ArrowMotion(tiltSecondsToSettle = 0.13)
+        var t = 0.0
+        arrow.update(60f, t)
+        var lean = 0f
+        repeat(40) {
+            t += 0.016
+            arrow.update(60f, t)
+            lean = arrow.tiltTowards(26f)
+        }
+        assertEquals(26f, lean, 0.5f)
+    }
+
+    @Test
+    fun `a reset levels the lean as well as forgetting the place`() {
+        val arrow = ArrowMotion()
+        var t = 0.0
+        repeat(30) {
+            t += 0.016
+            arrow.update(60f, t)
+            arrow.tiltTowards(26f)
+        }
+        arrow.reset()
+        arrow.update(60f, t + 0.016)
+        assertEquals(0f, arrow.tiltTowards(26f), 1e-4f)
     }
 }

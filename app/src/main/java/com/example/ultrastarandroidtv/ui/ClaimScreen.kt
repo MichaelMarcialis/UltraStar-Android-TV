@@ -45,6 +45,7 @@ import com.example.ultrastarandroidtv.game.MicClaim
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.settings.Profiles
+import com.example.ultrastarandroidtv.settings.cleanName
 import com.example.ultrastarandroidtv.settings.isNameTaken
 import com.example.ultrastarandroidtv.settings.namesAvailable
 import java.nio.ByteBuffer
@@ -120,6 +121,22 @@ fun ClaimScreen(
 
     val target = minOf(playerCount, mics.size)
 
+    /** Mics Android has not let the app open. */
+    val refused = micSession.refusedMics
+
+    /**
+     * True when a refused microphone is actually in the way.
+     *
+     * A microphone that cannot be opened is listed, silent, and can never claim anything, so
+     * waiting for a voice from it is waiting for something that cannot arrive. This is the screen
+     * that can fix that — the earlier ones count what is *plugged in*, deliberately, so that a
+     * refusal never disables the only route to the button that undoes it.
+     *
+     * Judged against how many singers there are rather than on any refusal at all: a spare
+     * microphone on the table that nobody allowed is not a problem worth a warning.
+     */
+    val blocked = micSession.usableMics.size < playerCount
+
     /** Mics still to be spoken for. */
     val free = mics.indices.filter { i -> claimed.none { it.portId == mics[i].portId } }
 
@@ -129,6 +146,15 @@ fun ClaimScreen(
      */
     val slot = naming ?: claimed.size
     val colour = GameTheme.playerColors[slot % GameTheme.playerColors.size]
+
+    // Only ever used while a microphone is refused; see the button it is attached to.
+    val allow = remember { FocusRequester() }
+    LaunchedEffect(blocked, naming) {
+        if (blocked && naming == null) {
+            withFrameNanos { }
+            runCatching { allow.requestFocus() }
+        }
+    }
 
     /** The mic this singer claimed, once they have one. */
     val claimedMic = naming?.let { s -> mics.indexOfFirst { it.portId == claimed[s].portId } } ?: -1
@@ -157,10 +183,15 @@ fun ClaimScreen(
         onDispose { micSession.onAudio = null }
     }
 
-    LaunchedEffect(playerCount, mics.size) {
+    LaunchedEffect(playerCount, mics.size, blocked) {
         // A mic pulled out mid-claim takes its singer with it, rather than leaving a slot
         // pointing at a device that is no longer there for the game to fail to open later.
         claimed.retainAll { slot -> mics.any { it.portId == slot.portId } }
+
+        // Nothing to listen for while a microphone the game needs is not allowed. Claiming the
+        // first singer and then waiting for ever on a second who cannot be heard is the failure
+        // this whole screen exists to make impossible.
+        if (blocked) return@LaunchedEffect
 
         var seconds = 0.0
         // Runs on through the name question, which is what keeps the meter alive while somebody
@@ -216,7 +247,10 @@ fun ClaimScreen(
                     taken = claimed.map { it.name }.filter { it.isNotBlank() }.toSet(),
                     onPicked = { name ->
                         profiles.use(name)
-                        claimed[beingNamed] = claimed[beingNamed].copy(name = name)
+                        // Cleaned, because this is the name the score is filed under and the
+                        // profile is saved cleaned. Storing what was typed would put " Mia " on
+                        // a record that deleting the profile "Mia" could no longer find.
+                        claimed[beingNamed] = claimed[beingNamed].copy(name = cleanName(name))
                         naming = null
                         if (claimed.size >= target) onReady(claimed.toList())
                     },
@@ -225,6 +259,7 @@ fun ClaimScreen(
                 Text(
                     when {
                         mics.isEmpty() -> "No microphone"
+                        blocked -> "Microphone not allowed"
                         playerCount == 1 -> "Sing into your microphone"
                         slot == 0 -> "First singer, sing now"
                         else -> "Second singer, sing now"
@@ -236,6 +271,18 @@ fun ClaimScreen(
                 Text(
                     when {
                         mics.isEmpty() -> micSession.summary
+                        // A refused microphone is indistinguishable from a broken one, and on
+                        // this device broken is a believable conclusion -- so it is named, and
+                        // the press that fixes it is right underneath. Android asks again from
+                        // scratch whenever anything is replugged, because a grant is tied to the
+                        // port number, which is handed out afresh every time.
+                        blocked -> if (refused.size == 1) {
+                            "Android is asking permission for one of the microphones. " +
+                                "Allow it below, then answer the message that appears."
+                        } else {
+                            "Android is asking permission for the microphones. " +
+                                "Allow them below, then answer each message that appears."
+                        }
                         // Said plainly, because the alternative is a meter that fills and never
                         // finishes while both children shout at it and conclude it is broken.
                         contested -> "More than one microphone can hear singing — one voice at a time."
@@ -245,7 +292,7 @@ fun ClaimScreen(
                         else -> "Pick up a microphone and sing. Whichever one hears you is yours."
                     },
                     style = MaterialTheme.typography.bodyLarge,
-                    color = if (contested) GameTheme.sparkWarm else GameTheme.lyricIdle,
+                    color = if (contested || blocked) GameTheme.sparkWarm else GameTheme.lyricIdle,
                 )
 
                 Spacer(Modifier.height(48.dp))
@@ -254,6 +301,21 @@ fun ClaimScreen(
                 // and no visible way out — which matters most in the one case that strands you, a
                 // microphone the room is not loud enough to claim.
                 Row {
+                    if (blocked) {
+                        // Takes the focus, because it is the only press on this screen that
+                        // changes anything while a microphone is refused -- and this screen
+                        // otherwise waits on a voice, so a remote would have nowhere to go.
+                        Button(
+                            onClick = { micSession.askAgain() },
+                            modifier = Modifier.focusRequester(allow),
+                        ) {
+                            Text(
+                                "Allow microphone" + if (refused.size > 1) "s" else "",
+                                modifier = Modifier.padding(horizontal = 12.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(16.dp))
+                    }
                     Button(onClick = stepBack) {
                         Text(
                             if (claimed.isEmpty()) "How many singers" else "Undo last singer",
@@ -268,7 +330,9 @@ fun ClaimScreen(
             }
         }
 
-        if (mics.isNotEmpty()) {
+        // Hidden while a microphone is not allowed: a meter that cannot move is the very thing
+        // that makes a refusal look like broken hardware.
+        if (mics.isNotEmpty() && !blocked) {
             Spacer(Modifier.width(48.dp))
             SingerMeter(
                 title = when {

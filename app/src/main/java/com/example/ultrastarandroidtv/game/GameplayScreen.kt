@@ -1,7 +1,10 @@
 package com.example.ultrastarandroidtv.game
 
 import android.util.Log
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -23,11 +26,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -51,12 +56,27 @@ import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.playback.SyncCalibration
 import com.example.ultrastarandroidtv.score.ScoreSnapshot
+import com.example.ultrastarandroidtv.score.combined
 import com.example.ultrastarandroidtv.score.missBreakdown
+import com.example.ultrastarandroidtv.score.ScoringConfig
 import com.example.ultrastarandroidtv.settings.GameSettings
+import com.example.ultrastarandroidtv.settings.HighScores
 import com.example.ultrastarandroidtv.song.UltraStarSong
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "Gameplay"
+
+/**
+ * How long the score has to stop moving before the points earned are shown as one number.
+ *
+ * Beats are scored several times a second, so this is what turns a stream of twos into one gain
+ * per phrase. Long enough to bridge the gap between two syllables, short enough that the number
+ * still lands while everybody remembers singing it.
+ */
+private const val GAIN_SETTLE_MILLIS = 260L
 
 /** One track on screen: a voice part, and whoever is singing it. */
 private class TrackSpec(
@@ -80,6 +100,8 @@ private class TrackSpec(
 @Composable
 fun GameplayScreen(
     song: UltraStarSong,
+    /** The song's `.txt` document id — what its record is filed under. See [HighScores]. */
+    songId: String,
     audioUri: String,
     videoUri: String?,
     settings: GameSettings,
@@ -99,6 +121,13 @@ fun GameplayScreen(
             micSession = micSession,
             lineup = lineup,
             micThreshold = settings.micThresholdFor(lineup.size),
+            // The difficulty setting, and the only thing it touches. It is handed in here rather
+            // than read where scoring happens so that the note track can be drawn from the same
+            // number — a note is exactly as tall as the window that scores it, and an easier
+            // setting has to be *seen* to be easier rather than quietly being so.
+            scoring = ScoringConfig(
+                toleranceSemitones = settings.difficulty.toleranceSemitones,
+            ),
         )
     }
 
@@ -111,7 +140,27 @@ fun GameplayScreen(
 
     var scores by remember { mutableStateOf<List<ScoreSnapshot>>(emptyList()) }
     var finished by remember { mutableStateOf(false) }
+
+    /**
+     * The last note has gone but the recording has not. Latched for the same reason [finished]
+     * is: skipping pauses the player, and a paused clock must not read as "there is singing to
+     * come" and take the offer away again.
+     */
+    var vocalsDone by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
+
+    /**
+     * A word of encouragement per singer, and a counter that makes each one a fresh event.
+     *
+     * The counter is what the animation is keyed on: two "Great!"s in a row are the same value,
+     * and without something changing the second would not replay.
+     */
+    val praiseTrackers = remember(session) { session.singers.map { PraiseTracker(it.scorer.noteScores) } }
+
+    // Indexed by **slot**, not by position in the singers list. Those differ the moment a claimed
+    // microphone is missing, and a mismatch here would congratulate the wrong person.
+    var shouts by remember(session) { mutableStateOf<List<Shout?>>(List(session.playerCount) { null }) }
+    var shoutCount by remember(session) { mutableIntStateOf(0) }
 
     // The song announces itself before it starts. `introDone` starts the music and the crossfade;
     // `introGone` takes the card out of the tree once it has finished fading.
@@ -158,10 +207,13 @@ fun GameplayScreen(
         // too small to see look identical from the sofa, and this is the difference.
         Log.i(
             TAG,
-            "settings in effect: lead=%.0fms window=%.2fs micGate=%.3f -> arrowLag=%.0fms".format(
+            ("settings in effect: lead=%.0fms window=%.2fs micGate=%.3f difficulty=%s " +
+                "tolerance=%.2f -> arrowLag=%.0fms").format(
                 session.calibration.displayLeadSeconds * 1000,
                 settings.windowSeconds,
                 settings.micThresholdFor(lineup.size),
+                settings.difficulty.name,
+                session.scoring.toleranceSemitones,
                 session.arrowLagSeconds * 1000,
             ),
         )
@@ -169,12 +221,42 @@ fun GameplayScreen(
         onDispose { session.release() }
     }
 
+    /**
+     * End the song and put the results up — reached either by the recording running out or by
+     * somebody pressing skip, and it must do the same thing both ways.
+     */
+    val finish = {
+        if (!finished) {
+            finished = true
+            session.pause()
+            // Why the score was what it was: whether the missed beats had a voice in them
+            // decides whether the next thing to work on is latency or difficulty, and guessing
+            // between those two wastes the work.
+            session.singers.forEach { singer ->
+                Log.i(
+                    TAG,
+                    "${singer.name}: ${missBreakdown(singer.scorer.noteScores, session.scoring, settings.micThresholdFor(lineup.size))
+                        .summary()}",
+                )
+            }
+        }
+    }
+
     // Loading is what makes the first second of a song stutter — building the player, enumerating
     // USB, measuring every syllable — and it all happens while this card is on screen doing
     // nothing but being read. The music starts as the card begins to go, so the fade lands over
     // the song's intro rather than over silence.
     LaunchedEffect(session) {
+        // Measured while the card is up, which is the only free moment in a song: everybody is
+        // reading the title anyway. Bounded by the card's own hold, so a file that decodes slowly
+        // costs the gain rather than the start of the music — and arriving late is survivable
+        // because the gain ramps rather than steps.
+        val measuring = launch(Dispatchers.IO) { session.normalizeVolume() }
         delay(GameTheme.titleHoldMillis.toLong())
+        // A ceiling on top of the scanner's own budget, because the budget only covers decoding:
+        // opening the file goes through SAF, which has no timeout of its own. The job is left to
+        // finish in its own time and the gain ramps in whenever it lands.
+        withTimeoutOrNull(1_000) { measuring.join() }
         introDone = true
         session.play()
         delay(GameTheme.titleFadeMillis.toLong())
@@ -200,18 +282,20 @@ fun GameplayScreen(
             // ways cleared the flag on the very next frame and left the song paused with no
             // results on screen. That was the missing score screen: it appeared for one frame.
             // A song that has ended does not un-end; only restarting clears this.
-            if (!finished && session.isFinished) {
-                finished = true
-                session.pause()
-                // Why the score was what it was: whether the missed beats had a voice in them
-                // decides whether the next thing to work on is latency or difficulty, and
-                // guessing between those two wastes the work.
-                session.singers.forEach { singer ->
-                    Log.i(
-                        TAG,
-                        "${singer.name}: ${missBreakdown(singer.scorer.noteScores, session.scoring, settings.micThresholdFor(lineup.size))
-                            .summary()}",
-                    )
+            if (!finished && session.isFinished) finish()
+
+            // Not the same moment as the one above, and that is the whole point: from here the
+            // score cannot change, but the song is still playing and is still worth hearing.
+            if (!vocalsDone && session.isVocalFinished) vocalsDone = true
+
+            // Polled here rather than from the scorer's own thread, because the words belong to
+            // the drawing and this is the thread that draws. Nothing is published unless a phrase
+            // has actually finished, so a quiet song costs one array walk of a few entries.
+            praiseTrackers.forEachIndexed { position, tracker ->
+                tracker.poll()?.let { word ->
+                    shoutCount++
+                    val slot = session.singers[position].index
+                    shouts = shouts.toMutableList().also { it[slot] = Shout(word, shoutCount) }
                 }
             }
 
@@ -261,6 +345,10 @@ fun GameplayScreen(
                         // Swallowed while the title card is up, rather than starting the song
                         // early and leaving it playing under a card that is still counting down.
                         if (!introDone) return@onPreviewKeyEvent true
+                        // Once the singing is over the skip button owns the centre key — it is
+                        // the only thing focused, and swallowing centre here would leave it
+                        // sitting there unpressable.
+                        if (vocalsDone) return@onPreviewKeyEvent false
                         if (session.player.isPlaying) session.pause() else session.play()
                         true
                     }
@@ -311,6 +399,7 @@ fun GameplayScreen(
                     now = { nowSeconds.doubleValue },
                     arrowNow = { nowSeconds.doubleValue - session.arrowLagSeconds },
                     solo = session.playerCount == 1,
+                    shoutFor = { shouts.getOrNull(it) },
                     modifier = Modifier.fillMaxWidth().height(trackHeight).padding(top = 10.dp),
                 )
             }
@@ -325,13 +414,29 @@ fun GameplayScreen(
             )
         }
 
+        // The outro, with a way out of it. Deliberately not the whole screen: the song is still
+        // playing and the video is still worth watching, so this is an offer rather than an
+        // interruption.
+        if (vocalsDone && !finished) {
+            SkipToEnd(
+                onSkip = finish,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(GameTheme.trackPadding),
+            )
+        }
+
         if (finished) {
             Results(
                 session = session,
+                songId = songId,
                 scores = scores,
                 onReplay = {
                     session.restart()
+                    praiseTrackers.forEach { it.reset() }
+                    shouts = List(session.playerCount) { null }
                     finished = false
+                    vocalsDone = false
                 },
                 onPickAnother = onExit,
                 modifier = Modifier.align(Alignment.Center),
@@ -341,13 +446,18 @@ fun GameplayScreen(
 }
 
 /**
- * A singer in each top corner, and nothing else.
+ * A singer in each top corner, and nothing else — unless they are singing together.
  *
  * The two scores used to share a chip in one corner while the song's name held the other, which
  * had it backwards: the title is read once and then sits there for three minutes, while the
  * scores are the only thing on screen that keeps changing. So the title moved to the card at the
  * start and the singers took a corner each — the same left/right split as their colours, their
  * arrows and, in a duet, their tracks.
+ *
+ * **A duet gets one score in the middle instead**, because a duet is the two of them singing one
+ * song. Two scoreboards invite exactly the comparison the song is not about: one part being
+ * shorter, or lower, or the one carrying the harmony does not make the person singing it worse.
+ * Versus keeps its two corners, because there the comparison *is* the point.
  */
 @Composable
 private fun TopBar(
@@ -355,40 +465,59 @@ private fun TopBar(
     scores: List<ScoreSnapshot>,
     notice: String?,
 ) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        session.singers.getOrNull(0)?.let { singer ->
-            Column(modifier = Modifier.panel()) {
-                ScoreReadout(
-                    name = singer.name,
-                    score = scores.getOrNull(singer.index)?.total ?: 0,
-                    color = GameTheme.playerColor(singer.index, session.playerCount == 1),
-                    alignment = Alignment.Start,
-                )
+    // A box rather than one row, so the notice can be genuinely centred whichever arrangement the
+    // scores are in. Squeezing it into the row alongside them put it hard against a score panel
+    // in one mode and shoved the combined score off centre in the other.
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            if (session.isDuet) {
+                Spacer(Modifier.weight(1f))
+                Column(modifier = Modifier.panel()) {
+                    ScoreReadout(
+                        name = session.singers.joinToString("  &  ") { it.name },
+                        score = combined(scores).total,
+                        // White rather than either singer's colour: the score belongs to both of
+                        // them, and painting it one of the two would say it was that one's.
+                        color = GameTheme.lyricActive,
+                        alignment = Alignment.CenterHorizontally,
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+            } else {
+                session.singers.getOrNull(0)?.let { singer ->
+                    Column(modifier = Modifier.panel()) {
+                        ScoreReadout(
+                            name = singer.name,
+                            score = scores.getOrNull(singer.index)?.total ?: 0,
+                            color = GameTheme.playerColor(singer.index, session.playerCount == 1),
+                            alignment = Alignment.Start,
+                        )
+                    }
+                }
+
+                Spacer(Modifier.weight(1f))
+
+                session.singers.getOrNull(1)?.let { singer ->
+                    Column(modifier = Modifier.panel()) {
+                        ScoreReadout(
+                            name = singer.name,
+                            score = scores.getOrNull(singer.index)?.total ?: 0,
+                            color = GameTheme.playerColor(singer.index, session.playerCount == 1),
+                            alignment = Alignment.End,
+                        )
+                    }
+                }
             }
         }
-
-        Spacer(Modifier.weight(1f))
 
         // Only ever there when something is wrong — a microphone that has not opened, or a
         // playback error. Centred, because it belongs to the room rather than to either singer.
         notice?.let {
-            Column(modifier = Modifier.panel()) {
+            Column(modifier = Modifier.align(Alignment.TopCenter).panel()) {
                 Text(
                     it,
                     style = MaterialTheme.typography.bodyMedium,
                     color = GameTheme.playerColors[1],
-                )
-            }
-            Spacer(Modifier.weight(1f))
-        }
-
-        session.singers.getOrNull(1)?.let { singer ->
-            Column(modifier = Modifier.panel()) {
-                ScoreReadout(
-                    name = singer.name,
-                    score = scores.getOrNull(singer.index)?.total ?: 0,
-                    color = GameTheme.playerColor(singer.index, session.playerCount == 1),
-                    alignment = Alignment.End,
                 )
             }
         }
@@ -450,6 +579,9 @@ private fun Modifier.panel(): Modifier = this
     .background(GameTheme.chipBackground)
     .padding(horizontal = 18.dp, vertical = 10.dp)
 
+/** One word of encouragement, with an identity so that saying the same word twice replays it. */
+private class Shout(val word: Praise, val id: Int)
+
 @Composable
 private fun TrackPanel(
     track: TrackSpec,
@@ -458,6 +590,8 @@ private fun TrackPanel(
     now: () -> Double,
     arrowNow: () -> Double,
     solo: Boolean,
+    /** The word this singer has just earned, by slot index, or null. */
+    shoutFor: (Int) -> Shout?,
     modifier: Modifier = Modifier,
 ) {
     val traces = remember(track, solo) {
@@ -498,7 +632,65 @@ private fun TrackPanel(
                 )
             }
         }
+
+        // Two singers on one track get a side each, so their words never land on top of one
+        // another — which would read as one unreadable word rather than as two people doing well.
+        track.singers.forEachIndexed { position, singer ->
+            PraiseShout(
+                shout = shoutFor(singer.index),
+                color = GameTheme.playerColor(singer.index, solo),
+                modifier = Modifier.align(
+                    if (track.singers.size < 2) {
+                        Alignment.Center
+                    } else {
+                        BiasAlignment(if (position == 0) -0.45f else 0.45f, -0.1f)
+                    },
+                ),
+            )
+        }
     }
+}
+
+/**
+ * "Nice!" over the track, for about a second.
+ *
+ * Deliberately short-lived, and over the *track* rather than the middle of the screen: it is a
+ * reaction to the phrase just sung, and by the time the next phrase reaches the sing line it is
+ * in the way of the one thing the singer has to read.
+ *
+ * It pops in a little oversized, because arriving at full size reads as a label appearing and
+ * arriving from slightly too big reads as somebody in the room reacting.
+ *
+ * [color] tints only the plainest word. The better ones keep their own, which climbs from blue
+ * through green to gold, so the ladder is legible without reading the word at all.
+ */
+@Composable
+private fun PraiseShout(shout: Shout?, color: Color, modifier: Modifier = Modifier) {
+    val life = remember { Animatable(1f) }
+    LaunchedEffect(shout?.id) {
+        if (shout == null) return@LaunchedEffect
+        life.snapTo(0f)
+        life.animateTo(1f, tween(GameTheme.praiseMillis, easing = LinearEasing))
+    }
+
+    if (shout == null || life.value >= 1f) return
+    val progress = life.value
+
+    Text(
+        shout.word.word,
+        style = MaterialTheme.typography.headlineLarge.copy(
+            fontSize = GameTheme.praiseSize(shout.word.rank),
+            fontWeight = FontWeight.Bold,
+        ),
+        color = if (shout.word.rank == 0) color else GameTheme.praiseColor(shout.word.rank),
+        modifier = modifier.graphicsLayer {
+            val pop = 1.25f - 0.25f * (progress / 0.2f).coerceAtMost(1f)
+            scaleX = pop
+            scaleY = pop
+            translationY = -progress * 26.dp.toPx()
+            alpha = ((1f - progress) / 0.4f).coerceIn(0f, 1f)
+        },
+    )
 }
 
 @Composable
@@ -509,6 +701,45 @@ private fun ScoreReadout(
     /** Which edge of the screen this singer's corner is on, so name and number line up with it. */
     alignment: Alignment.Horizontal,
 ) {
+    // Counted up rather than replaced. A number that jumps by 240 between two frames is read as a
+    // different number; one that walks there is read as points being earned, which is the whole
+    // difference between a scoreboard and a game.
+    val shown by animateIntAsState(
+        targetValue = score,
+        animationSpec = tween(GameTheme.scoreCountMillis, easing = FastOutSlowInEasing),
+        label = "score",
+    )
+
+    // Gains are gathered up and released together at the end of a phrase, not per beat.
+    //
+    // Beats are scored several times a second, and a "+2" per beat would be a slot machine. The
+    // debounce below turns that into one number per phrase, and it needs nothing to know where
+    // the phrases are: the score simply stops moving when the singing stops, which is the same
+    // thing. Restarting the effect on every change *is* the debounce.
+    var pending by remember { mutableIntStateOf(0) }
+    var previous by remember { mutableIntStateOf(score) }
+    var gain by remember { mutableIntStateOf(0) }
+    var gainId by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(score) {
+        val delta = score - previous
+        previous = score
+        if (delta > 0) pending += delta
+        if (pending > 0) {
+            delay(GAIN_SETTLE_MILLIS)
+            gain = pending
+            pending = 0
+            gainId++
+        }
+    }
+
+    val rise = remember { Animatable(1f) }
+    LaunchedEffect(gainId) {
+        if (gainId == 0) return@LaunchedEffect
+        rise.snapTo(0f)
+        rise.animateTo(1f, tween(GameTheme.gainMillis, easing = LinearEasing))
+    }
+
     Column(horizontalAlignment = alignment) {
         Text(
             name,
@@ -516,29 +747,113 @@ private fun ScoreReadout(
             color = color,
         )
         Text(
-            "%,d".format(score),
+            "%,d".format(shown),
             style = MaterialTheme.typography.headlineLarge.copy(
                 fontSize = GameTheme.scoreSize,
                 fontWeight = FontWeight.Bold,
             ),
             color = GameTheme.lyricActive,
         )
+
+        // The lane is there whether or not anything is in it. A gain that made the panel taller
+        // for a second would shove the whole top of the screen about once a phrase.
+        Box(
+            modifier = Modifier.height(GameTheme.gainLaneHeight),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            if (gain > 0 && rise.value < 1f) {
+                val progress = rise.value
+                Text(
+                    "+%,d".format(gain),
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontSize = GameTheme.gainSize,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    color = GameTheme.gainColor,
+                    modifier = Modifier.graphicsLayer {
+                        translationY =
+                            -progress * GameTheme.gainRise * GameTheme.gainLaneHeight.toPx()
+                        alpha = ((1f - progress) / 0.35f).coerceIn(0f, 1f)
+                    },
+                )
+            }
+        }
     }
 }
+
+/**
+ * Offered through the run-out of a song, once the last note has gone.
+ *
+ * The results used to appear the moment the chart ended, which threw everyone off a playing video
+ * and into a scoreboard — often mid-guitar-solo, which reads as a crash rather than as an ending.
+ * A song's outro is part of the song. But it can also be half a minute of nothing anybody is
+ * waiting for, so the choice belongs to the room rather than to the chart.
+ *
+ * Bottom right, and focused, because by this point it is the only thing on screen anybody can
+ * press — and a button nobody can reach with a remote is the same as no button.
+ */
+@Composable
+private fun SkipToEnd(onSkip: () -> Unit, modifier: Modifier = Modifier) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        // After a frame: the button has to exist before it can take focus.
+        withFrameNanos { }
+        runCatching { focus.requestFocus() }
+    }
+
+    Button(onClick = onSkip, modifier = modifier.focusRequester(focus)) {
+        Text("Skip to the end", modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp))
+    }
+}
+
+/** One line of the scoreboard: a name, what it earned, and the colour it belongs to. */
+private class ResultLine(val name: String, val score: ScoreSnapshot, val color: Color)
 
 @Composable
 private fun Results(
     session: GameSession,
+    songId: String,
     scores: List<ScoreSnapshot>,
     onReplay: () -> Unit,
     onPickAnother: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val replay = remember { FocusRequester() }
+    val context = LocalContext.current
+    val records = remember { HighScores(context) }
+
+    val lines = if (session.isDuet) {
+        // One line, for the same reason there is one score at the top: they sang it together.
+        listOf(
+            ResultLine(
+                name = session.singers.joinToString("  &  ") { it.name },
+                score = combined(scores),
+                color = GameTheme.lyricActive,
+            ),
+        )
+    } else {
+        session.singers.map { singer ->
+            ResultLine(
+                name = singer.name,
+                score = scores.getOrNull(singer.index) ?: ScoreSnapshot.EMPTY,
+                color = GameTheme.playerColor(singer.index, session.playerCount == 1),
+            )
+        }
+    }
+
+    // Read before anything is written, and both exactly once — the results are composed with the
+    // final scores already in, and re-running this on a recomposition would have the song beating
+    // its own brand new record and saying so every frame.
+    val previousBest = remember { records.best(songId, session.isDuet) }
+    remember {
+        lines.maxByOrNull { it.score.total }
+            ?.let { records.record(songId, session.isDuet, it.score.total, it.name) }
+    }
+
+    val another = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         // After a frame, not before one: the button has to exist before it can take focus.
         withFrameNanos { }
-        runCatching { replay.requestFocus() }
+        runCatching { another.requestFocus() }
     }
 
     Column(
@@ -551,36 +866,48 @@ private fun Results(
         Text("Finished", style = MaterialTheme.typography.headlineMedium, color = GameTheme.lyricActive)
         Spacer(Modifier.height(24.dp))
 
-        session.singers.forEach { singer ->
-            val score = scores.getOrNull(singer.index) ?: ScoreSnapshot.EMPTY
+        lines.forEach { line ->
             Text(
-                "${singer.name}   %,d".format(score.total),
+                "${line.name}   %,d".format(line.score.total),
                 style = MaterialTheme.typography.headlineSmall,
-                color = GameTheme.playerColor(singer.index, session.playerCount == 1),
+                color = line.color,
             )
-            Text(
-                "%d of %d beats  ·  %.0f%%".format(
-                    score.beatsHit,
-                    score.beatsScored,
-                    score.accuracy * 100,
-                ),
-                style = MaterialTheme.typography.bodyMedium,
-                color = GameTheme.lyricIdle,
-            )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(8.dp))
+
+            // Stars instead of a percentage. The percentage was precise and said nothing anybody
+            // wanted to hear; five slots with four filled is read from the sofa without anybody
+            // working out what 71 % of a song is.
+            StarRow(line.score.stars)
+            Spacer(Modifier.height(8.dp))
+
+            val beaten = line.score.total > 0 &&
+                (previousBest == null || line.score.total > previousBest.points)
+            when {
+                beaten -> Text(
+                    if (previousBest == null) "First time through this one!" else "New best on this song!",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = GameTheme.recordColor,
+                )
+                previousBest != null -> Text(
+                    "Best so far: %,d by %s".format(previousBest.points, previousBest.name),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = GameTheme.lyricIdle,
+                )
+            }
+            Spacer(Modifier.height(20.dp))
         }
 
-        Spacer(Modifier.height(12.dp))
-
         // Buttons rather than a line of text telling people which remote button does what.
-        // The two things anyone wants here are another go at this song or a different one.
+        // The two things anyone wants here are a different song or another go at this one, and
+        // **a different song is first and focused** — that is what actually happens next almost
+        // every time, and on a remote the focused button is the one that costs nothing to press.
         Row {
-            Button(onClick = onReplay, modifier = Modifier.focusRequester(replay)) {
-                Text("Sing it again", modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
+            Button(onClick = onPickAnother, modifier = Modifier.focusRequester(another)) {
+                Text("Pick another song", modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
             }
             Spacer(Modifier.width(20.dp))
-            Button(onClick = onPickAnother) {
-                Text("Pick another song", modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
+            Button(onClick = onReplay) {
+                Text("Sing it again", modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
             }
         }
     }

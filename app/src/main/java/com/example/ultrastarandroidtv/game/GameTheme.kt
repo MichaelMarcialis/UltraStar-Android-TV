@@ -258,6 +258,73 @@ object GameTheme {
     val nameSize = 20.sp
     val headerHeight = 76.dp
 
+    // ---- Points, praise and stars -----------------------------------------------------------
+
+    /**
+     * The "+240" that floats up beside a score when a phrase lands.
+     *
+     * Gold rather than the singer's own colour: it is already sitting under their name, in their
+     * corner, so whose it is was never in question — and gold is what a point is worth everywhere
+     * else in this game, including the notes that pay double.
+     */
+    val gainColor = Color(0xFFFFD264)
+    val gainSize = 26.sp
+
+    /** Reserved under each score so a gain appearing cannot shove the layout about. */
+    val gainLaneHeight = 32.dp
+
+    /** How long a gain takes to float up and fade. */
+    const val gainMillis = 1100
+
+    /** How far it rises while it does, as a share of [gainLaneHeight]. */
+    const val gainRise = 1.1f
+
+    /**
+     * How long the score takes to walk up to its new value.
+     *
+     * A number that changes by 240 between two frames is read as a different number; one that
+     * counts up is read as points being *earned*, which is the whole difference between a
+     * scoreboard and a game.
+     */
+    const val scoreCountMillis = 550
+
+    /**
+     * How long a word of praise stays on the track.
+     *
+     * Short. It is a reaction to the phrase just sung, and by the time the next phrase is at the
+     * sing line it is in the way of the thing the singer actually has to read.
+     */
+    const val praiseMillis = 950
+
+    /** Words get bigger and warmer the better the phrase was, so the top one is unmistakable. */
+    fun praiseColor(rank: Int): Color = when (rank) {
+        0 -> Color(0xFF9FE8FF)
+        1 -> Color(0xFF7CF0A8)
+        2 -> Color(0xFFFFD264)
+        else -> Color(0xFFFFFFFF)
+    }
+
+    fun praiseSize(rank: Int) = when (rank) {
+        0 -> 30.sp
+        1 -> 36.sp
+        2 -> 44.sp
+        else -> 54.sp
+    }
+
+    /**
+     * A filled star, and the socket an unearned one leaves behind.
+     *
+     * The empty ones are drawn rather than left out, because five sockets with three filled says
+     * "three out of five" without anybody reading a number — which is the entire reason the
+     * percentage was replaced.
+     */
+    val starFilled = Color(0xFFFFC93C)
+    val starEmpty = Color(0x33FFFFFF)
+    val starSize = 46.dp
+
+    /** The line that says somebody has just done better than anyone ever has on this song. */
+    val recordColor = Color(0xFFFFD264)
+
     // ---- Title card -------------------------------------------------------------------------
 
     /**

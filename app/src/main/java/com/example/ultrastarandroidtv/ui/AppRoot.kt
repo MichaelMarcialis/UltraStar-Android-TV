@@ -206,6 +206,9 @@ fun AppRoot() {
             // Null unless a song has been sung since the last visit to the main menu, so a fresh
             // start opens at the top and coming back from a song does not.
             openAt = lastPlayed,
+            // Records are shown on the cards, and only ever credited to a name this list still
+            // holds — see `scoreIfKnown`.
+            profiles = profiles,
             onPlay = {
                 chosen = it
                 lastPlayed = it.songId
@@ -224,6 +227,9 @@ fun AppRoot() {
             } else {
                 GameplayScreen(
                     song = ready.song,
+                    // What this song's record is filed under. The `.txt` document id is already
+                    // the library's own identity for a song, so nothing new had to be invented.
+                    songId = ready.songId,
                     audioUri = ready.audioUri,
                     videoUri = ready.videoUri,
                     settings = settings,

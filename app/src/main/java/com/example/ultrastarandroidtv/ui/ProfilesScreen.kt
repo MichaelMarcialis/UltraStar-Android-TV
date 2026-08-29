@@ -29,6 +29,8 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.game.GameTheme
+import androidx.compose.ui.platform.LocalContext
+import com.example.ultrastarandroidtv.settings.HighScores
 import com.example.ultrastarandroidtv.settings.Profiles
 
 private enum class Mode { List, Adding, Managing, Renaming, Confirming }
@@ -47,6 +49,12 @@ private enum class Mode { List, Adding, Managing, Renaming, Confirming }
  */
 @Composable
 fun ProfilesScreen(profiles: Profiles, onBack: () -> Unit) {
+    // A name is not only a name: the library credits each song's record to one. So the two things
+    // this screen can do to a name have to be done to the records as well, or the library goes on
+    // naming somebody who has been deleted, or somebody whose typo was corrected everywhere else.
+    val context = LocalContext.current
+    val records = remember { HighScores(context) }
+
     var mode by remember { mutableStateOf(Mode.List) }
     var selected by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf("") }
@@ -193,7 +201,9 @@ fun ProfilesScreen(profiles: Profiles, onBack: () -> Unit) {
 
                 val submit = {
                     val done = if (renaming) {
-                        profiles.rename(selected, draft)
+                        // Records move with the name. A rename is a correction rather than a new
+                        // person, so what they already did stays theirs.
+                        profiles.rename(selected, draft).also { if (it) records.rename(selected, draft) }
                     } else {
                         profiles.add(draft)
                     }
@@ -271,6 +281,9 @@ fun ProfilesScreen(profiles: Profiles, onBack: () -> Unit) {
                     Button(
                         onClick = {
                             profiles.remove(selected)
+                            // And their records with them, which is the only route by which a
+                            // record can ever be cleared.
+                            records.forget(selected)
                             mode = Mode.List
                         },
                     ) {
