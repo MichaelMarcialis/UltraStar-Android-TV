@@ -262,6 +262,46 @@ class UsdbSearchTest {
         assertEquals("", byTitle.artist)
     }
 
+    /**
+     * The search people type most often, and the one the two above cannot answer.
+     *
+     * USDB matches each field as a *substring*, so "beatles yesterday" is contained in no artist
+     * and in no title and used to return nothing at all. Split at the first space it is two real
+     * server-side matches rather than a guess made here.
+     */
+    @Test
+    fun `two words are also sent as an artist and a title`() {
+        val searches = keywordSearches(SongFilter(keyword = "beatles yesterday"))
+
+        assertEquals(3, searches.size)
+        val split = searches[2]
+        assertEquals("beatles", split.artist)
+        assertEquals("yesterday", split.title)
+        assertEquals("", split.keyword)
+    }
+
+    /** Everything after the first space is the title, so "abba dancing queen" keeps its song whole. */
+    @Test
+    fun `only the first word becomes the artist`() {
+        val split = keywordSearches(SongFilter(keyword = "abba dancing queen"))[2]
+
+        assertEquals("abba", split.artist)
+        assertEquals("dancing queen", split.title)
+    }
+
+    @Test
+    fun `one word is not split`() {
+        assertEquals(2, keywordSearches(SongFilter(keyword = "queen")).size)
+    }
+
+    /** With a field already named, splitting would be arguing with what was asked for. */
+    @Test
+    fun `a keyword is not split when the artist was given explicitly`() {
+        val searches = keywordSearches(SongFilter(keyword = "dancing queen", artist = "abba"))
+
+        assertEquals(2, searches.size)
+    }
+
     /** Neither half may keep the keyword, or the second search would run it a third time. */
     @Test
     fun `the keyword is spent once it has been split`() {

@@ -124,21 +124,48 @@ class UsdbSearch(private val session: UsdbSession) {
     fun search(filter: SongFilter, page: Int = 0): SearchPage {
         require(page >= 0) { "page must not be negative" }
         if (filter.keyword.isBlank()) return onePage(filter, page)
-        val (byArtist, byTitle) = keywordSearches(filter)
-        return mergePages(onePage(byArtist, page), onePage(byTitle, page), page)
+        return keywordSearches(filter)
+            .map { onePage(it, page) }
+            .reduce { merged, next -> mergePages(merged, next, page) }
     }
 
     private fun onePage(filter: SongFilter, page: Int): SearchPage =
         parseSearchPage(session.postForm("?link=list", searchFields(filter, page)), page)
 }
 
-/** The two searches one keyword becomes: the same word as an artist, and as a title. */
+/**
+ * The searches one keyword becomes.
+ *
+ * Two always: the whole phrase as an artist, and as a title. USDB has no field that spans both,
+ * measured against the live form, and running only one of them loses most of what somebody meant —
+ * `interpret=gone` finds one song on the whole site while `title=gone` finds fifty-nine.
+ *
+ * **A third when the keyword has more than one word**, splitting it at the first space into artist
+ * and title. That is the case the two searches above cannot answer at all: USDB matches each field
+ * as a *substring*, so "beatles yesterday" is not contained in any artist and not contained in any
+ * title, and the search that people type most often was the one that returned nothing. Sending the
+ * two halves to the two fields is a real server-side match rather than a guess made here.
+ *
+ * Only when neither field was set explicitly — with an artist already named, the split would be
+ * arguing with what was asked for. Searching is the part of USDB that is not throttled, so the
+ * extra request is cheap.
+ */
 fun keywordSearches(filter: SongFilter): List<SongFilter> {
     val word = filter.keyword.trim()
-    return listOf(
+    val searches = mutableListOf(
         filter.copy(keyword = "", artist = joinTerms(filter.artist, word)),
         filter.copy(keyword = "", title = joinTerms(filter.title, word)),
     )
+
+    val space = word.indexOf(' ')
+    if (space > 0 && filter.artist.isBlank() && filter.title.isBlank()) {
+        val head = word.substring(0, space)
+        val tail = word.substring(space + 1).trim()
+        if (tail.isNotEmpty()) {
+            searches += filter.copy(keyword = "", artist = head, title = tail)
+        }
+    }
+    return searches
 }
 
 private fun joinTerms(existing: String, word: String): String =
