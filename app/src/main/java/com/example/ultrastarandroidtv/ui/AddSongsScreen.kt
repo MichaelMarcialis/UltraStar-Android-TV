@@ -17,17 +17,21 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,7 +46,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
@@ -58,6 +61,7 @@ import com.example.ultrastarandroidtv.download.queueSummary
 import com.example.ultrastarandroidtv.download.safeFileName
 import com.example.ultrastarandroidtv.download.shortStatusLabel
 import com.example.ultrastarandroidtv.download.statusLabel
+import com.example.ultrastarandroidtv.audio.playSample
 import com.example.ultrastarandroidtv.audio.previewPlayer
 import com.example.ultrastarandroidtv.game.GameTheme
 import com.example.ultrastarandroidtv.library.CoverLoader
@@ -77,12 +81,19 @@ import kotlinx.coroutines.withContext
 private const val PREVIEW_DELAY_MS = 450L
 
 /**
- * How long a result must stay focused before its availability is checked.
+ * How long to leave between one availability check and the next.
  *
- * Longer than the preview delay: hearing a song is the point of pausing on it, whereas this is a
- * background question whose answer only matters if somebody is actually considering the song.
+ * The checks run on their own down the results rather than waiting for a card to be focused, so
+ * they have to be paced: each one is a USDB page and a YouTube lookup, and firing thirty at once
+ * for a page nobody has finished reading would be rude to a site that is lending us its bandwidth.
  */
-private const val AVAILABILITY_DELAY_MS = 900L
+private const val AVAILABILITY_GAP_MS = 350L
+
+/** How many cards past the last visible one are checked, so scrolling meets answers already there. */
+private const val AVAILABILITY_LOOKAHEAD = 4
+
+/** How near the end of the loaded results the view has to get before the next page is fetched. */
+private const val PAGE_LOOKAHEAD = 6
 
 /**
  * How long typing must stop before the search runs.
@@ -200,40 +211,88 @@ fun AddSongsScreen(
     var signingIn by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
 
-    var keyword by remember { mutableStateOf("") }
+    // The words and the cursor together, because the keyboard has arrows now. See [TypedQuery].
+    var typed by remember { mutableStateOf(TypedQuery()) }
+    val keyword = typed.text
+
+    /**
+     * Every result loaded so far, already in the order they are shown in.
+     *
+     * **Accumulated rather than replaced, and ordered a page at a time.** Scrolling to the bottom
+     * fetches the next page and appends it, so ordering the whole list afresh each time would
+     * reshuffle cards somebody is already looking at — and on a television that moves the focus
+     * out from under a thumb. Each page is sorted as it lands and then never moves again.
+     */
     var results by remember { mutableStateOf<List<UsdbSong>>(emptyList()) }
     var resultNote by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
-    var page by remember { mutableStateOf(0) }
+    var loadingMore by remember { mutableStateOf(false) }
+
+    /** The page being fetched, and the last one that landed. Equal means nothing is in flight. */
+    var wanted by remember { mutableIntStateOf(0) }
+    var loadedPage by remember { mutableIntStateOf(-1) }
     var morePages by remember { mutableStateOf(false) }
+
+    /** Bumped whenever a *new* search lands, which is what sends the grid back to the top. */
+    var searchSeq by remember { mutableIntStateOf(0) }
+
     var language by remember { mutableStateOf("") }
     var focused by remember { mutableStateOf<UsdbSong?>(null) }
+
+    val grid = rememberLazyGridState()
+
+    /** Starting again: a different question, so the old answers and the old page count go. */
+    val restart: () -> Unit = {
+        wanted = 0
+        loadedPage = -1
+        morePages = false
+    }
 
     val covers = remember { mutableStateMapOf<Int, ImageBitmap?>() }
 
     /**
-     * Whether a song's music can actually be fetched — checked for whatever is focused.
+     * Whether each song's music can actually be fetched, worked out **before anybody focuses it**.
      *
-     * USDB's detail page names the YouTube video with no throttle attached, so this costs about a
-     * second and can be done while somebody is simply looking at a song. Knowing early matters
-     * because the alternative is finding out after a 24-second wait.
+     * USDB's detail page names the YouTube video with no throttle attached, so a verdict costs
+     * about a second and can be had while somebody is simply reading the page. It used to wait for
+     * a card to be focused, which meant the one thing worth knowing before choosing was only ever
+     * said about the song already chosen.
      *
-     * Only the focused song, and only once each: checking every result would be sixty requests for
-     * a page nobody has read yet. A check that fails for any other reason records nothing, because
-     * a network blip must not label a perfectly good song as broken.
+     * **Paced, and only as far as the eye has got.** Checking every result the moment it arrives
+     * would be sixty requests for a page nobody has finished reading; this walks the list in
+     * order, one at a time, and stops a few cards past the last one on screen. Scrolling extends
+     * how far it goes, so answers are usually already there by the time a card comes into view.
+     *
+     * The verdicts live on [Downloads] rather than here, so searching for the same band twice does
+     * not ask the same question twice. A check that fails for any other reason records nothing,
+     * because a network blip must not label a perfectly good song as broken.
      */
-    val downloadable = remember { mutableStateMapOf<Int, Boolean>() }
-    LaunchedEffect(focused) {
-        val song = focused ?: return@LaunchedEffect
-        if (downloadable.containsKey(song.songId)) return@LaunchedEffect
-        delay(AVAILABILITY_DELAY_MS)
-        val verdict = withContext(Dispatchers.IO) {
-            runCatching {
-                val videoId = details.fetch(song.songId).videoId ?: return@runCatching null
-                youTube.resolve(videoId) is AudioLookup.Found
-            }.getOrNull()
+    val downloadable = downloads.availability
+    LaunchedEffect(results) {
+        if (results.isEmpty()) return@LaunchedEffect
+        while (true) {
+            val visible = grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val reach = (visible + AVAILABILITY_LOOKAHEAD).coerceAtMost(results.lastIndex)
+            val song = (0..reach).asSequence()
+                .map { results[it] }
+                .firstOrNull { !downloadable.containsKey(it.songId) }
+
+            if (song == null) {
+                // Nothing to ask about yet. Waking on a timer rather than on a scroll event keeps
+                // this one loop rather than a loop plus a subscription; it costs a check a second.
+                delay(AVAILABILITY_GAP_MS * 3)
+                continue
+            }
+
+            val verdict = withContext(Dispatchers.IO) {
+                runCatching {
+                    val videoId = details.fetch(song.songId).videoId ?: return@runCatching null
+                    youTube.resolve(videoId) is AudioLookup.Found
+                }.getOrNull()
+            }
+            if (verdict != null) downloadable[song.songId] = verdict
+            delay(AVAILABILITY_GAP_MS)
         }
-        if (verdict != null) downloadable[song.songId] = verdict
     }
 
     /**
@@ -278,18 +337,17 @@ fun AddSongsScreen(
     // Levelled: previews are mastered decades apart and run 8.6 dB apart on this library.
     val preview = remember { previewPlayer(context) }
     DisposableEffect(preview) { onDispose { preview.release() } }
+    // Fetched whole and then played from memory rather than streamed -- see [playSample] for the
+    // measurement and the reasoning. A sample is about half a megabyte, and this screen's network
+    // is busy with covers, availability checks and quite possibly a download.
     LaunchedEffect(focused) {
         preview.pause()
         val sample = focused?.sampleUrl ?: return@LaunchedEffect
         delay(PREVIEW_DELAY_MS)
-        runCatching {
-            preview.setMediaItem(MediaItem.fromUri(sample))
-            preview.prepare()
-            // Full scale here, because PreviewLevel has already brought the clip to a
-            // fixed loudness -- turning it down again would only undo half of that.
-            preview.volume = 1f
-            preview.play()
-        }
+        val bytes = withContext(Dispatchers.IO) {
+            runCatching { http.getBytes(sample) }.getOrNull()
+        } ?: return@LaunchedEffect
+        runCatching { preview.playSample(bytes) }
     }
 
     // Signing in silently when a login is already stored. USDB's session lasts six days and now
@@ -313,37 +371,82 @@ fun AddSongsScreen(
 
     // The search itself, run on the query rather than on a button.
     //
-    // Keyed on the words *and* the page, so turning a page re-runs it and editing the query starts
-    // again at the first. The delay is what makes a run of key presses one search: a new keystroke
-    // cancels this effect before it has finished waiting, which is debouncing for free.
-    LaunchedEffect(keyword, page, language) {
+    // Keyed on the words, the language *and* the page being asked for, so scrolling to the bottom
+    // re-runs it for the next page and editing the query starts again at the first. The delay is
+    // what makes a run of key presses one search: a new keystroke cancels this effect before it has
+    // finished waiting, which is debouncing for free — and it is skipped past the first page,
+    // where nobody is typing and the wait would only be a stall at the bottom of the list.
+    LaunchedEffect(keyword, language, wanted) {
         val words = keyword.trim()
         if (words.length < MIN_QUERY) {
             results = emptyList()
             resultNote = ""
+            morePages = false
             return@LaunchedEffect
         }
-        delay(SEARCH_DELAY_MS)
-        searching = true
+        val first = wanted == 0
+        if (first) delay(SEARCH_DELAY_MS)
+        searching = first
+        loadingMore = !first
         problem = null
         val outcome = runCatching {
             withContext(Dispatchers.IO) {
-                search.search(SongFilter(keyword = words, language = language), page)
+                search.search(SongFilter(keyword = words, language = language), wanted)
             }
         }
         searching = false
+        loadingMore = false
         outcome.onSuccess { found ->
-            results = found.songs
+            // Ordered here, one page at a time, and appended. See [results] for why the whole
+            // list is never re-sorted.
+            val ordered = orderedForDisplay(found.songs, words)
+            results = if (first) {
+                ordered
+            } else {
+                val already = results.mapTo(mutableSetOf()) { it.songId }
+                results + ordered.filter { already.add(it.songId) }
+            }
+            loadedPage = wanted
             morePages = found.hasMore
+            if (first) searchSeq++
             resultNote = when {
                 found.totalResults == 0 -> "Nothing on USDB matches that."
-                else -> "${found.totalResults} found — showing ${found.songs.size}" +
-                    if (found.totalPages > 1) ", page ${page + 1} of ${found.totalPages}" else ""
+                else -> "${found.totalResults} found — showing ${results.size}"
             }
         }.onFailure {
-            results = emptyList()
+            // The pages already loaded are still good; only the one that failed is lost, and
+            // saying so beats throwing away a screenful somebody is reading.
+            if (first) results = emptyList()
+            morePages = false
             problem = "The search could not reach USDB."
         }
+    }
+
+    /**
+     * Back to the top when a *new* search lands.
+     *
+     * A lazy grid keeps its scroll **offset** when its contents change, so a search run halfway
+     * down a list left the view halfway down a completely different one — which reads as the app
+     * having jumped to a song at random. Keyed on the sequence number rather than on the results,
+     * because appending a page must not scroll anywhere.
+     */
+    LaunchedEffect(searchSeq) {
+        if (searchSeq > 0) grid.scrollToItem(0)
+    }
+
+    /**
+     * Fetching the next page as the end comes into view, instead of a "More results" button.
+     *
+     * The button was one more thing to travel to, and it sat at the end of a grid rather than in
+     * the rail with everything else pressable. It also had to be pressed *again* for each page.
+     *
+     * Guarded on `wanted == loadedPage`: the visible index changes many times while the grid is
+     * settling, and without it every one of those frames would ask for another page.
+     */
+    LaunchedEffect(results, morePages, wanted, loadedPage) {
+        if (!morePages || wanted != loadedPage) return@LaunchedEffect
+        snapshotFlow { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
+            .collect { last -> if (last >= results.size - PAGE_LOOKAHEAD) wanted++ }
     }
 
     // Artwork arrives after the grid, so a card draws immediately and fills in.
@@ -384,13 +487,17 @@ fun AddSongsScreen(
             AddMode.Browse -> Row(modifier = Modifier.fillMaxSize().padding(36.dp)) {
                 SearchRail(
                     account = account,
-                    keyword = keyword,
+                    typed = typed,
                     canWrite = canWrite,
                     firstKey = first,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
-                    onKey = { keyword += it; page = 0 },
-                    onBackspace = { keyword = keyword.dropLast(1); page = 0 },
-                    onClear = { keyword = ""; page = 0 },
+                    // Moving the cursor changes no words, so it asks USDB nothing and leaves the
+                    // page count alone. Everything that changes the words starts the search over.
+                    onMove = { typed = it },
+                    onEdit = {
+                        typed = it
+                        restart()
+                    },
                     onSignOut = {
                         preview.pause()
                         account.forget()
@@ -398,7 +505,8 @@ fun AddSongsScreen(
                         password = ""
                         user = ""
                         results = emptyList()
-                        keyword = ""
+                        typed = TypedQuery()
+                        restart()
                         mode = AddMode.SignIn
                     },
                     onBack = onBack,
@@ -410,7 +518,7 @@ fun AddSongsScreen(
                     language = language,
                     onLanguage = {
                         language = it
-                        page = 0
+                        restart()
                     },
                     results = results,
                     covers = covers,
@@ -422,10 +530,10 @@ fun AddSongsScreen(
                     problem = problem,
                     searching = searching,
                     signingIn = signingIn,
-                    morePages = morePages,
+                    loadingMore = loadingMore,
                     canWrite = canWrite,
+                    grid = grid,
                     modifier = Modifier.weight(2f).fillMaxHeight(),
-                    onMore = { page++ },
                     onFocusSong = { focused = it },
                     onPick = { song ->
                         preview.pause()
@@ -469,13 +577,14 @@ fun AddSongsScreen(
 @Composable
 private fun SearchRail(
     account: UsdbAccount,
-    keyword: String,
+    typed: TypedQuery,
     canWrite: Boolean,
     firstKey: FocusRequester,
     modifier: Modifier = Modifier,
-    onKey: (Char) -> Unit,
-    onBackspace: () -> Unit,
-    onClear: () -> Unit,
+    /** Cursor moved, words unchanged — nothing downstream has to be told. */
+    onMove: (TypedQuery) -> Unit,
+    /** Words changed, so the search starts again at the first page. */
+    onEdit: (TypedQuery) -> Unit,
     onSignOut: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -492,13 +601,16 @@ private fun SearchRail(
         )
 
         Spacer(Modifier.height(10.dp))
-        QueryDisplay(keyword, modifier = Modifier.fillMaxWidth())
+        QueryDisplay(typed, modifier = Modifier.fillMaxWidth())
 
         Spacer(Modifier.height(8.dp))
         KeyGrid(
-            onKey = { onKey(it.lowercaseChar()) },
-            onBackspace = onBackspace,
-            onClear = onClear,
+            onKey = { onEdit(typed.insert(it.lowercaseChar())) },
+            onBackspace = { onEdit(typed.backspace()) },
+            onDelete = { onEdit(typed.forwardDelete()) },
+            onLeft = { onMove(typed.left()) },
+            onRight = { onMove(typed.right()) },
+            onClear = { onEdit(typed.cleared()) },
             firstKey = firstKey,
         )
 
@@ -543,10 +655,10 @@ private fun ResultsPanel(
     problem: String?,
     searching: Boolean,
     signingIn: Boolean,
-    morePages: Boolean,
+    loadingMore: Boolean,
     canWrite: Boolean,
+    grid: LazyGridState,
     modifier: Modifier = Modifier,
-    onMore: () -> Unit,
     onFocusSong: (UsdbSong?) -> Unit,
     onPick: (UsdbSong) -> Unit,
 ) {
@@ -617,14 +729,17 @@ private fun ResultsPanel(
         }
 
         Spacer(Modifier.height(14.dp))
-        val shown = remember(results, keyword) { orderedForDisplay(results, keyword) }
+        // The results are already in the order they are shown in -- each page was sorted as it
+        // landed. Sorting here would re-sort the whole accumulated list every time another page
+        // arrived, moving cards that are already on screen.
         LazyVerticalGrid(
+            state = grid,
             columns = GridCells.Fixed(3),
             modifier = Modifier.fillMaxSize(),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            items(shown, key = { song -> song.songId }) { song ->
+            items(results, key = { song -> song.songId }) { song ->
                 ResultCard(
                     song = song,
                     cover = covers[song.songId],
@@ -636,11 +751,17 @@ private fun ResultsPanel(
                     onPick = { onPick(song) },
                 )
             }
-            if (morePages) {
+            // The next page arrives on its own as the end comes into view; this only says so.
+            // Never a button: a focusable thing at the end of an infinite list is a place the
+            // cursor can be sitting when the ground moves underneath it.
+            if (loadingMore) {
                 item {
-                    Button(onClick = onMore, modifier = Modifier.fillMaxWidth()) {
-                        Text("More results", modifier = Modifier.padding(vertical = 8.dp))
-                    }
+                    Text(
+                        "Finding more…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = GameTheme.lyricIdle,
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
                 }
             }
         }

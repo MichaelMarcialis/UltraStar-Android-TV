@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.ultrastarandroidtv.library.CoverLoader
@@ -76,6 +77,21 @@ class Downloads(private val context: Context) {
     val search = UsdbSearch(session)
     val details = UsdbDetails(session)
     val youTube = YouTubeAudio(http)
+
+    /**
+     * Whether each USDB song's music can actually be fetched, by song id.
+     *
+     * Kept here rather than on the Add-songs screen so a verdict is worked out **once**: the check
+     * costs a USDB detail page and a YouTube lookup, and searching for the same band twice in an
+     * evening used to pay for both again. Absent means "not asked yet"; a check that fails for any
+     * other reason records nothing at all, because a network blip must not label a good song broken.
+     *
+     * Deliberately **not** written to disk. A video can be taken down or restored between sessions,
+     * and a stored "unavailable" would go on refusing a song that came back — which is the one
+     * error nobody would think to look for. Living as long as the app is enough to stop the same
+     * question being asked twice while somebody is browsing.
+     */
+    val availability = mutableStateMapOf<Int, Boolean>()
 
     /** Shared with the Songs screen, which repairs a song without going near USDB. */
     val artwork = ITunesArtwork(http)

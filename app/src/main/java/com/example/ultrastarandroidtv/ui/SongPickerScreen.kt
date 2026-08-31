@@ -626,8 +626,16 @@ private fun SearchPane(
         runCatching { first.requestFocus() }
     }
 
+    // The pane owns the cursor; the screen owns the words. Created when the pane opens, so the
+    // caret starts after whatever was typed last rather than at the beginning of it.
+    var typed by remember { mutableStateOf(TypedQuery(query)) }
+    val edit: (TypedQuery) -> Unit = {
+        typed = it
+        onQuery(it.text)
+    }
+
     Column(modifier = modifier) {
-        QueryDisplay(query)
+        QueryDisplay(typed)
         Spacer(Modifier.height(8.dp))
         // Only once there is something to count. Empty, `QueryDisplay` already shows the prompt,
         // and saying "type a song or artist" twice in two lines reads as a rendering fault.
@@ -639,9 +647,13 @@ private fun SearchPane(
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.Top) {
             KeyGrid(
-                onKey = { onQuery(query + it) },
-                onBackspace = { onQuery(query.dropLast(1)) },
-                onClear = { onQuery("") },
+                onKey = { edit(typed.insert(it)) },
+                onBackspace = { edit(typed.backspace()) },
+                onDelete = { edit(typed.forwardDelete()) },
+                // Moving the caret changes no words, so the library is not re-filtered for it.
+                onLeft = { typed = typed.left() },
+                onRight = { typed = typed.right() },
+                onClear = { edit(typed.cleared()) },
                 modifier = Modifier.focusRequester(first),
             )
             Spacer(Modifier.width(28.dp))
