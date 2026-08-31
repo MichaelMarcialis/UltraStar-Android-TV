@@ -1,6 +1,29 @@
 package com.example.ultrastarandroidtv.game
 
 /**
+ * How much louder than the *scoring* gate a voice must be before it claims a microphone.
+ *
+ * Claiming and scoring used to share one number, on the reasoning that a microphone able to claim
+ * a slot must be a microphone able to score. Raising this only strengthens that: anything loud
+ * enough to claim is comfortably loud enough to score.
+ *
+ * It was raised because of what actually happened in the room — **microphones were claiming
+ * themselves as they were picked up.** A hand closing round a mic is a loud broadband thump, well
+ * over a singing gate tuned to keep the television out, and it is heard by the mic being lifted
+ * far more than by the one on the table, so it passes the dominance test too.
+ */
+const val CLAIM_LEVEL_HEADROOM = 1.6f
+
+/**
+ * How long that has to hold, and the real defence against being claimed by handling noise.
+ *
+ * A thump is over in a fraction of a second; a claim now needs the better part of a second of
+ * continuous voice, and any dropout restarts the clock. It was 0.35 s, which is longer than a
+ * cough and shorter than picking a microphone up.
+ */
+const val CLAIM_HOLD_SECONDS = 0.9
+
+/**
  * Decides which microphone somebody is singing into.
  *
  * This is how a singer says "I am this one" without touching the remote, using the only
@@ -8,16 +31,17 @@ package com.example.ultrastarandroidtv.game
  *
  * Three conditions, and all of them earn their place:
  *
- *  - **Loud enough.** Fed the same threshold gameplay scores with, so a mic that can claim a
- *    slot is a mic that can score.
+ *  - **Loud enough.** Comfortably above the threshold gameplay will score with — see
+ *    [CLAIM_LEVEL_HEADROOM] — so a mic that can claim a slot is certainly a mic that can score.
  *  - **Clearly louder than every other mic.** The mics hear each other across a room — that is
  *    the whole reason the sensitivity setting exists — so absolute loudness alone would let one
  *    voice claim both slots. Requiring a clear margin makes proximity the deciding factor,
  *    which is exactly what "the mic in my hand" means. The margin is measured against *all* the
  *    mics, including ones already spoken for, because the singer who has to be ruled out is
  *    usually the one who has already claimed a microphone and is standing next to you.
- *  - **Held for a moment.** A cough, a chair, a door: one loud instant should not commit
- *    anybody to a slot they then have to undo.
+ *  - **Held for the better part of a second.** A cough, a chair, a door — or a hand closing
+ *    round the microphone as it is picked up, which is what actually kept happening. One loud
+ *    instant must not commit anybody to a slot they then have to undo. See [CLAIM_HOLD_SECONDS].
  *
  * When the margin is what fails, [contested] says so, and the screen can ask for one voice at a
  * time rather than leaving two children shouting at a meter that never fills.
@@ -25,12 +49,18 @@ package com.example.ultrastarandroidtv.game
  * Pure and frame-driven — no audio, no Android — so all of that is testable without a device.
  */
 class MicClaim(
-    /** Same figure gameplay uses, so claiming and scoring agree about what counts as singing. */
+    /**
+     * How loud a voice has to be to claim, as a normalised RMS.
+     *
+     * Callers pass the gate gameplay will score with, multiplied by [CLAIM_LEVEL_HEADROOM]. It is
+     * deliberately *higher* than the scoring gate rather than equal to it — which is the stronger
+     * form of the old rule that a mic able to claim is a mic able to score.
+     */
     private val minLevel: Float,
     /** How much louder than the next mic a voice must be. */
     private val dominance: Float = 2.0f,
     /** How long that has to hold before it counts. */
-    private val holdSeconds: Double = 0.35,
+    private val holdSeconds: Double = CLAIM_HOLD_SECONDS,
 ) {
     private var candidate = -1
     private var since = Double.NaN
@@ -52,6 +82,23 @@ class MicClaim(
     fun progress(nowSeconds: Double): Float {
         if (candidate < 0 || since.isNaN()) return 0f
         return ((nowSeconds - since) / holdSeconds).coerceIn(0.0, 1.0).toFloat()
+    }
+
+    /**
+     * How close one microphone is to being claimed, 0..1 — the number its bar draws.
+     *
+     * **One bar, one meaning: how close this microphone is to being yours.** The lower half is
+     * getting loud enough, the upper half is holding it. They join exactly at the middle, because
+     * leading requires the level to have reached [minLevel], at which point the lower half is
+     * already full — so the bar rises smoothly through the handover rather than jumping.
+     *
+     * Nothing else is drawn beside it. The screen used to stack a level meter and a separate hold
+     * bar, which asked the room to read two moving things at once and work out which one meant
+     * "keep going".
+     */
+    fun claimProgress(index: Int, level: Float, nowSeconds: Double): Float {
+        if (index == candidate) return 0.5f + 0.5f * progress(nowSeconds)
+        return (level / minLevel).coerceIn(0f, 1f) * 0.5f
     }
 
     /**

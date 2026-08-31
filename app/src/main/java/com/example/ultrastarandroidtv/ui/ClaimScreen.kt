@@ -1,10 +1,10 @@
 package com.example.ultrastarandroidtv.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -29,19 +30,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.example.ultrastarandroidtv.game.CLAIM_LEVEL_HEADROOM
 import com.example.ultrastarandroidtv.game.GameSession
 import com.example.ultrastarandroidtv.game.GameTheme
 import com.example.ultrastarandroidtv.game.MicClaim
+import com.example.ultrastarandroidtv.mic.MicState
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.settings.Profiles
@@ -62,19 +73,23 @@ private const val LEVEL_DECAY = 0.90f
  * two identical microphones am I holding", which no amount of on-screen labelling can answer,
  * because the label is on the screen and the microphone is in your hand.
  *
+ * **Every microphone the app can see is on screen, all of the time.** That is the change this
+ * version makes, and the reason is that the room is looking at three microphones and the screen
+ * was showing one card. A card per device means the answer to "did it hear *me*?" is read off the
+ * one that is moving, rather than inferred from a single meter that could belong to any of them.
+ *
  * **One singer is set up at a time, from beginning to end.** Sing, take a microphone, choose a
  * name, and only then does the next colour open. Two earlier versions asked the room for more
  * than that at once and both failed the same way in the same room: with two children, the moment
  * a meter appears they both shout at it, and whatever the app then decides, nobody watching can
  * tell which of them it decided about.
  *
- * **The meter belongs to the singer, not to the microphone, and it stays up while they choose a
- * name.** That is the actual fix, and it is why this screen is a row rather than a column: one
- * card on the right belongs to the colour being set up, and it does not move, resize or vanish
- * when the question changes from "sing" to "who are you". So a claim that landed on the wrong
- * child is *recoverable by singing* — one of them sings, and the meter says whether the name
- * about to be chosen is theirs. Before, the meters disappeared the instant a claim landed, which
- * is exactly the moment the room needed one.
+ * **One bar per microphone, and never two at once.** While nobody has claimed anything, each bar
+ * says how close *that* microphone is to being claimed — see [MicClaim.claimProgress], where the
+ * lower half is getting loud enough and the upper half is holding it. The moment one is claimed
+ * the screen spotlights it, dims the rest, and its bar switches to plain live level: the question
+ * has changed from "which one" to "is this one yours", and the way to check is to sing into it and
+ * watch it move. The stack of a level meter with a second progress bar underneath is gone.
  *
  * **The microphone is always discovered rather than named.** A previous version asked "who is
  * holding microphone 1?" whenever every attached mic had to be in somebody's hand, on the
@@ -109,17 +124,22 @@ fun ClaimScreen(
 
     val levels = remember(mics.size) { FloatArray(mics.size) }
     val shown = remember(mics.size) { FloatArray(mics.size) }
-    // The gate that this game will actually be scored with, so the claim is decided on the
-    // same terms as the singing: a duet's higher bar is part of what identifies the right mic.
-    val micGate = settings.micThresholdFor(playerCount)
-    val claim = remember(micGate) { MicClaim(minLevel = micGate) }
 
-    // Written by the frame loop and read only inside the meter, so a sixty-times-a-second repaint
-    // invalidates one card rather than the name list and the focus somebody is moving through it.
+    // The gate that this game will actually be scored with, and then the higher one a *claim*
+    // has to clear. Claiming is a deliberate act performed once; scoring is continuous. Sharing
+    // one number meant a microphone claimed itself as it was picked up — see CLAIM_LEVEL_HEADROOM.
+    val micGate = settings.micThresholdFor(playerCount)
+    val claimGate = micGate * CLAIM_LEVEL_HEADROOM
+    val claim = remember(claimGate) { MicClaim(minLevel = claimGate) }
+
+    // Written by the frame loop and read only inside a bar's draw pass, so a sixty-times-a-second
+    // repaint costs the bars and nothing else — not the name list, and not the focus somebody is
+    // moving through it.
     val tick = remember { mutableFloatStateOf(0f) }
     var contested by remember { mutableStateOf(false) }
 
     val target = minOf(playerCount, mics.size)
+    val solo = playerCount == 1
 
     /** Mics Android has not let the app open. */
     val refused = micSession.refusedMics
@@ -137,15 +157,15 @@ fun ClaimScreen(
      */
     val blocked = micSession.usableMics.size < playerCount
 
-    /** Mics still to be spoken for. */
-    val free = mics.indices.filter { i -> claimed.none { it.portId == mics[i].portId } }
-
     /**
      * The singer being set up: the one choosing a name, or the next one to sing. They are the
      * same person a moment apart, which is why one index and one colour serve the whole screen.
      */
     val slot = naming ?: claimed.size
-    val colour = GameTheme.playerColors[slot % GameTheme.playerColors.size]
+
+    // Solo is its own colour rather than "player one", because on your own there is nobody to be
+    // told apart from and the colour is free to say "there is one of you" instead.
+    val colour = GameTheme.playerColor(slot, solo)
 
     // Only ever used while a microphone is refused; see the button it is attached to.
     val allow = remember { FocusRequester() }
@@ -194,8 +214,8 @@ fun ClaimScreen(
         if (blocked) return@LaunchedEffect
 
         var seconds = 0.0
-        // Runs on through the name question, which is what keeps the meter alive while somebody
-        // is being named — the whole reason the meter is still on screen at that point.
+        // Runs on through the name question, which is what keeps the bars alive while somebody
+        // is being named — the whole reason the spotlighted card is still on screen at that point.
         while (claimed.size < target || naming != null) {
             withFrameNanos { }
             seconds += 1.0 / 60.0
@@ -241,7 +261,7 @@ fun ClaimScreen(
                 NamePicker(
                     colour = colour,
                     profiles = profiles,
-                    solo = playerCount == 1,
+                    solo = solo,
                     // Whoever has already been named this game. The slot being named is still in
                     // the list with a blank name, so nothing has to be excluded by index.
                     taken = claimed.map { it.name }.filter { it.isNotBlank() }.toSet(),
@@ -260,7 +280,7 @@ fun ClaimScreen(
                     when {
                         mics.isEmpty() -> "No microphone"
                         blocked -> "Microphone not allowed"
-                        playerCount == 1 -> "Sing into your microphone"
+                        solo -> "Sing into your microphone"
                         slot == 0 -> "First singer, sing now"
                         else -> "Second singer, sing now"
                     },
@@ -288,12 +308,24 @@ fun ClaimScreen(
                         contested -> "More than one microphone can hear singing — one voice at a time."
                         // Discovering the mic is what proves the one in your hand is the one that
                         // gets scored, which matters most when there is a spare on the table.
-                        playerCount == 1 -> "Whichever microphone hears you is the one you will be scored on."
+                        solo -> "Whichever microphone hears you is the one you will be scored on."
                         else -> "Pick up a microphone and sing. Whichever one hears you is yours."
                     },
                     style = MaterialTheme.typography.bodyLarge,
                     color = if (contested || blocked) GameTheme.sparkWarm else GameTheme.lyricIdle,
                 )
+
+                // Says what the bar is for. Holding a note for the better part of a second is
+                // deliberate and it is not guessable — without this the bar looks like a meter
+                // that keeps falling back rather than a thing to be filled on purpose.
+                if (!blocked && mics.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Keep singing until one bar fills.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = GameTheme.lyricIdle,
+                    )
+                }
 
                 Spacer(Modifier.height(48.dp))
 
@@ -330,121 +362,188 @@ fun ClaimScreen(
             }
         }
 
-        // Hidden while a microphone is not allowed: a meter that cannot move is the very thing
-        // that makes a refusal look like broken hardware.
-        if (mics.isNotEmpty() && !blocked) {
+        if (mics.isNotEmpty()) {
             Spacer(Modifier.width(48.dp))
-            SingerMeter(
-                title = when {
-                    claimedMic >= 0 -> "Microphone ${claimedMic + 1}"
-                    playerCount == 1 -> "Your voice"
-                    slot == 0 -> "First singer"
-                    else -> "Second singer"
-                },
-                caption = when {
-                    // Why it is still here after the claim: it is the only way to settle which of
-                    // two children actually won it. One of them sings, and the meter answers.
-                    claimedMic >= 0 -> "Sing to check this is yours"
-                    else -> "sing now"
-                },
-                name = naming?.let { claimed[it].name }?.takeIf { it.isNotBlank() },
-                colour = colour,
-                threshold = micGate,
-                tick = tick,
-                // Before a claim the meter shows whichever free mic is loudest, because which one
-                // the singer picked up is exactly the open question. After it, only their own, so
-                // the next singer's voice cannot move it.
-                level = {
-                    if (claimedMic >= 0) shown.getOrElse(claimedMic) { 0f }
-                    else free.maxOfOrNull { shown.getOrElse(it) { 0f } } ?: 0f
-                },
-                progress = { now -> if (claim.leading >= 0) claim.progress(now) else 0f },
-            )
+            Column(
+                modifier = Modifier.width(300.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                mics.forEachIndexed { index, mic ->
+                    // Who has this one already, if anybody. A name in a colour is the whole
+                    // answer to "is this microphone still going spare".
+                    val ownerSlot = claimed.indexOfFirst { it.portId == mic.portId }
+                    val owner = claimed.getOrNull(ownerSlot)?.name?.takeIf { it.isNotBlank() }
+                    val spotlit = index == claimedMic
+
+                    MicCard(
+                        title = "Microphone ${index + 1}",
+                        // Four states, and each of them is a different sentence rather than a
+                        // different shade of the same one.
+                        caption = when {
+                            mic.state == MicState.Refused -> "not allowed yet"
+                            owner != null -> owner
+                            // Why this card is still here after the claim: it is the only way to
+                            // settle which of two children actually won it. One of them sings,
+                            // and the bar answers.
+                            spotlit -> "sing to check this is yours"
+                            blocked -> "waiting"
+                            else -> "free"
+                        },
+                        // The claimed name is the loud part of the card; everything else is a
+                        // caption under a label.
+                        emphasised = owner != null || spotlit,
+                        colour = when {
+                            mic.state == MicState.Refused -> GameTheme.sparkWarm
+                            ownerSlot >= 0 -> GameTheme.playerColor(ownerSlot, solo)
+                            spotlit -> colour
+                            else -> GameTheme.lyricIdle
+                        },
+                        // Spotlighting is done by dimming everything else, which is the one way
+                        // of pointing at something that needs no arrow and no extra words.
+                        dimmed = claimedMic >= 0 && !spotlit,
+                        outlined = spotlit,
+                        tick = tick,
+                        fraction = when {
+                            mic.state == MicState.Refused || blocked -> { _ -> 0f }
+                            // Spoken for: a full bar, standing still. It is not measuring
+                            // anything any more and must not look as though it is.
+                            ownerSlot >= 0 && !spotlit -> { _ -> 1f }
+                            // The claim landed and the question changed. Raw level now, scaled so
+                            // an ordinary singing voice sits around the middle — this is "can you
+                            // hear me", not "am I loud enough yet", and it has no target on it.
+                            spotlit -> { _ -> shown.getOrElse(index) { 0f } / (claimGate * 3f) }
+                            else -> { now -> claim.claimProgress(index, shown.getOrElse(index) { 0f }, now) }
+                        },
+                    )
+                }
+            }
         }
     }
 }
 
 /**
- * The singer's own level meter — one card, belonging to a colour rather than to a device.
+ * One microphone, as a card: what it is, who has it, and one bar.
  *
- * A meter rather than a spinner, because it shows that the microphone is *alive*, which on this
- * hardware has never been something to take for granted. It carries a tick at the gate, so "loud
- * enough" is a target rather than a guess.
- *
- * It reads [tick] itself so the frame loop repaints this card alone. Reading it in the parent
- * would recompose the name list sixty times a second, which is both wasteful and a good way to
- * lose the focus somebody is moving with a remote.
+ * The bar reads [tick] inside its own draw pass rather than in composition, so sixty repaints a
+ * second cost a redraw of a rounded rectangle and nothing else. Reading it out here would
+ * recompose every card, the name list and the focus somebody is moving with a remote.
  */
 @Composable
-private fun SingerMeter(
+private fun MicCard(
     title: String,
     caption: String,
-    name: String?,
+    emphasised: Boolean,
     colour: Color,
-    threshold: Float,
+    dimmed: Boolean,
+    outlined: Boolean,
     tick: FloatState,
-    level: () -> Float,
-    progress: (Double) -> Float,
+    fraction: (Double) -> Float,
 ) {
-    val now = tick.floatValue.toDouble()
-    val loudness = level()
-    val held = progress(now)
-
     Column(
         modifier = Modifier
-            .width(320.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .fillMaxWidth()
+            .alpha(if (dimmed) 0.35f else 1f)
+            .clip(RoundedCornerShape(14.dp))
             .background(GameTheme.trackBackground)
-            .border(3.dp, colour, RoundedCornerShape(16.dp))
-            .padding(24.dp),
-    ) {
-        Text(title, style = MaterialTheme.typography.bodyMedium, color = GameTheme.lyricIdle)
-        Spacer(Modifier.height(6.dp))
-        Text(name ?: caption, style = MaterialTheme.typography.headlineSmall, color = colour)
-        Spacer(Modifier.height(16.dp))
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(14.dp)
-                .clip(RoundedCornerShape(7.dp))
-                .background(GameTheme.noteIdle),
-        ) {
-            val filled = (loudness / (threshold * 4f)).coerceIn(0f, 1f)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(filled)
-                    .height(14.dp)
-                    .background(colour.copy(alpha = 0.85f)),
+            // Every card is outlined, because the panel colour alone is all but invisible against
+            // this background -- measured on the television, the cards read as text floating in
+            // the dark rather than as objects. The spotlit one takes the singer's colour and a
+            // heavier line, which is what makes "this one" legible across the room.
+            .border(
+                width = if (outlined) 3.dp else 1.dp,
+                color = if (outlined) colour else GameTheme.noteIdle,
+                shape = RoundedCornerShape(14.dp),
             )
-            // Where "loud enough to count" sits. The meter is scaled to four times the gate, so
-            // this lands a quarter of the way along — and it turns the meter from a wiggling bar
-            // into a target, which is the difference between feedback and instruction.
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(0.25f)
-                    .height(14.dp),
-                contentAlignment = Alignment.CenterEnd,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(2.dp)
-                        .height(14.dp)
-                        .background(GameTheme.background.copy(alpha = 0.7f)),
+            // Deliberately compact: four microphones have to fit down the side of a 540 dp
+            // screen, and a webcam counts as one. Three is the ordinary case and four is not
+            // hypothetical -- `findAudioCaptureTargets` matches any USB audio input.
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            MicGlyph(colour)
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = GameTheme.lyricIdle,
+                )
+                Text(
+                    caption,
+                    fontSize = if (emphasised) 21.sp else 15.sp,
+                    fontWeight = if (emphasised) FontWeight.SemiBold else FontWeight.Normal,
+                    color = colour,
+                    // A long name must shorten rather than wrap: a second line here changes the
+                    // height of one card and shoves every card under it down the screen.
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
 
-        if (held > 0f) {
-            Spacer(Modifier.height(10.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(held)
-                    .height(5.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(colour),
-            )
+        Spacer(Modifier.height(10.dp))
+
+        Canvas(modifier = Modifier.fillMaxWidth().height(12.dp)) {
+            // Both reads happen in the draw phase, so only drawing is invalidated.
+            val filled = fraction(tick.floatValue.toDouble()).coerceIn(0f, 1f)
+            val radius = CornerRadius(size.height / 2f)
+            drawRoundRect(GameTheme.noteIdle, size = size, cornerRadius = radius)
+            if (filled > 0f) {
+                drawRoundRect(
+                    color = colour,
+                    size = Size(size.width * filled, size.height),
+                    cornerRadius = radius,
+                )
+            }
         }
+    }
+}
+
+/**
+ * A microphone, drawn rather than imported.
+ *
+ * `androidx.tv:tv-material` ships no icon set, and pulling in the phone Material icon library for
+ * one glyph would be a dependency for a shape — the same call [LoadingBar] made.
+ */
+@Composable
+private fun MicGlyph(colour: Color, extent: Dp = 30.dp) {
+    Canvas(modifier = Modifier.size(extent)) {
+        val w = size.width
+        val h = size.height
+        val stroke = h * 0.08f
+
+        val capsuleWidth = w * 0.34f
+        drawRoundRect(
+            color = colour,
+            topLeft = Offset((w - capsuleWidth) / 2f, h * 0.04f),
+            size = Size(capsuleWidth, h * 0.54f),
+            cornerRadius = CornerRadius(capsuleWidth / 2f),
+        )
+        // The cradle: the bottom half of an ellipse, which is what makes it read as a microphone
+        // rather than as a pill.
+        drawArc(
+            color = colour,
+            startAngle = 0f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(w * 0.16f, h * 0.30f),
+            size = Size(w * 0.68f, h * 0.52f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+        drawLine(
+            color = colour,
+            start = Offset(w / 2f, h * 0.82f),
+            end = Offset(w / 2f, h * 0.94f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = colour,
+            start = Offset(w * 0.30f, h * 0.96f),
+            end = Offset(w * 0.70f, h * 0.96f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
     }
 }
 
@@ -461,9 +560,9 @@ private fun SingerMeter(
  * unreadable for the whole song. Removed from the list rather than shown and refused: an option
  * that cannot be chosen is only there to be pressed by mistake.
  *
- * It asks about the microphone in the room rather than about a player number, and the meter
- * beside it is still moving while the question is on screen — which is what makes "this one" a
- * thing anybody can check rather than a thing they have to take on trust.
+ * It asks about the microphone in the room rather than about a player number, and that
+ * microphone's card is spotlighted and still moving while the question is on screen — which is
+ * what makes "this one" a thing anybody can check rather than a thing they take on trust.
  *
  * @param solo true when only one person is singing, which changes what there is to say: "the
  *   first singer" is an answer to a question nobody on their own has asked.
