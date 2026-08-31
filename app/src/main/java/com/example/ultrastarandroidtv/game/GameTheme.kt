@@ -68,11 +68,17 @@ object GameTheme {
     /**
      * The one singer's colour when nobody else is playing.
      *
-     * Green because on your own the arrow is free to say how *well* you are singing rather than
-     * *who* you are, and green is where that scale starts. With two people the colour is spoken
-     * for — it is the only thing telling two arrows on one track apart — so this is solo only.
+     * **Purple, and deliberately not either of the two-player colours.** On your own the colour
+     * has no one to distinguish you from, so it is free to be the app's own — and being neither
+     * cyan nor pink is what makes "there is one of me" legible at a glance from the sofa, on the
+     * claim screen and in the game alike.
+     *
+     * It used to be green, matching the start of the arrow's accuracy scale. That reasoning only
+     * ever applied to the arrow, and the arrow is accuracy-coloured on its own in solo — so the
+     * green was doing nothing for the notes, the name and the score, which are what actually
+     * carry this colour.
      */
-    val soloPlayer = Color(0xFF5BE37A)
+    val soloPlayer = Color(0xFFB388FF)
 
     /** Whose colour an arrow, score or name chip carries. Solo overrides the player order. */
     fun playerColor(index: Int, solo: Boolean): Color =
@@ -105,7 +111,15 @@ object GameTheme {
 
     // ---- Playhead ---------------------------------------------------------------------------
 
-    val playhead = Color(0x66FFFFFF)
+    /**
+     * The sing line: gold, and the only vertical in the track.
+     *
+     * Gold rather than white because it is the one thing on the track that never moves and always
+     * means the same thing — *now* — so it should not share a colour with the notes scrolling past
+     * it or with either singer. It is also warm against a field that is otherwise cool, which is
+     * what lets the eye find it without hunting.
+     */
+    val playhead = Color(0xB3FFC93C)
     val playheadWidth = 2.dp
 
     /**

@@ -60,7 +60,7 @@ fun MainMenuScreen(
         verticalArrangement = Arrangement.Center,
     ) {
         Text(
-            "Sing",
+            "UltraStar Android TV",
             style = MaterialTheme.typography.displayLarge.copy(fontWeight = FontWeight.Bold),
             color = GameTheme.lyricActive,
         )

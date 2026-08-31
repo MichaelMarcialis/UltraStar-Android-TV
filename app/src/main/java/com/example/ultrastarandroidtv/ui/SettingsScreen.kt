@@ -36,6 +36,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.game.GameTheme
@@ -84,11 +85,20 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
             )
             Spacer(Modifier.width(28.dp))
             Text(
-                "Left and right to adjust.  Up and down to move.  Back to return.",
+                "Left and right to adjust.  Up and down to move.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = GameTheme.lyricIdle,
                 modifier = Modifier.weight(1f).padding(bottom = 6.dp),
             )
+            // The way out, said as a button as well as being on the Back key.
+            //
+            // In the header rather than under the list, and that is the point of it: the header
+            // is the part of this screen that does not scroll, so the exit can never be scrolled
+            // off the bottom — which is exactly what happened to the hint that used to live down
+            // there. Pressing up from the first dial reaches it.
+            Button(onClick = onBack) {
+                Text("Main menu", modifier = Modifier.padding(horizontal = 12.dp))
+            }
         }
         Spacer(Modifier.height(16.dp))
 
