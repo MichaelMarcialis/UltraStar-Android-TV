@@ -114,6 +114,28 @@ private const val FALLBACK_PREVIEW_SECONDS = 45.0
 private const val FOCUS_ATTEMPTS = 12
 
 /**
+ * How many copies of the library the row holds when it loops.
+ *
+ * The row does not wrap by jumping any more, it simply goes on: the list is the library laid end
+ * to end many times over, and moving off the last song walks straight onto the first because that
+ * is genuinely the next card along. Nothing has to be intercepted and nothing teleports.
+ *
+ * Four hundred copies of a hundred songs is forty thousand positions, which costs nothing — a lazy
+ * list composes what is on the screen and takes the count as a number. It is finite rather than
+ * `Int.MAX_VALUE` so that scrolling to the far end is a real place rather than an overflow.
+ */
+private const val LOOP_COPIES = 400
+
+/**
+ * Fewest songs worth looping.
+ *
+ * About four cards fit across the television, so below this a copy would be visible beside its own
+ * original — the same album twice on one screen, which reads as a bug rather than as a loop. A
+ * library this short fits on the screen anyway, so wrapping it by jumping is invisible.
+ */
+private const val LOOP_MINIMUM = 8
+
+/**
  * What the space under the controls is showing.
  *
  * Searching and choosing a genre both need a lot of room and neither is worth a second screen, so
@@ -157,6 +179,7 @@ fun SongPickerScreen(
     var treeUri by remember { mutableStateOf<Uri?>(location.saved()) }
     var songs by remember { mutableStateOf(cache.playable) }
     var status by remember { mutableStateOf("Looking for songs…") }
+    /** The card the cursor is on, or -1 when it has moved off the row entirely. */
     var focusedIndex by remember { mutableIntStateOf(0) }
 
     // Scanning is the only state with anything to animate, and the count is the only honest
@@ -173,8 +196,10 @@ fun SongPickerScreen(
     // makes jumping to the *same* card twice a second event rather than a no-op — which the
     // wrap-around needs, since a library of one song wraps to itself.
     val opening = remember { FocusRequester() }
-    var openingIndex by remember { mutableIntStateOf(-1) }
+    var openingPosition by remember { mutableIntStateOf(-1) }
     var jumpSeq by remember { mutableIntStateOf(0) }
+    /** False until the row has been put somewhere, so the first jump starts in the middle copy. */
+    var placed by remember { mutableStateOf(false) }
     val row = rememberLazyListState()
 
     BackHandler {
@@ -253,9 +278,38 @@ fun SongPickerScreen(
         }
     }
 
+    // The row is the library repeated, so that running off one end simply arrives at the other.
+    val cycle = arranged.size
+    val loops = cycle >= LOOP_MINIMUM
+    val cardCount = if (loops) cycle * LOOP_COPIES else cycle
+
+    /** Where the middle copy begins: as much room to scroll backwards as forwards. */
+    val loopOrigin = if (loops) (LOOP_COPIES / 2) * cycle else 0
+
+    /**
+     * Which *position* in the row shows song [index], chosen as the one nearest where the row
+     * already is.
+     *
+     * That is what keeps a jump short: pressing M while looking at L should move a few cards, not
+     * unwind two hundred copies back to some canonical first M.
+     */
+    fun positionFor(index: Int): Int {
+        if (cycle == 0) return -1
+        val safe = index.coerceIn(0, cycle - 1)
+        if (!loops) return safe
+        val from = if (placed) row.firstVisibleItemIndex else loopOrigin
+        val base = from - Math.floorMod(from, cycle)
+        return listOf(base - cycle, base, base + cycle)
+            .map { it + safe }
+            .filter { it in 0 until cardCount }
+            .minByOrNull { kotlin.math.abs(it - from) }
+            ?: (loopOrigin + safe)
+    }
+
     /** Scrolls the row to [index] and puts the focus on it. Everything that moves goes through here. */
     fun jumpTo(index: Int) {
-        openingIndex = index.coerceIn(0, (arranged.size - 1).coerceAtLeast(0))
+        openingPosition = positionFor(index)
+        placed = true
         jumpSeq++
     }
 
@@ -276,18 +330,24 @@ fun SongPickerScreen(
     // "open at the top" every single time.
     var arrangementTouched by remember { mutableStateOf(false) }
     LaunchedEffect(sort, filter) {
-        if (arrangementTouched && arranged.isNotEmpty()) jumpTo(0)
+        if (arrangementTouched && arranged.isNotEmpty()) {
+            // Back to the middle copy as well as to the first song: the row's positions are
+            // measured in copies of a list that has just changed length, so where it happened to
+            // be says nothing about where it should be now.
+            placed = false
+            jumpTo(0)
+        }
         arrangementTouched = true
     }
 
     LaunchedEffect(jumpSeq) {
-        val index = openingIndex
-        if (index < 0 || index >= arranged.size) return@LaunchedEffect
+        val position = openingPosition
+        if (position < 0 || position >= cardCount) return@LaunchedEffect
 
         // A LazyRow does not compose what is off screen, so the card has to be brought into view
         // before it can be focused, and the focus requester it carries only exists once it has
         // been composed — hence waiting for frames rather than asking straight away.
-        row.scrollToItem(index)
+        row.scrollToItem(position)
         repeat(FOCUS_ATTEMPTS) {
             withFrameNanos { }
             if (runCatching { opening.requestFocus() }.isSuccess) return@LaunchedEffect
@@ -302,8 +362,14 @@ fun SongPickerScreen(
         onDispose { preview.release() }
     }
 
+    // Nothing in the app should still be making a noise once it is not on the screen.
+    PauseWhenBackgrounded(preview)
+
+    // Stopped rather than paused, and `focusedIndex` really does become -1: a card reports losing
+    // the focus as well as taking it, so walking up to the controls silences the sample instead of
+    // leaving it playing under a screen nobody is pointing at any more.
     LaunchedEffect(focusedIndex, arranged, tree, pane) {
-        preview.pause()
+        preview.stop()
         // Nothing plays while the keyboard or a filter list is up: the card under `focusedIndex`
         // is not what anybody is looking at, and a song starting up under a keyboard sounds like
         // a stray press.
@@ -440,7 +506,13 @@ fun SongPickerScreen(
                     contentPadding = PaddingValues(horizontal = 56.dp),
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
                 ) {
-                    itemsIndexed(arranged) { index, scanned ->
+                    // The library, repeated. A position is not a song: several positions show the
+                    // same one, which is the whole mechanism — moving right off the last song
+                    // lands on the first because that is the next card, not because anything
+                    // caught the key press and put the row somewhere else.
+                    items(count = cardCount, key = { it }) { position ->
+                        val index = if (loops) position % cycle else position
+                        val scanned = arranged[index]
                         SongCard(
                             scanned = scanned,
                             tree = tree,
@@ -449,6 +521,9 @@ fun SongPickerScreen(
                             badge = if (playerCount == 2) badgeFor(scanned) else null,
                             record = bests[scanned.textId],
                             onFocused = { focusedIndex = index },
+                            // Guarded, because focus moves card to card as "lost, then gained":
+                            // clearing unconditionally would throw away the one just reported.
+                            onBlurred = { if (focusedIndex == index) focusedIndex = -1 },
                             onSelect = {
                                 val audioId = scanned.audioId ?: return@SongCard
                                 val currentTree = tree ?: return@SongCard
@@ -463,16 +538,14 @@ fun SongPickerScreen(
                                     ),
                                 )
                             },
-                            // The row joins up end to end. Running off the end of Z and being
-                            // stopped dead is the row saying "no" to the one direction you were
-                            // already travelling in; coming out at A says "that was all of them",
-                            // which is the same fact and an answer rather than a wall.
+                            // Only a library too short to loop is caught at the ends, and then the
+                            // whole of it is on the screen anyway, so the jump is invisible.
                             onWrap = { forward ->
                                 jumpTo(if (forward) 0 else arranged.lastIndex)
                             },
-                            isFirst = index == 0,
-                            isLast = index == arranged.lastIndex,
-                            modifier = if (index == openingIndex) {
+                            isFirst = !loops && position == 0,
+                            isLast = !loops && position == cardCount - 1,
+                            modifier = if (position == openingPosition) {
                                 Modifier.focusRequester(opening)
                             } else {
                                 Modifier
@@ -808,6 +881,7 @@ private fun SongCard(
     /** The score to beat on this song, or null if nobody the app still knows has set one. */
     record: HighScore?,
     onFocused: () -> Unit,
+    onBlurred: () -> Unit,
     onSelect: () -> Unit,
     /** Ran off the end of the row: true going right, false going left. */
     onWrap: (Boolean) -> Unit,
@@ -832,7 +906,7 @@ private fun SongCard(
             .width(CARD_WIDTH)
             .onFocusChanged {
                 focused = it.isFocused
-                if (it.isFocused) onFocused()
+                if (it.isFocused) onFocused() else onBlurred()
             }
             .focusable()
             .onPreviewKeyEvent { event ->
