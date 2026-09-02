@@ -457,8 +457,15 @@ private fun DrawScope.drawArrows(
 
         // On your own the arrow is free to say how well it is going, because nobody else's arrow
         // needs telling apart from it. With two singers the colour is the only thing that does.
+        //
+        // **A solo arrow is never the singer's own colour.** It falls back to the *start* of the
+        // accuracy scale rather than to `trace.color`, which is what the notes, the name and the
+        // score carry. Sharing them makes the arrow purple between notes and green on one, which
+        // reads as two ideas fighting rather than as one scale: green when it is right, red when
+        // it is not, and nothing else.
         val color = when {
-            !accuracyColored || targetMidi == null || midi.isNaN() -> trace.color
+            !accuracyColored -> trace.color
+            targetMidi == null || midi.isNaN() -> GameTheme.arrowOnPitch
             else -> GameTheme.arrowAccuracyColor(midi - targetMidi, toleranceSemitones)
         }
 
