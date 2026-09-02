@@ -124,9 +124,18 @@ class UsdbSearch(private val session: UsdbSession) {
     fun search(filter: SongFilter, page: Int = 0): SearchPage {
         require(page >= 0) { "page must not be negative" }
         if (filter.keyword.isBlank()) return onePage(filter, page)
-        return keywordSearches(filter)
+
+        val found = keywordSearches(filter)
             .map { onePage(it, page) }
             .reduce { merged, next -> mergePages(merged, next, page) }
+
+        // **The fallbacks only run when the answer would otherwise be nothing.** Each is another
+        // request, and USDB's search is cheap rather than free; paying for one on every query to
+        // rescue the queries that already work would be the wrong trade.
+        if (found.songs.isNotEmpty()) return found
+        return lastResorts(filter)
+            .map { onePage(it, page) }
+            .fold(found) { merged, next -> mergePages(merged, next, page) }
     }
 
     private fun onePage(filter: SongFilter, page: Int): SearchPage =
@@ -170,6 +179,58 @@ fun keywordSearches(filter: SongFilter): List<SongFilter> {
 
 private fun joinTerms(existing: String, word: String): String =
     if (existing.isBlank()) word else existing.trim()
+
+/**
+ * What to try when the ordinary searches found nothing at all.
+ *
+ * Both of these were found by somebody typing a real query into the television and getting an
+ * empty screen for a song that is unquestionably on USDB.
+ *
+ *  - **The band's name last.** [keywordSearches] splits at the *first* space, which reads
+ *    "beatles yesterday" correctly and reads "god gave kiss" backwards. People type the words they
+ *    remember in the order they remember them, and the band is as often last as first, so the
+ *    other split is tried too.
+ *  - **An acronym written with full stops.** "ymca" finds nothing because the song is filed as
+ *    "Y.M.C.A." and USDB matches substrings, so the letters somebody types are never contiguous in
+ *    the title. Spelling the query out with stops is a genuine substring of how those titles are
+ *    actually written, and it is the whole of that family — D.I.S.C.O., S.O.S., Y.M.C.A.
+ *
+ * Both are deliberately narrow. The acronym form is only tried for a short single word of letters,
+ * because "l.o.v.e" as a rescue for a query that already returned fifty songs would be noise.
+ */
+internal fun lastResorts(filter: SongFilter): List<SongFilter> {
+    if (filter.artist.isNotBlank() || filter.title.isNotBlank()) return emptyList()
+    val word = filter.keyword.trim()
+    val tries = mutableListOf<SongFilter>()
+
+    val lastSpace = word.lastIndexOf(' ')
+    if (lastSpace > 0) {
+        val tail = word.substring(lastSpace + 1)
+        val head = word.substring(0, lastSpace).trim()
+        if (tail.isNotEmpty() && head.isNotEmpty()) {
+            tries += filter.copy(keyword = "", artist = tail, title = head)
+        }
+    }
+
+    dottedAcronym(word)?.let { tries += filter.copy(keyword = "", title = it) }
+    return tries
+}
+
+/** Shortest and longest a word can be and still plausibly be written with full stops. */
+private val ACRONYM_LENGTHS = 2..6
+
+/**
+ * "ymca" as "y.m.c.a", or null when the word is not the shape of an acronym.
+ *
+ * No trailing stop: the title is "Y.M.C.A." and this has to be a *substring* of it, which
+ * "y.m.c.a" is and which a trailing stop would still be — but leaving it off also matches a title
+ * written without one.
+ */
+internal fun dottedAcronym(word: String): String? {
+    if (word.length !in ACRONYM_LENGTHS) return null
+    if (!word.all { it.isLetter() }) return null
+    return word.lowercase().toCharArray().joinToString(".")
+}
 
 /**
  * Folds two result pages into one, keeping the first page's order and dropping repeats.

@@ -302,6 +302,53 @@ class UsdbSearchTest {
         assertEquals(2, searches.size)
     }
 
+    /**
+     * The band's name is as often last as first.
+     *
+     * "god gave kiss" is somebody remembering three words of a song and the group who sang it, in
+     * the order they came to mind. Splitting at the *first* space reads that backwards — artist
+     * "god", title "gave kiss" — and finds nothing, which is what happened on the television.
+     */
+    @Test
+    fun `a last resort puts the last word in the artist field`() {
+        val tries = lastResorts(SongFilter(keyword = "god gave kiss"))
+
+        val split = tries.first()
+        assertEquals("kiss", split.artist)
+        assertEquals("god gave", split.title)
+        assertEquals("", split.keyword)
+    }
+
+    /**
+     * "ymca" finds nothing because the song is filed as "Y.M.C.A." and USDB matches substrings,
+     * so the letters somebody types are never contiguous in the title.
+     */
+    @Test
+    fun `a last resort spells a short word out with full stops`() {
+        assertEquals("y.m.c.a", dottedAcronym("ymca"))
+        assertEquals("s.o.s", dottedAcronym("SOS"))
+
+        val tries = lastResorts(SongFilter(keyword = "ymca"))
+        assertEquals(1, tries.size)
+        assertEquals("y.m.c.a", tries.first().title)
+        assertEquals("", tries.first().artist)
+    }
+
+    @Test
+    fun `only a short word of letters is spelled out`() {
+        assertNull(dottedAcronym("a"))
+        assertNull(dottedAcronym("yesterday"))
+        assertNull(dottedAcronym("abba1"))
+        assertNull(dottedAcronym("two words"))
+    }
+
+    /** With a field already named, a last resort would be arguing with what was asked for. */
+    @Test
+    fun `nothing is tried when the artist or title was given explicitly`() {
+        assertTrue(lastResorts(SongFilter(keyword = "god gave kiss", artist = "kiss")).isEmpty())
+        assertTrue(lastResorts(SongFilter(keyword = "ymca", title = "y")).isEmpty())
+    }
+
     /** Neither half may keep the keyword, or the second search would run it a third time. */
     @Test
     fun `the keyword is spent once it has been split`() {
