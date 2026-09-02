@@ -67,6 +67,7 @@ import com.example.ultrastarandroidtv.game.GameTheme
 import com.example.ultrastarandroidtv.library.CoverLoader
 import com.example.ultrastarandroidtv.library.LibraryLocation
 import com.example.ultrastarandroidtv.library.filingKey
+import com.example.ultrastarandroidtv.library.searchKey
 import com.example.ultrastarandroidtv.library.SongLibraryCache
 import com.example.ultrastarandroidtv.net.AudioLookup
 import com.example.ultrastarandroidtv.usdb.SignIn
@@ -129,27 +130,63 @@ private val LANGUAGES = listOf(
 )
 
 /**
- * USDB's page, in the order it is worth reading on a television.
+ * USDB's page, in the order it is worth reading on a television: **closest answer first, then
+ * alphabetically.**
  *
- * **Artist matches stay first.** That split is deliberate and predates this: one keyword becomes
- * two searches, and somebody who types "queen" almost always means the band rather than every song
- * with the word in its title. Sorting the whole page alphabetically would shuffle the two together
- * and bury what was asked for.
+ * It used to be one coarse split — every artist match, then everything else — which is right about
+ * the big case and blunt about the rest: somebody who types "queen" almost always means the band,
+ * but a song *called* "Queen" then ranked below every song by an artist with "queen" somewhere in
+ * their name. [relevance] grades the same instinct instead, and songs of equal standing are still
+ * filed alphabetically **past the leading article**, so a page is not three quarters of the way
+ * through T before it reaches the band anybody was looking for.
  *
- * Within each half it is alphabetical **past the leading article**, so a page of results is not
- * three quarters of the way through T before it reaches the band anybody was looking for.
+ * Ordering is per page, because pages are appended and never re-sorted — see `results` in
+ * [AddSongsScreen]. A better match on page three does not climb over page one.
  */
 internal fun orderedForDisplay(results: List<UsdbSong>, keyword: String): List<UsdbSong> {
-    val word = keyword.trim().lowercase()
+    val word = searchKey(keyword)
     val order = compareBy<UsdbSong>(
         { filingKey(it.artist).lowercase() },
         { filingKey(it.title).lowercase() },
     )
     if (word.isEmpty()) return results.sortedWith(order)
-
-    val (byArtist, rest) = results.partition { it.artist.lowercase().contains(word) }
-    return byArtist.sortedWith(order) + rest.sortedWith(order)
+    return results.sortedWith(compareBy<UsdbSong> { relevance(it, word) }.then(order))
 }
+
+/**
+ * How closely one result answers what was typed. Lower is better.
+ *
+ * Compared on the same normalised form the library search uses, so punctuation and case cannot
+ * change the ranking: "ymca" is as good a match for "Y.M.C.A." as it looks to the person who
+ * typed it.
+ *
+ * The artist wins ties at equal strength, because a bare band name is the commonest query there
+ * is — but an *exact* title still beats an artist the query merely begins.
+ */
+internal fun relevance(song: UsdbSong, needle: String): Int {
+    val tight = needle.replace(" ", "")
+    val artist = strength(searchKey(song.artist), needle, tight)
+    val title = strength(searchKey(song.title), needle, tight)
+    if (artist == NO_MATCH && title == NO_MATCH) return 6
+    // Equal strength goes to the artist; a stronger title still beats a weaker artist.
+    return if (artist <= title) artist * 2 else title * 2 + 1
+}
+
+/** Exact, prefix, contained, or not at all — 0, 1, 2, 3. */
+private fun strength(text: String, needle: String, tight: String): Int {
+    // Matched with the spaces closed up as well as with them kept, the same pair of rules the
+    // library search uses. Without it "Y.M.C.A." — which normalises to four separate letters —
+    // would rank below every song that merely has the word "ymca" somewhere in it.
+    val flat = text.replace(" ", "")
+    return when {
+        text == needle || flat == tight -> 0
+        text.startsWith(needle) || flat.startsWith(tight) -> 1
+        text.contains(needle) || flat.contains(tight) -> 2
+        else -> NO_MATCH
+    }
+}
+
+private const val NO_MATCH = 3
 
 private enum class AddMode { SignIn, Browse }
 
@@ -250,6 +287,12 @@ fun AddSongsScreen(
 
     val covers = remember { mutableStateMapOf<Int, ImageBitmap?>() }
 
+    // One player for the whole screen, reused as focus moves -- the song picker's arrangement,
+    // for the same reason: building an ExoPlayer per card would stutter the grid.
+    // Levelled: previews are mastered decades apart and run 8.6 dB apart on this library.
+    val preview = remember { previewPlayer(context) }
+    DisposableEffect(preview) { onDispose { preview.release() } }
+
     /**
      * Whether each song's music can actually be fetched, worked out **before anybody focuses it**.
      *
@@ -271,6 +314,19 @@ fun AddSongsScreen(
     LaunchedEffect(results) {
         if (results.isEmpty()) return@LaunchedEffect
         while (true) {
+            // **Nothing is checked while a sample is playing.** Measured on the television: a
+            // verdict costs a USDB page and a YouTube player response, the latter running to
+            // megabytes, and a run of them produced eight garbage collections in four seconds
+            // freeing forty to sixty megabytes of large objects apiece. That is what made previews
+            // choppy at first and clear later — later being once the sweep had run out of things
+            // to ask about. Somebody listening to a song is doing the thing this screen is for;
+            // knowing in advance whether its music can be fetched is a nicety, and the nicety
+            // waits.
+            if (preview.isPlaying) {
+                delay(AVAILABILITY_GAP_MS)
+                continue
+            }
+
             val visible = grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
             val reach = (visible + AVAILABILITY_LOOKAHEAD).coerceAtMost(results.lastIndex)
             val song = (0..reach).asSequence()
@@ -332,16 +388,16 @@ fun AddSongsScreen(
 
     BackHandler { onBack() }
 
-    // One player for the whole screen, reused as focus moves -- the song picker's arrangement,
-    // for the same reason: building an ExoPlayer per card would stutter the grid.
-    // Levelled: previews are mastered decades apart and run 8.6 dB apart on this library.
-    val preview = remember { previewPlayer(context) }
-    DisposableEffect(preview) { onDispose { preview.release() } }
     // Fetched whole and then played from memory rather than streamed -- see [playSample] for the
     // measurement and the reasoning. A sample is about half a megabyte, and this screen's network
     // is busy with covers, availability checks and quite possibly a download.
+    //
+    // **Stopped rather than paused when nothing is focused**, and `focused` genuinely becomes null
+    // now: a card reports losing the focus as well as taking it. Before, it only ever reported
+    // taking it, so walking back to the keyboard left the last sample playing — and a new search
+    // left it playing for a card that was no longer on the screen at all.
     LaunchedEffect(focused) {
-        preview.pause()
+        preview.stop()
         val sample = focused?.sampleUrl ?: return@LaunchedEffect
         delay(PREVIEW_DELAY_MS)
         val bytes = withContext(Dispatchers.IO) {
@@ -349,6 +405,9 @@ fun AddSongsScreen(
         } ?: return@LaunchedEffect
         runCatching { preview.playSample(bytes) }
     }
+
+    // Nothing in the app should still be making a noise once it is not on the screen.
+    PauseWhenBackgrounded(preview)
 
     // Signing in silently when a login is already stored. USDB's session lasts six days and now
     // outlives this screen, so after the first visit this usually does nothing at all.
@@ -401,6 +460,9 @@ fun AddSongsScreen(
             // list is never re-sorted.
             val ordered = orderedForDisplay(found.songs, words)
             results = if (first) {
+                // The card that was being previewed may not be in the new answer at all, and a
+                // removed card reports no focus change on its way out.
+                focused = null
                 ordered
             } else {
                 val already = results.mapTo(mutableSetOf()) { it.songId }
@@ -535,6 +597,10 @@ fun AddSongsScreen(
                     grid = grid,
                     modifier = Modifier.weight(2f).fillMaxHeight(),
                     onFocusSong = { focused = it },
+                    // Guarded, because focus moves card to card as "lost, then gained" and the
+                    // two arrive in that order: clearing unconditionally would throw away the
+                    // focus that has just been reported.
+                    onBlurSong = { if (focused?.songId == it.songId) focused = null },
                     onPick = { song ->
                         preview.pause()
                         problem = if (!queue.add(song)) {
@@ -660,6 +726,7 @@ private fun ResultsPanel(
     grid: LazyGridState,
     modifier: Modifier = Modifier,
     onFocusSong: (UsdbSong?) -> Unit,
+    onBlurSong: (UsdbSong) -> Unit,
     onPick: (UsdbSong) -> Unit,
 ) {
     Column(modifier = modifier) {
@@ -748,6 +815,7 @@ private fun ResultsPanel(
                     unavailable = downloadable[song.songId] == false,
                     enabled = canWrite,
                     onFocus = { onFocusSong(song) },
+                    onBlur = { onBlurSong(song) },
                     onPick = { onPick(song) },
                 )
             }
@@ -789,6 +857,7 @@ private fun ResultCard(
     unavailable: Boolean,
     enabled: Boolean,
     onFocus: () -> Unit,
+    onBlur: () -> Unit,
     onPick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -799,7 +868,7 @@ private fun ResultCard(
         enabled = enabled && !alreadyOnCard && (state == null || state is QueueStatus.Failed),
         modifier = modifier
             .fillMaxWidth()
-            .onFocusChanged { if (it.isFocused) onFocus() },
+            .onFocusChanged { if (it.isFocused) onFocus() else onBlur() },
         // Explicitly a rectangle: a TV Button is a pill by default, and a pill as tall as a card
         // is an ellipse that clips its own title away at the sides.
         shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
