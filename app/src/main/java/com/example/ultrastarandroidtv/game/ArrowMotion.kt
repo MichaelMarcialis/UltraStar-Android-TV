@@ -13,6 +13,10 @@ import kotlin.math.exp
  */
 private const val MAX_STEP_SECONDS = 0.05
 
+// Still load-bearing with the position easing at zero: the arrow's *fade* and its *lean* are
+// both eased on this same step, and a rendering hitch counted at its true length would snap the
+// lean through a whole turn in one frame.
+
 /**
  * Smooths one singer's pitch arrow: where it sits, and whether it is there at all.
  *
@@ -179,8 +183,20 @@ class ArrowMotion(
          *
          * Left uncounted it was 20 ms of the arrow being drawn to the right of the note its
          * reading actually came from, which is most of a beat in a fast song.
+         *
+         * **Now zero, and the reason is a comparison rather than a preference.** Measured off
+         * two reference clips: Karaoke Revolution on a PS2 draws its arrow 39 ms behind its sing
+         * line and Rock Band 4 draws its cursor within a few milliseconds of one, where ours was
+         * 113 ms — and 41 of those were this and the median together, spent on tidiness rather
+         * than on anything the singer needs. The easing is the cheaper of the two to give up: a
+         * median discards a wild reading outright, while easing only slows one down, so it was
+         * never the thing keeping the arrow steady.
+         *
+         * The parameter stays, and so does its test, because the argument for it was real — raw
+         * YIN on a held voice wanders. If it ever comes back it should come back as a *small*
+         * number, and [MAX_STEP_SECONDS] has to be read against whatever it becomes.
          */
-        const val POSITION_SETTLE_SECONDS: Double = 0.02
+        const val POSITION_SETTLE_SECONDS: Double = 0.0
 
         /**
          * The same for the lean, which is deliberately six times slower — see the
