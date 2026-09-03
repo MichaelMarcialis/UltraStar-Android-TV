@@ -139,21 +139,83 @@ class UsdbSearch(private val session: UsdbSession) {
             .map { onePage(it, page) }
             .reduce { merged, next -> mergePages(merged, next, page) }
 
-        // **The fallbacks only run when the answer would otherwise be nothing.** Each is another
-        // request, and USDB's search is cheap rather than free; paying for one on every query to
-        // rescue the queries that already work would be the wrong trade.
-        if (found.songs.isNotEmpty()) return found
+        // **The fallbacks run when the answer is thin, not only when it is empty**, and that
+        // distinction was found by driving the real screen rather than by reasoning. Each is
+        // another request and USDB's search is cheap rather than free, so a query that has
+        // clearly worked pays for nothing — but "tonight tonight" does match one song outright,
+        // because Hot Chelle Rae have a title with no comma in it, and a rule that fired only on
+        // *nothing at all* was satisfied by that one result and never went looking for the song
+        // anybody actually meant. A handful of hits for a phrase is the shape of a query whose
+        // real answer is spelled with punctuation somewhere.
+        if (page > 0 || found.songs.size >= RESCUE_THRESHOLD) return found
+
         val rescued = lastResorts(filter)
             .map { onePage(it, page) }
             .fold(found) { merged, next -> mergePages(merged, next, page) }
-        if (rescued.songs.isNotEmpty()) return rescued
+        if (rescued.songs.size >= RESCUE_THRESHOLD) return rescued
 
         // Everything above asks USDB to match the whole phrase against one field, and USDB
-        // matches substrings — so a phrase with any punctuation inside it can never be found.
-        // "tonight tonight" is not contained in "Tonight, Tonight", and neither half of it is
-        // contained in "The Smashing Pumpkins", so all four earlier searches came back empty for
-        // a song sitting right there. Reported from the sofa, and the comma is the whole story.
-        return if (page == 0) closeMatches(filter) ?: rescued else rescued
+        // matches substrings — so a phrase with punctuation inside it can never be found that
+        // way. "tonight tonight" is not contained in "Tonight, Tonight", and neither half of it
+        // is contained in "The Smashing Pumpkins". The comma is the whole story.
+        //
+        // The punctuated spellings first, because they are exact and cheap. Only if the site has
+        // nothing under any of them is the wider sweep worth its four requests.
+        val close = punctuated(filter) ?: closeMatches(filter) ?: return rescued
+        return merge(rescued, close)
+    }
+
+    /**
+     * The phrase as USDB might actually have spelled it, with punctuation between the words.
+     *
+     * This is the precise half of the rescue and it is what actually finds the reported song.
+     * "tonight tonight" is "Tonight, Tonight" on the site, and asking for that string is one
+     * substring match that hits it immediately — where sweeping on the word "tonight" cannot,
+     * because thousands of titles contain it and the one wanted is not in the first hundred.
+     *
+     * A separator is tried at **one gap at a time**, which is what keeps this a handful of
+     * requests rather than a combinatorial explosion: real titles punctuate one join, not all of
+     * them. Comma first because it is overwhelmingly the commonest, then a spaced hyphen.
+     */
+    private fun punctuated(filter: SongFilter): SearchPage? {
+        val phrase = filter.keyword.trim()
+        val words = phrase.split(' ').filter { it.isNotBlank() }
+        if (words.size < 2 || words.size > PUNCTUATED_MAX_WORDS) return null
+        if (filter.artist.isNotBlank() || filter.title.isNotBlank()) return null
+
+        val kept = mutableListOf<UsdbSong>()
+        val seen = mutableSetOf<Int>()
+        for (separator in PUNCTUATION) {
+            for (gap in 0 until words.size - 1) {
+                val spelling = words.mapIndexed { at, word ->
+                    if (at == gap) word + separator else word
+                }.joinToString(" ")
+                val found = onePage(filter.copy(keyword = "", title = spelling), 0)
+                for (song in found.songs) if (seen.add(song.songId)) kept += song
+            }
+            if (kept.isNotEmpty()) break
+        }
+        if (kept.isEmpty()) return null
+        return SearchPage(kept, kept.size, totalPages = 1, page = 0, narrowed = true)
+    }
+
+    /**
+     * The exact hits first, then the close matches, with nothing counted twice.
+     *
+     * Returned as one page: the sweep is bounded, so there is no more of it to ask for, and
+     * paging a list that is partly an exact search and partly a sweep would mean asking two
+     * different questions for page two.
+     */
+    private fun merge(exact: SearchPage, close: SearchPage): SearchPage {
+        val seen = mutableSetOf<Int>()
+        val songs = (exact.songs + close.songs).filter { seen.add(it.songId) }
+        return SearchPage(
+            songs = songs,
+            totalResults = songs.size,
+            totalPages = 1,
+            page = 0,
+            narrowed = true,
+        )
     }
 
     /**
@@ -208,6 +270,24 @@ class UsdbSearch(private val session: UsdbSession) {
     private fun onePage(filter: SongFilter, page: Int): SearchPage =
         parseSearchPage(session.postForm("?link=list", searchFields(filter, page)), page)
 }
+
+/**
+ * How many results the ordinary searches must find before the rescue is not worth running.
+ *
+ * Small on purpose. A phrase that USDB can match as a literal substring usually matches plenty,
+ * and a handful is the signature of a phrase whose real answer is written with a comma, a
+ * bracket or a full stop in the middle of it.
+ */
+private const val RESCUE_THRESHOLD = 5
+
+/**
+ * Separators to try between two words of a phrase. The trailing space is supplied by the join,
+ * so "," becomes "tonight, tonight" and " -" becomes "tonight - tonight".
+ */
+private val PUNCTUATION = listOf(",", " -", ":")
+
+/** Longest phrase worth spelling out with punctuation; past this it is too many requests. */
+private const val PUNCTUATED_MAX_WORDS = 4
 
 /** How many pages of a one-word search the rescue reads before giving up. */
 private const val RESCUE_PAGES = 4
