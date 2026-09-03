@@ -1,5 +1,7 @@
 package com.example.ultrastarandroidtv.usdb
 
+import com.example.ultrastarandroidtv.library.fuzzyMatches
+
 /** The site root, for turning the relative paths in its markup into fetchable URLs. */
 const val USDB_ROOT = "https://usdb.animux.de/"
 
@@ -91,6 +93,14 @@ data class SearchPage(
     val totalPages: Int,
     /** Zero-based. */
     val page: Int,
+    /**
+     * Whether these are the close matches of a rescue rather than everything USDB found.
+     *
+     * A screen has to say so, because the count means something different: not "this is how many
+     * songs there are" but "these are the ones out of a wider sweep that actually answer what you
+     * typed". See [UsdbSearch.search].
+     */
+    val narrowed: Boolean = false,
 ) {
     val hasMore: Boolean get() = page + 1 < totalPages
 }
@@ -133,14 +143,95 @@ class UsdbSearch(private val session: UsdbSession) {
         // request, and USDB's search is cheap rather than free; paying for one on every query to
         // rescue the queries that already work would be the wrong trade.
         if (found.songs.isNotEmpty()) return found
-        return lastResorts(filter)
+        val rescued = lastResorts(filter)
             .map { onePage(it, page) }
             .fold(found) { merged, next -> mergePages(merged, next, page) }
+        if (rescued.songs.isNotEmpty()) return rescued
+
+        // Everything above asks USDB to match the whole phrase against one field, and USDB
+        // matches substrings — so a phrase with any punctuation inside it can never be found.
+        // "tonight tonight" is not contained in "Tonight, Tonight", and neither half of it is
+        // contained in "The Smashing Pumpkins", so all four earlier searches came back empty for
+        // a song sitting right there. Reported from the sofa, and the comma is the whole story.
+        return if (page == 0) closeMatches(filter) ?: rescued else rescued
+    }
+
+    /**
+     * The last thing tried: search on one *word*, and judge the rest here.
+     *
+     * A word has no punctuation in it, so it survives whatever USDB's copy of the title does with
+     * commas, brackets and full stops. What comes back is then narrowed with the same matcher the
+     * song library uses, which does understand a phrase — so "tonight tonight" finds
+     * "Tonight, Tonight" and does not also show the other fifty songs with "tonight" in them.
+     *
+     * **A bounded sweep returned as a single page**, rather than paging. Narrowing a page can
+     * leave it empty, and an empty page stalls an infinite scroll with nothing on screen to
+     * scroll — the very failure this is rescuing. Four pages is a hundred and twenty songs deep,
+     * and searching is the part of USDB that is not throttled.
+     *
+     * The title is tried first and the artist only if that found nothing, so the ordinary case
+     * costs one sweep. Single-word queries are left alone: a single word is already a substring,
+     * so if USDB has not found it by now, it is not there.
+     */
+    private fun closeMatches(filter: SongFilter): SearchPage? {
+        if (filter.artist.isNotBlank() || filter.title.isNotBlank()) return null
+        val phrase = filter.keyword.trim()
+        val word = longestWord(phrase) ?: return null
+        return sweep(filter, phrase) { filter.copy(keyword = "", title = word) }
+            ?: sweep(filter, phrase) { filter.copy(keyword = "", artist = word) }
+    }
+
+    private fun sweep(
+        filter: SongFilter,
+        phrase: String,
+        narrow: () -> SongFilter,
+    ): SearchPage? {
+        val kept = mutableListOf<UsdbSong>()
+        val seen = mutableSetOf<Int>()
+        for (page in 0 until RESCUE_PAGES) {
+            val found = onePage(narrow(), page)
+            for (song in found.songs) {
+                if (seen.add(song.songId) && answersPhrase(song, phrase)) kept += song
+            }
+            if (!found.hasMore) break
+        }
+        if (kept.isEmpty()) return null
+        return SearchPage(
+            songs = kept,
+            totalResults = kept.size,
+            totalPages = 1,
+            page = 0,
+            narrowed = true,
+        )
     }
 
     private fun onePage(filter: SongFilter, page: Int): SearchPage =
         parseSearchPage(session.postForm("?link=list", searchFields(filter, page)), page)
 }
+
+/** How many pages of a one-word search the rescue reads before giving up. */
+private const val RESCUE_PAGES = 4
+
+/** Shortest word worth sweeping on. Two letters would return most of the site. */
+private const val RESCUE_MIN_WORD = 3
+
+/**
+ * The longest word in a multi-word phrase, or null when there is nothing useful to sweep on.
+ *
+ * The longest because it is the most selective: "god gave kiss" sweeps on "gave" rather than on
+ * "god", which is inside a great many titles.
+ */
+internal fun longestWord(phrase: String): String? {
+    val words = phrase.split(' ').filter { it.isNotBlank() }
+    if (words.size < 2) return null
+    val longest = words.maxByOrNull { it.length } ?: return null
+    return longest.takeIf { it.length >= RESCUE_MIN_WORD }
+}
+
+/** Whether a swept-up row actually answers the phrase somebody typed. */
+internal fun answersPhrase(song: UsdbSong, phrase: String): Boolean =
+    fuzzyMatches("${song.artist} ${song.title}", phrase) ||
+        fuzzyMatches("${song.title} ${song.artist}", phrase)
 
 /**
  * The searches one keyword becomes.

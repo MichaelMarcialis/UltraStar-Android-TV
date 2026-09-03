@@ -438,6 +438,52 @@ class UsdbSearchTest {
         assertFalse(merged.hasMore)
     }
 
+    @Test
+    fun `a phrase sweeps on its longest word`() {
+        // The most selective one: "god gave kiss" is better answered by "gave" than by "god",
+        // which is inside a great many titles.
+        assertEquals("gave", longestWord("god gave kiss"))
+        assertEquals("tonight", longestWord("tonight tonight"))
+    }
+
+    @Test
+    fun `a single word is not swept, because it is already a substring`() {
+        assertNull(longestWord("ymca"))
+        assertNull(longestWord("  gone  "))
+    }
+
+    @Test
+    fun `a phrase of very short words is left alone`() {
+        // Two letters as a title would return most of the site, which is worse than nothing.
+        assertNull(longestWord("a b"))
+    }
+
+    @Test
+    fun `the comma is what the sweep exists for`() {
+        // "tonight tonight" is a substring of no artist and of no title on USDB, because the
+        // song is filed as "Tonight, Tonight" -- so every earlier search returns nothing and the
+        // song is right there. Reported from the sofa.
+        val song = song(1).copy(artist = "The Smashing Pumpkins", title = "Tonight, Tonight")
+        assertTrue(answersPhrase(song, "tonight tonight"))
+    }
+
+    @Test
+    fun `every word somebody typed has to answer to something`() {
+        // What stops the sweep widening into "any row containing any of these letters". A song
+        // called "Tonight" is a fair close match for "tonight tonight" and is shown; one that
+        // answers only half of a two-word query is not.
+        val other = song(2).copy(artist = "Def Leppard", title = "Tonight")
+        assertTrue(answersPhrase(other, "tonight tonight"))
+        assertFalse(answersPhrase(other, "tonight pumpkins"))
+    }
+
+    @Test
+    fun `words may be given in either order`() {
+        val song = song(3).copy(artist = "KISS", title = "God Gave Rock N Roll To You")
+        assertTrue(answersPhrase(song, "god gave kiss"))
+        assertTrue(answersPhrase(song, "kiss god gave"))
+    }
+
     private fun page(songs: List<UsdbSong>, total: Int, pages: Int = 1) =
         SearchPage(songs = songs, totalResults = total, totalPages = pages, page = 0)
 

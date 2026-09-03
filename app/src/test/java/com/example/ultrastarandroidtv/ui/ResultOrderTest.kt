@@ -2,6 +2,7 @@ package com.example.ultrastarandroidtv.ui
 
 import com.example.ultrastarandroidtv.usdb.UsdbSong
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 /**
@@ -87,5 +88,19 @@ class ResultOrderTest {
             listOf("ABBA", "The Beatles"),
             orderedForDisplay(results, "").map { it.artist },
         )
+    }
+
+    @Test
+    fun `a song is yours when the card holds the same song, punctuation aside`() {
+        assertEquals(songKey("Y.M.C.A. ", "Village People"), songKey("ymca", "village people"))
+        assertEquals(songKey("a-ha", "Take On Me"), songKey("A-Ha", "TAKE ON ME"))
+    }
+
+    @Test
+    fun `a title that merely contains another is a different song`() {
+        // The rule `AlternateVersions` had to learn the hard way. "Already yours" on a song
+        // nobody owns is the one marker nobody can argue with, so it must not guess.
+        assertNotEquals(songKey("Adele", "Hello"), songKey("Adele", "Hello Again"))
+        assertNotEquals(songKey("Godsmack", "Awake"), songKey("Godsmack", "Awake (Live)"))
     }
 }

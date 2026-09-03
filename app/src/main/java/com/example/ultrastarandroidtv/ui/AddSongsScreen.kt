@@ -363,6 +363,23 @@ fun AddSongsScreen(
         (cache.songs.map { it.folderName.lowercase() } + downloads.downloaded).toSet()
     }
 
+    /**
+     * The songs on the card, by artist and title rather than by folder name.
+     *
+     * Because a folder name is not a song, and reading one as the other put "Already yours" on a
+     * Godsmack song nobody had downloaded and nobody could find in their library. A folder called
+     * `Godsmack - Awake` will refuse a download whatever is inside it — that much the downloader
+     * enforces on purpose, since two folders for one song is worse than not downloading — but
+     * saying it is *yours* is a different claim, and only this can support it.
+     *
+     * Compared on the same normalised form the search uses, so punctuation and case cannot
+     * separate a song from itself, and on equality rather than containment: "Hello" is inside
+     * "Hello Again", and the two are not the same song.
+     */
+    val ownedSongs = remember(cache.songs) {
+        cache.songs.mapTo(mutableSetOf()) { songKey(it.song.metadata.artist, it.song.metadata.title) }
+    }
+
     val first = remember { FocusRequester() }
     LaunchedEffect(mode) {
         withFrameNanos { }
@@ -472,6 +489,8 @@ fun AddSongsScreen(
             morePages = found.hasMore
             if (first) searchSeq++
             resultNote = when {
+                // A rescue sweep's count means something different -- see SearchPage.narrowed.
+                found.narrowed -> "Close matches — showing ${results.size}"
                 found.totalResults == 0 -> "Nothing on USDB matches that."
                 else -> "${found.totalResults} found — showing ${results.size}"
             }
@@ -596,6 +615,7 @@ fun AddSongsScreen(
                     canWrite = canWrite,
                     grid = grid,
                     modifier = Modifier.weight(2f).fillMaxHeight(),
+                    ownedSongs = ownedSongs,
                     onFocusSong = { focused = it },
                     // Guarded, because focus moves card to card as "lost, then gained" and the
                     // two arrive in that order: clearing unconditionally would throw away the
@@ -714,6 +734,7 @@ private fun ResultsPanel(
     results: List<UsdbSong>,
     covers: Map<Int, ImageBitmap?>,
     owned: Set<String>,
+    ownedSongs: Set<Pair<String, String>>,
     downloadable: Map<Int, Boolean>,
     queue: DownloadQueue,
     keyword: String,
@@ -810,7 +831,8 @@ private fun ResultsPanel(
                 ResultCard(
                     song = song,
                     cover = covers[song.songId],
-                    alreadyOnCard = safeFileName(song.folderName).lowercase() in owned,
+                    alreadyOnCard = songKey(song.artist, song.title) in ownedSongs,
+                    folderTaken = safeFileName(song.folderName).lowercase() in owned,
                     queued = queue.entries.firstOrNull { it.song.songId == song.songId },
                     unavailable = downloadable[song.songId] == false,
                     enabled = canWrite,
@@ -853,6 +875,15 @@ private fun ResultCard(
     song: UsdbSong,
     cover: ImageBitmap?,
     alreadyOnCard: Boolean,
+    /**
+     * Whether a folder of this name is already on the card, whatever is in it.
+     *
+     * Kept apart from [alreadyOnCard] because the two say different things and only one of them
+     * is about this song. A download would be refused either way, so both disable the card — but
+     * "Folder name taken" is a fact somebody can act on, where "Already yours" about a song they
+     * have never seen is just the app being wrong at them.
+     */
+    folderTaken: Boolean,
     queued: QueuedSong?,
     unavailable: Boolean,
     enabled: Boolean,
@@ -865,7 +896,8 @@ private fun ResultCard(
     Button(
         onClick = onPick,
         // A failed download can be tried again; anything else in the queue cannot be re-added.
-        enabled = enabled && !alreadyOnCard && (state == null || state is QueueStatus.Failed),
+        enabled = enabled && !alreadyOnCard && !folderTaken &&
+            (state == null || state is QueueStatus.Failed),
         modifier = modifier
             .fillMaxWidth()
             .onFocusChanged { if (it.isFocused) onFocus() else onBlur() },
@@ -912,6 +944,7 @@ private fun ResultCard(
                     state is QueueStatus.Failed -> state.message
                     queued != null -> shortStatusLabel(queued)
                     alreadyOnCard -> "Already yours"
+                    folderTaken -> "Folder name taken"
                     // Said before it is pressed rather than after a wait, and deliberately still
                     // pressable: this card may hold the focus, and disabling what is focused
                     // strands a remote with nowhere to go.
@@ -925,7 +958,7 @@ private fun ResultCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 color = when {
-                    alreadyOnCard -> GameTheme.noteIdle
+                    alreadyOnCard || folderTaken -> GameTheme.noteIdle
                     state is QueueStatus.Failed -> GameTheme.sparkWarm
                     state is QueueStatus.Done -> GameTheme.playerColors[0]
                     unavailable -> GameTheme.sparkWarm
@@ -1011,3 +1044,20 @@ private fun SignInPanel(
         LoadingBar()
     }
 }
+
+/**
+ * How a song on the card and a song on USDB are told to be the same song.
+ *
+ * Artist and title, normalised the way the library search normalises them and then closed up —
+ * so `a-ha` and `A-Ha` are one artist, and `Y.M.C.A.`, which normalises to four separate letters,
+ * is the same title as `YMCA`. Closing the spaces is the same trick the relevance ranking uses,
+ * and for the same reason: how a title punctuates its own letters is not a fact about which song
+ * it is.
+ *
+ * Both halves have to match **exactly**. A title that merely *contains* another is a different
+ * song — the rule `AlternateVersions` had to learn the hard way when "Hello" matched "Hello
+ * Again" — and here a wrong answer marks a song somebody does not own as already theirs, which
+ * is precisely the report this exists to fix.
+ */
+internal fun songKey(artist: String, title: String): Pair<String, String> =
+    searchKey(artist).replace(" ", "") to searchKey(title).replace(" ", "")
