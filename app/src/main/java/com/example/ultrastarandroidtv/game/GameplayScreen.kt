@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -81,6 +82,19 @@ private const val TRACE_INTERVAL_MS = 2_000L
  * still lands while everybody remembers singing it.
  */
 private const val GAIN_SETTLE_MILLIS = 260L
+
+/**
+ * How much one press of up or down moves the display lead, in seconds.
+ *
+ * Finer than the Settings screen's step, and deliberately so. The menu has to be coarse because
+ * nothing there can be judged — a value too small to see and a value being ignored look the same
+ * from a menu. Here the song is playing and the lyric is arriving at the line, so five
+ * milliseconds is a difference somebody can actually watch for.
+ */
+private const val LEAD_NUDGE_SECONDS = 0.005
+
+/** How long the display-lead readout stays up after a press. */
+private const val LEAD_NOTE_MILLIS = 1_800L
 
 /** One track on screen: a voice part, and whoever is singing it. */
 private class TrackSpec(
@@ -152,6 +166,15 @@ fun GameplayScreen(
      */
     var vocalsDone by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
+
+    /** The display-lead readout, shown for a moment after up or down is pressed. */
+    var leadNote by remember { mutableStateOf<String?>(null) }
+    var leadNoteAt by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(leadNoteAt) {
+        if (leadNoteAt == 0L) return@LaunchedEffect
+        delay(LEAD_NOTE_MILLIS)
+        if (System.currentTimeMillis() - leadNoteAt >= LEAD_NOTE_MILLIS) leadNote = null
+    }
 
     /**
      * A word of encouragement per singer, and a counter that makes each one a fresh event.
@@ -379,6 +402,29 @@ fun GameplayScreen(
                         if (session.player.isPlaying) session.pause() else session.play()
                         true
                     }
+                    // Dialling the display lead where it can actually be judged.
+                    //
+                    // This was here once, was used to find the original 40 ms, and was taken out
+                    // when gameplay was cut back to pause and back. Taking it out was a mistake
+                    // and the note left behind said so: the display lead is the one setting whose
+                    // whole purpose is matching what you *see* to what you *hear*, and a menu is
+                    // the one place that cannot be checked. It is also now the largest single
+                    // term in how far the arrow sits from the sing line, so being able to tune it
+                    // from the sofa is worth a key.
+                    //
+                    // Written straight through to the live calibration as well as to the stored
+                    // setting, because the song already running is the thing being judged.
+                    Key.DirectionUp, Key.DirectionDown -> {
+                        if (finished || vocalsDone) return@onPreviewKeyEvent false
+                        val step =
+                            if (event.key == Key.DirectionUp) LEAD_NUDGE_SECONDS
+                            else -LEAD_NUDGE_SECONDS
+                        settings.updateLead(settings.displayLeadSeconds + step)
+                        session.calibration.displayLeadSeconds = settings.displayLeadSeconds
+                        leadNote = "Display lead ${(settings.displayLeadSeconds * 1000).toInt()} ms"
+                        leadNoteAt = System.currentTimeMillis()
+                        true
+                    }
                     Key.Back -> {
                         onExit()
                         true
@@ -450,6 +496,19 @@ fun GameplayScreen(
                 onSkip = finish,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
+                    .padding(GameTheme.trackPadding),
+            )
+        }
+
+        // Only while somebody is dialling it. Takes no focus and is gone in under two seconds,
+        // because it is a readout rather than a control -- the control is the D-pad.
+        leadNote?.let { note ->
+            Text(
+                note,
+                style = MaterialTheme.typography.bodyMedium,
+                color = GameTheme.lyricIdle,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
                     .padding(GameTheme.trackPadding),
             )
         }
