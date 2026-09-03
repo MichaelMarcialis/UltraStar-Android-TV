@@ -845,6 +845,47 @@ Two things were confirmed by measurement rather than by eye: typing **"ALADIN"**
 
 **`uiautomator dump` goes stale on this app.** Several times it returned the *previous* screen's tree seconds after a transition, which reads exactly like a button that did not work. Screenshot before believing a dump — the rule already written down here for what a layout looks like turns out to apply to what screen you are even on.
 
+**Why the console games get their arrow to the sing line, measured off their own footage** (2026-09-03). Asked from the sofa: Karaoke Revolution and Rock Band put the pitch arrow right at the line and it does not feel wrong — why did ours have to sit so far left, and would moving it throw a singer's timing?
+
+Two clips were downloaded, measured frame by frame and deleted. Method as ever: find the playhead by looking for the one column that is bright down the whole lane and never moves; get scroll speed by correlating a **fixed-width** slice of the note signature between frames fifteen apart (a sliding-overlap correlation is degenerate — it always prefers the smallest shift); find the arrow by the one colour nothing else on screen has.
+
+| | window across the screen | sing line | arrow offset | in time |
+|---|---|---|---|---|
+| **Karaoke Revolution** (PS2) | 1.95 s | 14 % of width | 25 px of 1280 | **39 ms** |
+| **Rock Band 4** (console, HDMI) | 3.56 s | 22 % of width | ~3 px of 1280 | **~8 ms** |
+| **Ours, before** | 2.25 s | 30 % of width | | **113 ms** |
+
+- **Karaoke Revolution does exactly what this app does.** Its arrow is *not* at the line — the tip sits 25 px short of it, which at 2 % of the screen reads as touching. So the design was right; the number was three times too big.
+- **Rock Band's cursor really is at the line, and it draws a comet trail of recent pitch streaking off to the left** — occupying precisely the region our `judgedBand` shades. That is how they make an honest offset invisible: not by removing it, but by drawing it.
+- **They were not cleverer, they were faster.** A PS2 through composite into a CRT has no HDMI chain, no Dolby re-encode and no picture processing, so the residual was small enough to hide against the line. Rock Band calibrates the whole chain and then does not bother with the last twenty milliseconds.
+
+**Moving our arrow to the line could not throw anybody's timing**, and that is worth stating plainly because it was the reason for asking. The arrow is not a timing cue: timing comes from the notes arriving at the gold line, which is set by the audio and by `displayLeadSeconds`, and none of that changes if the arrow moves. What moving it would cost is *truthfulness* — "the arrow is inside the bar" and "this beat counted" are currently the same statement, and this library's median beat is 54 ms, so at 113 ms the arrow would be drawn over a note two beats ahead of the one it measured.
+
+**So the gap was shrunk instead of hidden: 113 ms → 77 ms**, and 41 of the 36 ms saved were things this app was doing to itself.
+
+| term | was | now | |
+|---|---|---|---|
+| analysis window centre | 21.3 | 21.3 | physics — `Yin` needs about two periods of 65 Hz |
+| **display lead** | **40.0** | **40.0** | the television; now the largest term by far |
+| median-of-3 | 21.3 | 10.7 | one hop |
+| reading age | 10.7 | 5.3 | half a hop |
+| position easing | 20.0 | **0.0** | |
+
+- **The analysis hop is halved, 1024 → 512.** Twice as many readings a second (about 94), which takes a whole hop off the median's delay and half a hop off how stale the newest reading is when a frame picks it up. It costs a second pass of `Yin` per window — the pitch work doubles, from a measured ~45 % of one core for two microphones to ~90 %, on a device with three cores idle. That is the one number here worth re-checking during a real song (`adb logcat | grep -E "Skipped|Davey"`), and if it ever needs to come down the lever is still the one recorded above: decimate before `Yin`, since a voice topping out at 1200 Hz is enormously oversampled at 48 kHz.
+- **`DEFAULT_WINDOW_SIZE`, `DEFAULT_HOP_SIZE` and `DEFAULT_SAMPLE_RATE` are named now, and that mattered more than it looks.** Three different latencies are derived from those numbers and two of them are *not* the same quantity: half the **window** is where a reading's centre sits, and the **hop** is how often one is published. Both were written out as `1024.0 / 48_000.0` — correct only by coincidence, since the two happened to be equal — so halving the hop would have silently left two of the three wrong.
+- **The position easing is off.** It was the cheaper of the two smoothers to give up: a median discards a wild reading outright where easing only slows one down, so easing was never the thing keeping the arrow steady. The parameter and its tests stay, because the argument for it was real, and a new test pins the *default* at zero — anything non-zero there is a delay and has to be added to `arrowLagSeconds` or the arrow is drawn to the right of the note it earned.
+
+**Live display-lead tuning is back on up and down during a song**, which is the third change and the one that makes the other two checkable. It was here once, it found the original 40 ms, and it was removed when gameplay was cut back to pause and back — with a note saying it was worth restoring if it ever came up again. It has: the display lead is now over half the remaining gap, it is the only term dialled by eye rather than measured, and a menu is the one place it cannot be judged. Five milliseconds a press, written through to the live calibration as well as to the stored setting, with a readout that appears for under two seconds and takes no focus.
+
+**Game mode cannot be triggered from this device, and it is not for want of an API** (measured 2026-09-03). The LG C1 switches itself into Game Optimizer when a source signals HDMI's Auto Low Latency Mode, which is exactly what Android's `preferMinimalPostProcessing` asks for — added in **API 30**, this device's level exactly. `MainActivity` now asks for it. The Shield refuses to carry it:
+
+```
+allmSupported false   gameContentTypeSupported false   minimalPostProcessingSupported false
+mAllmRequested=false  mGameContentTypeRequested=false  mRequestedMinimalPostProcessing=false
+```
+
+The framework drops the request rather than forwarding it, so nothing reaches the television. `deviceProductInfo null` in the same dump says the display HAL is not reporting EDID either — the same shape of gap as the USB audio HAL, and unreachable for the same reason. **The request is kept anyway**: it is three lines, it costs nothing, it logs the answer so the question is not asked again from scratch, and it would start working if the firmware ever gained support. The only way to get game mode on this input today is the LG's own picture-mode control, by hand, which then applies to streaming as well — so the practical answer is to dial the display lead for whichever mode the set normally sits in, which is what the up/down control is for.
+
 **Still unverified on hardware**: everything from the claim screen onwards. Reaching gameplay needs a microphone claimed by an actual voice, which cannot be driven with `input keyevent` — so the arrow, the praise, the point animation, the video crop and its fades, the stars, the high scores and the loudness normalisation have never been seen on the television by this session. The settings screen itself *is* verified there, difficulty dial included. `adb logcat -s Gameplay Loudness` reports the settings in effect — difficulty and tolerance among them — and the measured gain, once per song.
 
 **Not started:** nothing from the original roadmap. Next work is whatever testing turns up.
