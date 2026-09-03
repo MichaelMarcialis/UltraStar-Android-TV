@@ -102,6 +102,12 @@ class Downloads(private val context: Context) {
     val repairs = RepairQueue()
 
     /**
+     * Repairs already tried and found fruitless, so the same seven songs are not offered for
+     * ever. See [RepairMemory] — it is applied to the batch only, never to a song's own button.
+     */
+    val repairMemory = RepairMemory(context)
+
+    /**
      * Set while a song is being sung. Stops the *next* step of a download from starting; see the
      * class note for why it is not an abort.
      */
@@ -205,8 +211,18 @@ class Downloads(private val context: Context) {
             )
         }
         return when (outcome) {
-            is RepairOutcome.Repaired -> RepairStatus.Done(outcome.summary)
+            is RepairOutcome.Repaired -> {
+                // Something arrived, so whatever was remembered about this song is out of date.
+                repairMemory.forget(job.song.textId)
+                RepairStatus.Done(outcome.summary)
+            }
             is RepairOutcome.Failed -> {
+                // Asked, and there was nothing to be had. Worth remembering: the survey cannot
+                // tell in advance whether a better cover exists, so without this the song is
+                // counted into "Repair N songs" again on the very next look at the card.
+                if (outcome.problem == DownloadProblem.NOTHING_FETCHED) {
+                    repairMemory.rememberNothing(job.song.textId, job.plan)
+                }
                 // Only when the *music* was the thing that could not be got. A video-only
                 // repair fails with the same reason when its upload has gone -- and swapping
                 // in a different chart there would delete a song that plays perfectly well,

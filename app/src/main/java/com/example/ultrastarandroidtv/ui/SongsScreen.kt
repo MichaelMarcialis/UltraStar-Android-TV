@@ -73,6 +73,9 @@ import com.example.ultrastarandroidtv.library.matches
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+/** How many frames to keep asking for the focus while the grid composes the card. */
+private const val FOCUS_ATTEMPTS = 12
+
 private enum class SongsMode { List, Managing, Confirming }
 
 /**
@@ -136,11 +139,29 @@ fun SongsScreen(
     var selected by remember { mutableStateOf<ScannedSong?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
 
+    /**
+     * The grid's scroll, kept outside the `when` that chooses between the list and one song.
+     *
+     * It used to be remembered *inside* the list branch, so opening a song threw it away and
+     * coming back rebuilt it at the top. Reported from the sofa: inspecting the fortieth song
+     * and pressing Back put you on the first, which on a library of a hundred means finding your
+     * place again every time you look at anything.
+     */
+    val gridState = rememberLazyGridState()
+
+    /** The song to come back to, and the requester its card carries while it is on screen. */
+    var returningTo by remember { mutableStateOf<String?>(null) }
+    val returning = remember { FocusRequester() }
+
     val first = remember { FocusRequester() }
     LaunchedEffect(mode, songs, scanning) {
         withFrameNanos { }
+        // Coming back from a song, the song is where the focus belongs -- not on the header
+        // button, which would leave the cursor at the top of a grid scrolled to the middle.
+        if (mode == SongsMode.List && returningTo != null) return@LaunchedEffect
         runCatching { first.requestFocus() }
     }
+
 
     BackHandler {
         if (mode == SongsMode.List) {
@@ -225,6 +246,38 @@ fun SongsScreen(
                     ?.let { song to it }
             }
         }
+    }
+
+    /**
+     * Songs measured as wearing a thumbnail rather than artwork.
+     *
+     * Falls out of the survey above, which has already read and measured every cover — so the
+     * filter costs nothing beyond what Repair was doing anyway. It is the one filter state the
+     * scanner cannot answer on its own.
+     */
+    val softArtwork = remember(repairable) {
+        repairable.filter { it.second.needsBetterCover }.map { it.first.textId }.toSet()
+    }
+
+    // Back to the song that was being looked at: scroll to it, then focus it.
+    //
+    // Two steps and both are needed. A lazy grid does not compose what is off screen, so the
+    // card's focus requester does not exist until the scroll has brought it into view -- the
+    // same rule the song picker documents for its row, and the same wait for frames.
+    LaunchedEffect(mode, returningTo, songs) {
+        val textId = returningTo ?: return@LaunchedEffect
+        if (mode != SongsMode.List) return@LaunchedEffect
+        val at = arrange(songs, sort, filter, softArtwork).indexOfFirst { it.textId == textId }
+        if (at >= 0) {
+            gridState.scrollToItem(at)
+            repeat(FOCUS_ATTEMPTS) {
+                withFrameNanos { }
+                if (runCatching { returning.requestFocus() }.isSuccess) return@repeat
+            }
+        } else {
+            runCatching { first.requestFocus() }
+        }
+        returningTo = null
     }
 
     val picker = rememberLauncherForActivityResult(
@@ -408,7 +461,7 @@ fun SongsScreen(
                             onClick = { filter = option },
                             // A filter matching nothing is a dead end on a remote: it takes the
                             // focus, empties the screen, and leaves nowhere obvious to go back to.
-                            enabled = songs.any { matches(it, option) },
+                            enabled = songs.any { matches(it, option, softArtwork) },
                         )
                         Spacer(Modifier.width(6.dp))
                     }
@@ -417,8 +470,16 @@ fun SongsScreen(
                     // buttons across the top wrapped "Main menu" into two lines, which is exactly
                     // the fault that made UltraStar Play unusable. It also belongs here -- it is a
                     // thing to do *about* what the filters are showing.
+                    //
+                    // Two things are left out of the count, and both were reported as bugs. A
+                    // song already queued or done is held by the queue; a song whose exact
+                    // repair has been tried and came back with nothing is remembered, because
+                    // whether better artwork exists anywhere cannot be known without asking, and
+                    // asking the same fruitless question every visit is how "Repair 7 songs"
+                    // came to mean seven songs that would all fail.
                     val waiting = repairable.filterNot {
-                        downloads.repairs.holds(it.first.textId, it.second.scan)
+                        downloads.repairs.holds(it.first.textId, it.second.scan) ||
+                            downloads.repairMemory.triedInVain(it.first.textId, it.second)
                     }
                     if (waiting.isNotEmpty()) {
                         Spacer(Modifier.weight(1f))
@@ -439,13 +500,14 @@ fun SongsScreen(
 
                 Spacer(Modifier.height(14.dp))
 
-                val arranged = remember(songs, sort, filter) { arrange(songs, sort, filter) }
+                val arranged = remember(songs, sort, filter, softArtwork) {
+                    arrange(songs, sort, filter, softArtwork)
+                }
                 // Indexed from the *filtered* list, which is the one a letter jumps into.
                 // Taken from the whole library instead, a filter like "No music" left letters on
                 // the rail with nothing behind them: pressing one found no song and silently did
                 // nothing, which on a remote is indistinguishable from a broken button.
                 val letters = remember(arranged, sort) { indexLetters(arranged, sort) }
-                val gridState = rememberLazyGridState()
 
                 // Re-sorting starts at the top.
                 //
@@ -454,7 +516,9 @@ fun SongsScreen(
                 // entirely -- which reads as the app having decided to show you a random song.
                 // Arranging a library is a fresh look at it, and a fresh look starts at the
                 // beginning. Focus stays on the chip that was just pressed.
-                LaunchedEffect(sort, filter) { gridState.scrollToItem(0) }
+                LaunchedEffect(sort, filter) {
+                    if (returningTo == null) gridState.scrollToItem(0)
+                }
 
                 Row(modifier = Modifier.fillMaxSize()) {
                     LazyVerticalGrid(
@@ -470,7 +534,13 @@ fun SongsScreen(
                                 cover = covers[scanned.textId],
                                 onSelect = {
                                     selected = scanned
+                                    returningTo = scanned.textId
                                     mode = SongsMode.Managing
+                                },
+                                modifier = if (scanned.textId == returningTo) {
+                                    Modifier.focusRequester(returning)
+                                } else {
+                                    Modifier
                                 },
                             )
                         }
@@ -727,11 +797,16 @@ private fun Inventory(label: String, present: Boolean, required: Boolean) {
  * easier.
  */
 @Composable
-private fun SongCard(scanned: ScannedSong, cover: ImageBitmap?, onSelect: () -> Unit) {
+private fun SongCard(
+    scanned: ScannedSong,
+    cover: ImageBitmap?,
+    onSelect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val fault = faultWith(scanned)
     Button(
         onClick = onSelect,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         // A rectangle, said explicitly. `androidx.tv.material3.Button` is a *pill* by default,
         // which is right for a word and catastrophic for anything tall: a card came out as an
         // ellipse with its own title clipped off at the sides -- "7 Years" reading as "Years".

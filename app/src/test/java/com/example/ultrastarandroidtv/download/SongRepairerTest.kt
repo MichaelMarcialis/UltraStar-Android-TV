@@ -112,6 +112,37 @@ class SongRepairerTest {
         assertTrue(plan.needsCover)
     }
 
+    @Test
+    fun `a plan carries the size of the cover it wants to replace`() {
+        val card = FakeFolder(chart = CHART_WITH_VIDEO, sidecar = null)
+        val song = card.song(audio = "audio", video = "video", cover = "cover")
+
+        val thumbnail = repairerFor(card, coverPixels = 200).plan(song)!!
+        assertTrue(thumbnail.needsBetterCover)
+        assertEquals(200, thumbnail.coverPixels)
+
+        assertNull(
+            "artwork the rest of the library's size is not worth replacing",
+            repairerFor(card, coverPixels = 1000).plan(song),
+        )
+    }
+
+    @Test
+    fun `a signature changes when the artwork does, and not when the scan does`() {
+        // What [RepairMemory] rests on. "Asked and there was nothing better" has to survive the
+        // next reading of the card -- otherwise the same seven songs are counted into "Repair N
+        // songs" for ever -- and has to stop applying the moment a bigger picture arrives.
+        val card = FakeFolder(chart = CHART_WITH_VIDEO, sidecar = null)
+        val song = card.song(audio = "audio", video = "video", cover = "cover")
+
+        val first = repairerFor(card, coverPixels = 200).plan(song, scan = 1)!!
+        val later = repairerFor(card, coverPixels = 200).plan(song, scan = 9)!!
+        assertEquals(first.signature, later.signature)
+
+        val bigger = repairerFor(card, coverPixels = 360).plan(song, scan = 9)!!
+        assertNotEquals(first.signature, bigger.signature)
+    }
+
     // -------------------------------------------------------------------------------------
     // Doing it
     // -------------------------------------------------------------------------------------
@@ -398,12 +429,21 @@ class SongRepairerTest {
 
     // -------------------------------------------------------------------------------------
 
-    private fun repairerFor(card: FakeFolder, net: FakeNet = FakeNet()) = SongRepairer(
+    /**
+     * @param coverPixels how big this card's artwork is measured to be, on its shorter edge.
+     *   Zero stands for "not measured", which is what every test that does not care wants.
+     */
+    private fun repairerFor(
+        card: FakeFolder,
+        net: FakeNet = FakeNet(),
+        coverPixels: Int = 0,
+    ) = SongRepairer(
         youTube = YouTubeAudio(net),
         artwork = ITunesArtwork(net),
         http = net,
         tree = card,
         writer = card,
+        measureCover = { coverPixels },
     )
 
     /** One song's folder, with whatever is in it. */

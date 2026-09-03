@@ -55,6 +55,14 @@ data class RepairPlan(
     /** A full URL the chart names for its cover, when it names a fetchable one. */
     val coverUrl: String?,
     /**
+     * How many pixels the cover it already has measures on its shorter edge, or 0 for no cover.
+     *
+     * Carried so that "this was tried and there was nothing better" can be remembered against a
+     * *particular* picture — see [RepairMemory]. Artwork arriving by any other route changes this
+     * number, and the song is offered again.
+     */
+    val coverPixels: Int = 0,
+    /**
      * Which reading of the card this was worked out from — see [SongLibraryCache.generation].
      *
      * A plan describes what a song was missing *at the time of a scan*, and running it makes
@@ -65,6 +73,16 @@ data class RepairPlan(
 ) {
     val isWorthDoing: Boolean
         get() = needsAudio || needsVideo || needsCover || needsBetterCover
+
+    /**
+     * What this plan is asking for, in a form that can be compared with a later one.
+     *
+     * Deliberately not the whole plan: the scan it came from changes every time the card is read
+     * and says nothing about what is wanted. The cover's size is in it because a bigger picture
+     * arriving is exactly the thing that should make a fruitless attempt worth making again.
+     */
+    val signature: String
+        get() = "a$needsAudio v$needsVideo c$needsCover b$needsBetterCover px$coverPixels"
 }
 
 sealed interface RepairOutcome {
@@ -155,12 +173,14 @@ class SongRepairer(
         // Media can only be fetched when the folder says where it came from; artwork can be
         // fetched from the song's own name. Deciding those separately is what stops a missing
         // video id from cancelling a repair that never needed one.
+        val coverPixels = song.coverId?.let(::coverPixels) ?: 0
         val plan = RepairPlan(
             videoId = videoId,
             needsAudio = song.audioId == null && videoId != null,
             needsVideo = song.videoId == null && videoId != null,
             needsCover = song.coverId == null,
-            needsBetterCover = song.coverId != null && isThumbnail(song.coverId),
+            needsBetterCover = coverPixels in 1 until MIN_COVER_PIXELS,
+            coverPixels = coverPixels,
             coverUrl = tags.coverFile?.takeIf {
                 it.startsWith("http://", true) || it.startsWith("https://", true)
             },
@@ -170,17 +190,15 @@ class SongRepairer(
     }
 
     /**
-     * Whether what a song has for artwork is really a thumbnail.
+     * How big the artwork a song already has really is, on its shorter edge.
      *
-     * Reads the file, which is the expensive part of asking — so it is only ever asked about a song
-     * that *has* a cover, and never about one already going to be repaired for something else.
-     * A cover that will not decode is left alone: unreadable and low-resolution are different
-     * problems, and guessing between them would replace files for no reason.
+     * Reads the file, which is the expensive part of asking — so it is only ever asked about a
+     * song that *has* a cover. A cover that will not decode measures 0 and is left alone:
+     * unreadable and low-resolution are different problems, and guessing between them would
+     * replace files for no reason.
      */
-    private fun isThumbnail(coverId: String): Boolean {
-        val pixels = runCatching { measureCover(tree.readBytes(coverId)) }.getOrDefault(0)
-        return pixels in 1 until MIN_COVER_PIXELS
-    }
+    private fun coverPixels(coverId: String): Int =
+        runCatching { measureCover(tree.readBytes(coverId)) }.getOrDefault(0)
 
     /**
      * Where a song says its media came from: its own chart first, then the sidecar.

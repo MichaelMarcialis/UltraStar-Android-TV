@@ -221,4 +221,26 @@ class SongBrowsingTest {
         coverId = cover,
         backgroundId = null,
     )
+
+    @Test
+    fun `soft artwork is the one state the scanner cannot answer on its own`() {
+        val soft = song("Thumbnail", "A", audio = "a", cover = "c")
+        val sharp = song("Proper", "B", audio = "a", cover = "c")
+        val songs = listOf(soft, sharp)
+
+        // Both look complete to every other filter, which is exactly why "Repair 7 songs"
+        // appeared over a row of chips insisting nothing was missing.
+        assertEquals(2, arrange(songs, SongSort.Title, SongFilterState.Ready).size)
+        assertEquals(
+            listOf("Thumbnail"),
+            arrange(songs, SongSort.Title, SongFilterState.SoftArtwork, setOf(soft.textId))
+                .map { it.song.metadata.title },
+        )
+    }
+
+    @Test
+    fun `nothing measured means nothing is claimed to be soft`() {
+        val songs = listOf(song("A", "X", audio = "a", cover = "c"))
+        assertTrue(arrange(songs, SongSort.Title, SongFilterState.SoftArtwork).isEmpty())
+    }
 }
