@@ -7,7 +7,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -50,6 +54,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -97,6 +102,37 @@ import kotlinx.coroutines.withContext
  * lines, and the cover is the part that degrades most gracefully.
  */
 private val CARD_WIDTH = 200.dp
+
+/**
+ * Keeps whatever is focused in the middle of the row.
+ *
+ * A television has no pointer, so the focused card *is* the cursor — and a cursor that sits
+ * wherever the last scroll happened to leave it reads as the row having drifted. Compose's
+ * default is to scroll the least it can get away with, which is right for a list somebody is
+ * dragging and wrong for one somebody is stepping through: the card lands hard against whichever
+ * edge it came in from and stays there.
+ *
+ * Done through the bring-into-view spec rather than by scrolling on focus, which matters. The
+ * spec *is* the scroll the focus already asks for, so there is one movement; an extra
+ * `animateScrollToItem` on top would be a second one chasing the first, and the two are visibly
+ * different animations.
+ *
+ * [offset] is the card's leading edge measured from the viewport's, [size] is the card and
+ * [containerSize] the viewport, so the distance to travel is however far the card is from where
+ * a centred card would start.
+ */
+/** How far left of the viewport a card has to start to sit in the middle of it. */
+private fun centringOffset(viewport: Int, card: Int): Int =
+    if (viewport <= card) 0 else -((viewport - card) / 2)
+
+@OptIn(ExperimentalFoundationApi::class)
+private val CenterFocused = object : BringIntoViewSpec {
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float,
+    ): Float = offset - (containerSize - size) / 2f
+}
 
 /**
  * How long a song must stay focused before its preview starts.
@@ -158,6 +194,7 @@ private enum class PickerPane { Browse, Search, Genre, Decade }
  * Above the row: search, sort and the filters. Below it: the letters, laid out across rather than
  * down, because the songs run across and a rail down the side would point the wrong way.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SongPickerScreen(
     playerCount: Int,
@@ -201,6 +238,7 @@ fun SongPickerScreen(
     /** False until the row has been put somewhere, so the first jump starts in the middle copy. */
     var placed by remember { mutableStateOf(false) }
     val row = rememberLazyListState()
+    val cardWidthPx = with(LocalDensity.current) { CARD_WIDTH.roundToPx() }
 
     BackHandler {
         // One thing at a time, and always the innermost. Leaving the screen from inside the
@@ -347,7 +385,12 @@ fun SongPickerScreen(
         // A LazyRow does not compose what is off screen, so the card has to be brought into view
         // before it can be focused, and the focus requester it carries only exists once it has
         // been composed — hence waiting for frames rather than asking straight away.
-        row.scrollToItem(position)
+        //
+        // Landed centred, rather than at the left edge and centred afterwards. Focusing the card
+        // asks [CenterFocused] for the same place, so scrolling to the edge first would put a
+        // visible slide in front of somebody arriving at the screen. Zero before the row has been
+        // measured, which is simply the old behaviour and is corrected by the focus.
+        row.scrollToItem(position, centringOffset(row.layoutInfo.viewportSize.width, cardWidthPx))
         repeat(FOCUS_ATTEMPTS) {
             withFrameNanos { }
             if (runCatching { opening.requestFocus() }.isSuccess) return@LaunchedEffect
@@ -500,57 +543,59 @@ fun SongPickerScreen(
                     )
                 }
 
-                LazyRow(
-                    state = row,
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 56.dp),
-                    horizontalArrangement = Arrangement.spacedBy(20.dp),
-                ) {
-                    // The library, repeated. A position is not a song: several positions show the
-                    // same one, which is the whole mechanism — moving right off the last song
-                    // lands on the first because that is the next card, not because anything
-                    // caught the key press and put the row somewhere else.
-                    items(count = cardCount, key = { it }) { position ->
-                        val index = if (loops) position % cycle else position
-                        val scanned = arranged[index]
-                        SongCard(
-                            scanned = scanned,
-                            tree = tree,
-                            // Only meaningful with two people in the room: on your own, a duet is
-                            // collapsed to a single line and there is nothing to distinguish.
-                            badge = if (playerCount == 2) badgeFor(scanned) else null,
-                            record = bests[scanned.textId],
-                            onFocused = { focusedIndex = index },
-                            // Guarded, because focus moves card to card as "lost, then gained":
-                            // clearing unconditionally would throw away the one just reported.
-                            onBlurred = { if (focusedIndex == index) focusedIndex = -1 },
-                            onSelect = {
-                                val audioId = scanned.audioId ?: return@SongCard
-                                val currentTree = tree ?: return@SongCard
-                                preview.stop()
-                                onPlay(
-                                    ChosenSong(
-                                        songId = scanned.textId,
-                                        song = scanned.song,
-                                        audioUri = currentTree.uriFor(audioId).toString(),
-                                        videoUri = scanned.videoId
-                                            ?.let { currentTree.uriFor(it).toString() },
-                                    ),
-                                )
-                            },
-                            // Only a library too short to loop is caught at the ends, and then the
-                            // whole of it is on the screen anyway, so the jump is invisible.
-                            onWrap = { forward ->
-                                jumpTo(if (forward) 0 else arranged.lastIndex)
-                            },
-                            isFirst = !loops && position == 0,
-                            isLast = !loops && position == cardCount - 1,
-                            modifier = if (position == openingPosition) {
-                                Modifier.focusRequester(opening)
-                            } else {
-                                Modifier
-                            },
-                        )
+                CompositionLocalProvider(LocalBringIntoViewSpec provides CenterFocused) {
+                    LazyRow(
+                        state = row,
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 56.dp),
+                        horizontalArrangement = Arrangement.spacedBy(20.dp),
+                    ) {
+                        // The library, repeated. A position is not a song: several positions show the
+                        // same one, which is the whole mechanism — moving right off the last song
+                        // lands on the first because that is the next card, not because anything
+                        // caught the key press and put the row somewhere else.
+                        items(count = cardCount, key = { it }) { position ->
+                            val index = if (loops) position % cycle else position
+                            val scanned = arranged[index]
+                            SongCard(
+                                scanned = scanned,
+                                tree = tree,
+                                // Only meaningful with two people in the room: on your own, a duet is
+                                // collapsed to a single line and there is nothing to distinguish.
+                                badge = if (playerCount == 2) badgeFor(scanned) else null,
+                                record = bests[scanned.textId],
+                                onFocused = { focusedIndex = index },
+                                // Guarded, because focus moves card to card as "lost, then gained":
+                                // clearing unconditionally would throw away the one just reported.
+                                onBlurred = { if (focusedIndex == index) focusedIndex = -1 },
+                                onSelect = {
+                                    val audioId = scanned.audioId ?: return@SongCard
+                                    val currentTree = tree ?: return@SongCard
+                                    preview.stop()
+                                    onPlay(
+                                        ChosenSong(
+                                            songId = scanned.textId,
+                                            song = scanned.song,
+                                            audioUri = currentTree.uriFor(audioId).toString(),
+                                            videoUri = scanned.videoId
+                                                ?.let { currentTree.uriFor(it).toString() },
+                                        ),
+                                    )
+                                },
+                                // Only a library too short to loop is caught at the ends, and then the
+                                // whole of it is on the screen anyway, so the jump is invisible.
+                                onWrap = { forward ->
+                                    jumpTo(if (forward) 0 else arranged.lastIndex)
+                                },
+                                isFirst = !loops && position == 0,
+                                isLast = !loops && position == cardCount - 1,
+                                modifier = if (position == openingPosition) {
+                                    Modifier.focusRequester(opening)
+                                } else {
+                                    Modifier
+                                },
+                            )
+                        }
                     }
                 }
 
