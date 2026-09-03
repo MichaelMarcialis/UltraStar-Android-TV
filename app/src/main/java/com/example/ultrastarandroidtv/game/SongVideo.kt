@@ -96,6 +96,34 @@ private const val CROP_SAMPLE_INTERVAL_MS = 200L
 private const val CROP_DEADLINE_MS = 4_000L
 
 /**
+ * How far one sampled pixel must move before it counts as having moved at all.
+ *
+ * Deliberately tiny, because the question is not "how much motion" but "any at all". A still
+ * image decodes to the *same* frame every time, so a photograph held under the audio reads as
+ * exactly zero changed pixels; this only has to survive the odd bit of dither in the read-back.
+ */
+private const val MOTION_LEVELS = 3
+
+/** How much of the frame has to move for the picture to count as a moving picture. */
+private const val MOTION_SHARE = 0.002f
+
+/**
+ * How many readable samples "nothing moved" needs before it is a verdict rather than a guess.
+ *
+ * More than the crop needs, and that is deliberate: plenty of real music videos open on a held
+ * title card, and calling one of those a photograph would spend the whole song on the visualiser.
+ * At a fifth of a second apiece this is 2.4 s of picture — comfortably longer than a title shot
+ * and comfortably inside [CROP_DEADLINE_MS].
+ *
+ * It costs a real video nothing, because the loop stops watching the moment anything moves, which
+ * for a moving picture is the second sample. Only a still image ever pays for the whole window.
+ *
+ * Only frames that could actually be measured count towards it, so a video opening on black
+ * spends samples waiting rather than being called a photograph.
+ */
+private const val MOTION_MIN_SAMPLES = 12
+
+/**
  * How long the picture takes to arrive, and to leave.
  *
  * The fade exists to hide the measurement rather than for its own sake, so in is brisk. Out is
@@ -122,17 +150,11 @@ private const val FADE_OUT_LEAD_SECONDS = 1.2
  * and the video zoomed to nothing. Null is not a failure: it is what makes an opening fade from
  * black cost a sample rather than produce a confident wrong answer.
  */
-private fun measureLetterbox(view: TextureView): Float? {
+private fun measureLetterbox(luma: IntArray): Float? {
     val width = SAMPLE_WIDTH
     val height = SAMPLE_HEIGHT
-    val frame = runCatching { view.getBitmap(width, height) }.getOrNull() ?: return null
 
-    fun dark(x: Int, y: Int): Boolean {
-        val pixel = frame.getPixel(x, y)
-        val luma = ((pixel shr 16 and 0xFF) * 299 + (pixel shr 8 and 0xFF) * 587 +
-            (pixel and 0xFF) * 114) / 1000
-        return luma <= BAR_LUMA
-    }
+    fun dark(x: Int, y: Int): Boolean = luma[y * width + x] <= BAR_LUMA
 
     fun rowDark(y: Int) = (0 until width).count { dark(it, y) } >= width * BAR_PURITY
     fun columnDark(x: Int) = (0 until height).count { dark(x, it) } >= height * BAR_PURITY
@@ -146,8 +168,6 @@ private fun measureLetterbox(view: TextureView): Float? {
     var right = 0
     while (right < width / 2 && columnDark(width - 1 - right)) right++
 
-    frame.recycle()
-
     // A frame that is black all over is a fade, not a letterbox. Try again later.
     if (top + bottom >= height / 2 || left + right >= width / 2) return null
 
@@ -159,6 +179,38 @@ private fun measureLetterbox(view: TextureView): Float? {
     // than it looks, and a sliver of black at the edge is far more noticeable than one per cent
     // more crop.
     return if (needed <= 1.001f) 1f else (needed * CROP_MARGIN).coerceAtMost(MAX_CROP)
+}
+
+/**
+ * Reads the picture into [luma] as coarse greyscale, or false when there is no frame to read.
+ *
+ * One `getPixels` for the whole sample rather than a `getPixel` per look: the bar search asks
+ * about most pixels several times over, and the motion test wants the frame kept anyway.
+ */
+private fun readFrame(view: TextureView, pixels: IntArray, luma: IntArray): Boolean {
+    val frame = runCatching { view.getBitmap(SAMPLE_WIDTH, SAMPLE_HEIGHT) }.getOrNull()
+        ?: return false
+    frame.getPixels(pixels, 0, SAMPLE_WIDTH, 0, 0, SAMPLE_WIDTH, SAMPLE_HEIGHT)
+    frame.recycle()
+    for (i in pixels.indices) {
+        val pixel = pixels[i]
+        luma[i] = ((pixel shr 16 and 0xFF) * 299 + (pixel shr 8 and 0xFF) * 587 +
+            (pixel and 0xFF) * 114) / 1000
+    }
+    return true
+}
+
+/** Whether two readings of the picture are different pictures. */
+private fun moved(before: IntArray, after: IntArray): Boolean {
+    val needed = (before.size * MOTION_SHARE).toInt().coerceAtLeast(1)
+    var changed = 0
+    for (i in before.indices) {
+        if (abs(before[i] - after[i]) >= MOTION_LEVELS) {
+            changed++
+            if (changed >= needed) return true
+        }
+    }
+    return false
 }
 
 /**
@@ -201,6 +253,15 @@ fun SongVideo(
     isPlaying: () -> Boolean,
     /** Called if the file will not play, so something else can take the screen. */
     onFailed: () -> Unit = {},
+    /**
+     * Called when the "video" turns out to be one photograph held for the whole song.
+     *
+     * A good many uploads are exactly that -- a sleeve scan under the audio -- and a still image
+     * behind a karaoke game is worse than no image at all: it is the one background that cannot
+     * respond to the music, so it reads as a frozen video rather than as a choice. The visualiser
+     * is strictly better there, and it is already what a song with no video gets.
+     */
+    onStillImage: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (videoUri == null) return
@@ -275,7 +336,17 @@ fun SongVideo(
             // the *song* finishes the results are already over the top of it.
             val duration = player.duration
             if (duration != C.TIME_UNSET && duration > 0) {
-                ending = target >= duration / 1000.0 - FADE_OUT_LEAD_SECONDS
+                val videoSeconds = duration / 1000.0
+                ending = target >= videoSeconds - FADE_OUT_LEAD_SECONDS
+
+                // Past the end of the file there is nothing left to keep in step with, and
+                // trying to costs a seek every quarter of a second for the rest of the song:
+                // the position stops advancing at the duration while the song's does not, so
+                // the drift only ever grows and every check asks for another decoder flush.
+                if (target >= videoSeconds) {
+                    if (player.isPlaying) player.pause()
+                    continue
+                }
             }
 
             if (abs(player.currentPosition / 1000.0 - target) > MAX_DRIFT_SECONDS) {
@@ -302,15 +373,46 @@ fun SongVideo(
         // card for over two seconds before that.
         while (!isPlaying()) delay(100)
 
+        val pixels = IntArray(SAMPLE_WIDTH * SAMPLE_HEIGHT)
+        var current = IntArray(pixels.size)
+        var previous = IntArray(pixels.size)
+
         val deadline = System.currentTimeMillis() + CROP_DEADLINE_MS
         var smallest = Float.MAX_VALUE
         var taken = 0
-        while (taken < CROP_SAMPLES && System.currentTimeMillis() < deadline) {
+
+        // The same frames answer both questions, which is what makes asking the second one free.
+        var moving = false
+
+        // Two things are being waited for and they finish at different times: the crop needs
+        // its samples, and motion needs either to be seen or to have failed to appear for long
+        // enough. Whichever is outstanding keeps the loop going.
+        while (
+            (taken < CROP_SAMPLES || (!moving && taken < MOTION_MIN_SAMPLES)) &&
+            System.currentTimeMillis() < deadline
+        ) {
             delay(CROP_SAMPLE_INTERVAL_MS)
-            val measured = surface?.let(::measureLetterbox) ?: continue
+            val view = surface ?: continue
+            if (!readFrame(view, pixels, current)) continue
+            val measured = measureLetterbox(current) ?: continue
             taken++
             if (measured < smallest) smallest = measured
+            if (!moving && taken > 1 && moved(previous, current)) moving = true
+
+            val spare = previous
+            previous = current
+            current = spare
         }
+
+        // A picture that has not changed across a couple of seconds is a photograph, and the
+        // visualiser is a better background than a frozen one. Decided *before* anything is
+        // revealed, so there is no switch to see -- the screen goes from the title card to the
+        // visualiser, exactly as it does for a song with no video file at all.
+        if (!moving && taken >= MOTION_MIN_SAMPLES) {
+            onStillImage()
+            return@LaunchedEffect
+        }
+
         if (smallest != Float.MAX_VALUE) crop = smallest
         revealed = true
     }
