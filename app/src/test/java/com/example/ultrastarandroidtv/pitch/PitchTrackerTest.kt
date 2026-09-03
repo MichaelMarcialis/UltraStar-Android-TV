@@ -59,10 +59,11 @@ class PitchTrackerTest {
 
     @Test
     fun `produces one reading per hop regardless of how audio is chunked`() {
-        val windowSize = 2048
-        val hopSize = 1024
+        // Taken from the tracker's own defaults rather than written out again: the rule under
+        // test is "one reading per hop", and baking the hop in meant halving it broke a test
+        // that was never about the number.
         val samples = sine(440.0, seconds = 1.0)
-        val expected = (samples.size - windowSize) / hopSize + 1
+        val expected = (samples.size - DEFAULT_WINDOW_SIZE) / DEFAULT_HOP_SIZE + 1
 
         val inUsbChunks = feed(samples, chunkSamples = USB_CHUNK_SAMPLES)
         val inOneGo = feed(samples, chunkSamples = samples.size)
@@ -90,12 +91,13 @@ class PitchTrackerTest {
         val readings = mutableListOf<PitchReading>()
         val tone = sine(440.0, seconds = 1.0)
 
-        // Half a window in, throw it away; the reading count should drop by exactly one.
-        tracker.process(pcmBuffer(tone.copyOfRange(0, 1024)), 2048) { readings += it }
+        // Half a window in, throw it away; the count should be exactly what a clean run gives.
+        val half = DEFAULT_WINDOW_SIZE / 2
+        tracker.process(pcmBuffer(tone.copyOfRange(0, half)), half * 2) { readings += it }
         tracker.reset()
         tracker.process(pcmBuffer(tone), tone.size * 2) { readings += it }
 
-        assertEquals((tone.size - 2048) / 1024 + 1, readings.size)
+        assertEquals((tone.size - DEFAULT_WINDOW_SIZE) / DEFAULT_HOP_SIZE + 1, readings.size)
     }
 }
 

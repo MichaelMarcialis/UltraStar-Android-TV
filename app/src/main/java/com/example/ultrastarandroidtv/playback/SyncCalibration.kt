@@ -1,5 +1,8 @@
 package com.example.ultrastarandroidtv.playback
 
+import com.example.ultrastarandroidtv.pitch.DEFAULT_SAMPLE_RATE
+import com.example.ultrastarandroidtv.pitch.DEFAULT_WINDOW_SIZE
+
 /**
  * How far behind the player's clock the singer's captured voice runs.
  *
@@ -87,7 +90,15 @@ class SyncCalibration(
          * centre of the window a reading describes. The one part of the round trip that is
          * calculated rather than measured.
          */
-        const val CAPTURE_LATENCY_SECONDS: Double = 1024.0 / 48_000.0
+        /**
+         * **Half the analysis window, not the hop.** It says where a reading's *centre* sits
+         * relative to the audio's end, which is a property of the window alone — so it does not
+         * move when the hop does. Written as a literal it was indistinguishable from the two
+         * hop-derived latencies in `GameSession`, and halving the hop would have looked like it
+         * ought to change this too.
+         */
+        const val CAPTURE_LATENCY_SECONDS: Double =
+            DEFAULT_WINDOW_SIZE / 2.0 / DEFAULT_SAMPLE_RATE
 
         /**
          * Measured on the Shield into the LG OLED: 127 ms, from four calibration runs whose
