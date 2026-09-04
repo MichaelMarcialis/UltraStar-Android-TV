@@ -191,6 +191,21 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
             format = { "%d%%".format((it * 100).roundToInt()) },
             onChange = { settings.updateDuetMicSensitivity(it.toFloat()) },
         )
+
+        SettingRow(
+            label = "Low-latency picture",
+            explanation = "Drives the television at 120 Hz while this app is open, which is the " +
+                "only way this device has of asking it to hurry: most of a television's delay " +
+                "is motion smoothing, and there is nothing to smooth at 120 Hz. Worth 8 ms on " +
+                "the Shield's side alone, measured, and probably far more on the set. The cost " +
+                "is a second or two of black screen as the app opens and closes. Turn it off " +
+                "and dial the display lead again to see what it was buying.",
+            value = if (settings.lowLatencyVideo) 1.0 else 0.0,
+            range = 0.0..1.0,
+            step = 1.0,
+            format = { if (it >= 0.5) "On" else "Off" },
+            onChange = { settings.updateLowLatencyVideo(it >= 0.5) },
+        )
         }
     }
 }

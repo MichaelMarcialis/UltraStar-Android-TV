@@ -877,7 +877,7 @@ Two clips were downloaded, measured frame by frame and deleted. Method as ever: 
 
 **Live display-lead tuning is back on up and down during a song**, which is the third change and the one that makes the other two checkable. It was here once, it found the original 40 ms, and it was removed when gameplay was cut back to pause and back — with a note saying it was worth restoring if it ever came up again. It has: the display lead is now over half the remaining gap, it is the only term dialled by eye rather than measured, and a menu is the one place it cannot be judged. Five milliseconds a press, written through to the live calibration as well as to the stored setting, with a readout that appears for under two seconds and takes no focus.
 
-**Game mode cannot be triggered from this device, and it is not for want of an API** (measured 2026-09-03). The LG C1 switches itself into Game Optimizer when a source signals HDMI's Auto Low Latency Mode, which is exactly what Android's `preferMinimalPostProcessing` asks for — added in **API 30**, this device's level exactly. `MainActivity` now asks for it. The Shield refuses to carry it:
+**Game mode cannot be triggered *by ALLM* from this device, and it is not for want of an API** (superseded in part by the section below, which finds a route that does work) (measured 2026-09-03). The LG C1 switches itself into Game Optimizer when a source signals HDMI's Auto Low Latency Mode, which is exactly what Android's `preferMinimalPostProcessing` asks for — added in **API 30**, this device's level exactly. `MainActivity` now asks for it. The Shield refuses to carry it:
 
 ```
 allmSupported false   gameContentTypeSupported false   minimalPostProcessingSupported false
@@ -885,6 +885,30 @@ mAllmRequested=false  mGameContentTypeRequested=false  mRequestedMinimalPostProc
 ```
 
 The framework drops the request rather than forwarding it, so nothing reaches the television. `deviceProductInfo null` in the same dump says the display HAL is not reporting EDID either — the same shape of gap as the USB audio HAL, and unreachable for the same reason. **The request is kept anyway**: it is three lines, it costs nothing, it logs the answer so the question is not asked again from scratch, and it would start working if the firmware ever gained support. The only way to get game mode on this input today is the LG's own picture-mode control, by hand, which then applies to streaming as well — so the practical answer is to dial the display lead for whichever mode the set normally sits in, which is what the up/down control is for.
+
+**Game mode on the television: three routes, one of them works** (2026-09-03). The first answer here was "the Shield cannot signal ALLM, so nothing can be done", and that was true about ALLM and wrong about the question. Pushed on it, and there are three ways in.
+
+**1. ALLM — dead, and not only because of the Shield.** `preferMinimalPostProcessing` is asked for and dropped: `allmSupported false`, `gameContentTypeSupported false`, `minimalPostProcessingSupported false`, and `mRequestedMinimalPostProcessing=false` even after the request. `deviceProductInfo null` in the same dump says the display HAL is not parsing EDID either. **And the Shield is not plugged into the television**: its CEC physical address is `0x2200`, two levels down, through a **Denon AVR-S760H**. So even a Shield that could signal ALLM would need the AVR to pass it, which on that model is the 8K input only.
+
+**2. CEC — closed.** `IHdmiControlService` is running and `mHdmiControlEnabled: true`, but `HdmiControlManager` is a `@SystemApi` behind a signature permission, and `cmd hdmi_control` answers *"No shell command implementation"*. There is no route for an ordinary app, and none for adb either. There is also no standard CEC message for a picture mode; LG's is vendor traffic.
+
+**3. The output mode — this one works, and it is now shipped** (`ui/LowLatencyVideo.kt`, a setting, default on).
+
+The insight is that the expensive half of a television's processing is motion interpolation, and **interpolation has nothing to do at 120 Hz** — there is no gap between frames to invent one for — so a set fed 120 Hz skips the slowest thing it does even outside game mode. `preferredDisplayModeId` is settable by an ordinary app, and the Shield offers exactly one mode above 60 Hz: 1920x1080 at 120, because its HDMI is 2.0b and 4K stops at 60.
+
+Measured, same build, the setting toggled between runs:
+
+| | output mode | Shield's own presentation deadline | CPU, 30 focus moves |
+|---|---|---|---|
+| off | 129 — 3840x2160 @ 59.94 | 17.58 ms | 225 ticks |
+| **on** | 121 — 1920x1080 @ 120 | **9.23 ms** | 232 ticks |
+
+- **8.35 ms is banked before the television is involved at all**, and it survived the AVR: `mActiveModeId=121` with the Denon in the path.
+- **The picture costs nothing.** Android already composites this whole app at 1920x1080 and upscales on the way out — `mOverrideDisplayInfo` says `real 1920 x 1080` — so all that changes is which box does the upscale, and the C1's scaler is not worse than the Shield's. Nothing on the card is above 1080p either.
+- **CPU is +3 % on a menu**, which is nothing. It will not be nothing during a song: gameplay is driven by `withFrameNanos`, so the frame loop and the whole track redraw run 120 times a second instead of 60. That is the reason the setting can be turned off, and the reason to watch `Skipped`/`Davey` during a real song.
+- **How much the *television* saves is not measurable from in here, and it is now measurable from the sofa.** Dial the display lead on the D-pad during a song with this on and again with it off; the difference between the two numbers is what the set was spending on processing. If it lands anywhere near 12 ms the arrow's gap drops to about 49 ms, which is inside Karaoke Revolution's.
+
+**The direct answer is still available and needs one thing from the house: the television is not on the network.** An SSDP sweep found four Shields, two Synology boxes and a Denon, and no LG at all; ports 3000 and 3001 are closed everywhere on the subnet. A networked webOS set takes commands over its SSAP WebSocket — it is what Home Assistant and `bscpylgtv` drive — and a picture-mode change is one of them. That would be the real thing asked for: the app switches the C1 into Game Optimizer as it opens and puts it back as it closes, automatically, after a single pairing prompt accepted once on the television. It is not built, because it cannot be tested against a television that is not there, and the exact settings endpoint on webOS 6 is the part worth verifying rather than assuming.
 
 **Still unverified on hardware**: everything from the claim screen onwards. Reaching gameplay needs a microphone claimed by an actual voice, which cannot be driven with `input keyevent` — so the arrow, the praise, the point animation, the video crop and its fades, the stars, the high scores and the loudness normalisation have never been seen on the television by this session. The settings screen itself *is* verified there, difficulty dial included. `adb logcat -s Gameplay Loudness` reports the settings in effect — difficulty and tolerance among them — and the measured gain, once per song.
 

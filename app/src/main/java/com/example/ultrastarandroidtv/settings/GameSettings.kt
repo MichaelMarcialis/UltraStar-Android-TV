@@ -15,6 +15,7 @@ private const val KEY_WINDOW = "window_seconds"
 private const val KEY_MIC_SOLO = "mic_threshold_solo"
 private const val KEY_MIC_DUET = "mic_threshold_duet"
 private const val KEY_DIFFICULTY = "difficulty"
+private const val KEY_LOW_LATENCY = "low_latency_video"
 
 /** Bounds for the sliders, and the reason each one has the range it does. */
 object SettingsRange {
@@ -96,6 +97,18 @@ class GameSettings(context: Context) {
     var difficulty by mutableStateOf(Difficulty.byName(prefs.getString(KEY_DIFFICULTY, null)))
         private set
 
+    /**
+     * Whether to drive the television at its highest refresh rate while the app is open.
+     *
+     * On by default: it is the only lever this device has on the *television's* share of the
+     * lag, since the Shield cannot signal Auto Low Latency Mode — see [PreferLowLatencyVideo],
+     * which is also where the 8.35 ms measured on the Shield's own side is recorded. Off is
+     * offered because the mode change makes the HDMI link renegotiate, which is a second or two
+     * of black at each end of a session.
+     */
+    var lowLatencyVideo by mutableStateOf(prefs.getBoolean(KEY_LOW_LATENCY, true))
+        private set
+
     /** The gate that applies to a game with [playerCount] singers in it. */
     fun micThresholdFor(playerCount: Int): Float =
         if (playerCount >= 2) duetMicThreshold else soloMicThreshold
@@ -108,6 +121,11 @@ class GameSettings(context: Context) {
     fun updateWindow(seconds: Double) {
         windowSeconds = seconds.coerceIn(SettingsRange.window)
         prefs.edit().putFloat(KEY_WINDOW, windowSeconds.toFloat()).apply()
+    }
+
+    fun updateLowLatencyVideo(value: Boolean) {
+        lowLatencyVideo = value
+        prefs.edit().putBoolean(KEY_LOW_LATENCY, value).apply()
     }
 
     fun updateDifficulty(value: Difficulty) {

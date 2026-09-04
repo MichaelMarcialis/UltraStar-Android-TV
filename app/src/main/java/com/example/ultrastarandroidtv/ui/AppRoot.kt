@@ -49,6 +49,11 @@ private enum class Screen {
 fun AppRoot() {
     val context = LocalContext.current
     val settings = remember { GameSettings(context) }
+
+    // Applied here rather than in MainActivity so that turning it off in Settings takes effect
+    // on the spot -- the blink as the link renegotiates is itself the confirmation that it did
+    // something, which is the one bit of feedback this setting can give from inside the app.
+    PreferLowLatencyVideo(settings.lowLatencyVideo)
     val profiles = remember { Profiles(context) }
 
     // Scanned once and kept for the session. Reading a fifty-song card over SAF takes seconds,
