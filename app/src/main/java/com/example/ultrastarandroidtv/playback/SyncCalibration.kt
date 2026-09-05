@@ -67,8 +67,8 @@ class SyncCalibration(
      * they are in game mode. Left uncorrected it shows up exactly as reported from the sofa: the
      * lyric is sung a moment before it reaches the line.
      *
-     * Tunable live from the gameplay screen, because the only instrument that can measure it is
-     * a person watching the TV and listening to the song at the same time.
+     * Dialled from the Settings screen, because the only instrument that can measure it is a
+     * person watching the TV and listening to the song at the same time.
      */
     @Volatile
     var displayLeadSeconds: Double = DEFAULT_DISPLAY_LEAD_SECONDS
@@ -112,14 +112,20 @@ class SyncCalibration(
         const val DEFAULT_LATENCY_SECONDS: Double = 0.127
 
         /**
-         * Dialled in on the sofa at 40 ms: raised live until the lyric met the sing line at the
-         * moment it was sung.
+         * Zero, and arrived at the same way the 40 ms it replaces was: by playing songs.
          *
-         * Judged by eye and ear rather than measured by the app, so it is less precise than the
-         * 127 ms above — but it is a real observation on the real TV, which beats the zero it
-         * replaced. Roughly two frames' worth, which is about what a display pipeline plus a
-         * TV's own processing costs. Re-check it if the TV or its picture mode changes.
+         * It sat at 40 ms from an evening of dialling it up until the lyric met the sing line as
+         * it was sung. Two things have happened since that make zero the better answer, and the
+         * user's own verdict from the sofa after more play is that it feels better: the app is
+         * driven at 120 Hz while it is open (`ui/LowLatencyVideo.kt`), which takes 8.35 ms off
+         * the Shield's own presentation deadline and skips the television's motion interpolation
+         * with it, and the arrow's other latency terms were re-measured and shrunk.
+         *
+         * Still a real setting with a real range, because it describes the *television* rather
+         * than this app — a different set, or this one in a different picture mode, will want a
+         * different number. It is judged by eye and ear, which is why it is a dial rather than a
+         * constant.
          */
-        const val DEFAULT_DISPLAY_LEAD_SECONDS: Double = 0.040
+        const val DEFAULT_DISPLAY_LEAD_SECONDS: Double = 0.0
     }
 }

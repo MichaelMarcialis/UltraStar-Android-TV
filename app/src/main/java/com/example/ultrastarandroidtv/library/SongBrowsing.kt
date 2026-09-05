@@ -20,21 +20,6 @@ enum class SongFilterState(val label: String) {
     MissingMusic("No music"),
     MissingVideo("No video"),
     MissingArtwork("No artwork"),
-
-    /**
-     * Songs wearing a thumbnail where artwork should be.
-     *
-     * The odd one out, and it earns its place by answering a real question. Repair counts these
-     * songs — a 200-pixel cover on a 4K television is worse than it needs to be — but every
-     * filter above says such a song is complete, so "Repair 7 songs" appeared over a row of
-     * chips insisting nothing was missing. Reported from the sofa as exactly that. A count
-     * nobody can see the contents of is a count nobody can trust.
-     *
-     * It is the only state here the scanner does not already know: it needs the cover measured,
-     * which is a read and a decode per song. The survey the Repair button already runs is where
-     * that happens, so this filter is passed in rather than worked out — see [arrange].
-     */
-    SoftArtwork("Soft artwork"),
 }
 
 /**
@@ -99,21 +84,17 @@ fun songOrder(sort: SongSort): Comparator<ScannedSong> = compareBy(
 /**
  * Whether a song belongs under [filter].
  *
- * [softArtwork] is the set of songs measured as wearing a thumbnail, which is the one thing here
- * that cannot be read off a [ScannedSong]. Empty is a truthful default: with nothing measured yet,
- * nothing is claimed to be soft.
+ * Every state here is one the scanner already knows from walking the folder, which is what keeps
+ * filtering free. A "soft artwork" state briefly lived here as well and was removed with the
+ * repair it went with: it needed every cover read and decoded, and any artwork now counts as
+ * artwork.
  */
-fun matches(
-    song: ScannedSong,
-    filter: SongFilterState,
-    softArtwork: Set<String> = emptySet(),
-): Boolean = when (filter) {
+fun matches(song: ScannedSong, filter: SongFilterState): Boolean = when (filter) {
     SongFilterState.All -> true
     SongFilterState.Ready -> song.isPlayable
     SongFilterState.MissingMusic -> song.audioId == null
     SongFilterState.MissingVideo -> song.videoId == null
     SongFilterState.MissingArtwork -> song.coverId == null
-    SongFilterState.SoftArtwork -> song.textId in softArtwork
 }
 
 /**
@@ -127,9 +108,8 @@ fun arrange(
     songs: List<ScannedSong>,
     sort: SongSort,
     filter: SongFilterState,
-    softArtwork: Set<String> = emptySet(),
 ): List<ScannedSong> = songs
-    .filter { matches(it, filter, softArtwork) }
+    .filter { matches(it, filter) }
     .sortedWith(songOrder(sort))
 
 /**

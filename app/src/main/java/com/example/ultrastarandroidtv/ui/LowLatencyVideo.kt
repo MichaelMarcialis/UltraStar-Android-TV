@@ -35,15 +35,43 @@ import androidx.compose.ui.platform.LocalContext
  * box does the upscale — and the C1's scaler is not worse than the Shield's. No video on the card
  * is above 1080p either.
  *
- * ## Why it is a setting, and why it defaults on
+ * ## And then it was measured during a song, and it is a net loss
  *
- * On, because the whole point is that a manual picture-mode switch on the television is a thing
- * anybody would stop doing by the second evening. Off, available, because changing the output
- * mode makes the link renegotiate — a second or two of black at launch and again on the way out,
- * longer through an AVR — and because how much the television really saves cannot be measured
- * from in here. That last part is now answerable from the sofa: dial the display lead on the
- * D-pad during a song with this on and with it off, and the difference between the two numbers is
- * what the television was spending.
+ * Reported from the sofa the evening after it shipped: the music video looked choppy. Measured on
+ * the television, same build, same song, the setting the only difference — 50 s of *Thriller*
+ * from `dumpsys gfxinfo`:
+ *
+ * | | frames | janky | frame p50 | GPU p50 |
+ * |---|---|---|---|---|
+ * | off (2160p60) | 2882 | **2 (0.07 %)** | **5 ms** | **2 ms** |
+ * | on (1080p120) | 2877 | 2866 (99.6 %) | 31 ms | 16 ms |
+ *
+ * The same again with the visualiser instead of a video — 99.6 % janky, GPU 15 ms — so it is the
+ * mode rather than anything about decoding a picture.
+ *
+ * **What is *not* happening is dropped frames.** `framestats` says the app is asked for a frame
+ * every **16.67 ms** at 120 Hz, 119 times out of 119, and delivers each one — Android is running
+ * the app at 60 fps and showing each frame for two display refreshes. The cadence is perfectly
+ * regular.
+ *
+ * What *is* happening is a pipeline two frames deeper. A frame finishes **31 ms** after the vsync
+ * it was drawn for against **5 ms** with the setting off, and the wait is in the render thread
+ * between queueing a frame and starting the next — buffer back-pressure. So the mode **costs
+ * about 25 ms of display latency to save the 8.35 ms of presentation deadline it was adopted
+ * for**, which inverts the entire argument for it.
+ *
+ * It also explains the report exactly. The notes are drawn on the app's own steady 60 fps and
+ * look the same either way; the *video* is not, because ExoPlayer snaps each decoded frame to a
+ * display vsync — an 8.33 ms grid at 120 Hz — while the app samples the texture on its own
+ * 16.67 ms one. A 24 fps video then lands on a wandering 2-or-3-frame cadence instead of a
+ * steady one, which is what choppy looks like.
+ *
+ * ## So it defaults off
+ *
+ * Kept as a setting rather than deleted, because the measurement is about this chain — a Shield
+ * through a Denon AVR into a C1 — and the code that makes it repeatable is worth more than the
+ * dozen lines it costs. Turn it on and time a song if the television or the amplifier ever
+ * changes. Nothing else in the app reads it.
  */
 @Composable
 fun PreferLowLatencyVideo(enabled: Boolean) {

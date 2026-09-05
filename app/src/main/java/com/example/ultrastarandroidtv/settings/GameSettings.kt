@@ -16,6 +16,7 @@ private const val KEY_MIC_SOLO = "mic_threshold_solo"
 private const val KEY_MIC_DUET = "mic_threshold_duet"
 private const val KEY_DIFFICULTY = "difficulty"
 private const val KEY_LOW_LATENCY = "low_latency_video"
+private const val KEY_FILL_SCREEN = "fill_screen_video"
 
 /** Bounds for the sliders, and the reason each one has the range it does. */
 object SettingsRange {
@@ -100,13 +101,31 @@ class GameSettings(context: Context) {
     /**
      * Whether to drive the television at its highest refresh rate while the app is open.
      *
-     * On by default: it is the only lever this device has on the *television's* share of the
-     * lag, since the Shield cannot signal Auto Low Latency Mode — see [PreferLowLatencyVideo],
-     * which is also where the 8.35 ms measured on the Shield's own side is recorded. Off is
-     * offered because the mode change makes the HDMI link renegotiate, which is a second or two
-     * of black at each end of a session.
+     * **Off by default, having been on for two days.** It was the only lever this device has on
+     * the television's own share of the lag, since the Shield cannot signal Auto Low Latency
+     * Mode — and measured during an actual song it costs about 25 ms of display latency to save
+     * the 8.35 ms it buys, and makes a music video judder into the bargain. `ui/LowLatencyVideo.kt`
+     * carries the numbers. Kept as a setting so the measurement can be repeated if the
+     * television or the amplifier between them ever changes.
      */
-    var lowLatencyVideo by mutableStateOf(prefs.getBoolean(KEY_LOW_LATENCY, true))
+    var lowLatencyVideo by mutableStateOf(prefs.getBoolean(KEY_LOW_LATENCY, false))
+        private set
+
+    /**
+     * Whether a song's video fills the screen, cropping what will not fit.
+     *
+     * On by default, because it is what makes a background look like a background: most of the
+     * videos in this library are 4:3 standard-definition rips and about half carry black bars
+     * baked into the frame on top of that, so shown whole they are a small picture in a large
+     * black surround. Filling the screen and measuring away the baked-in bars is the difference
+     * between a video behind the song and a video sitting in a box.
+     *
+     * Off is offered because it is a taste, not a fact: cropping does throw away the top and
+     * bottom (or the sides) of somebody else's framing, and a person who would rather see the
+     * whole picture is not wrong. Off shows the video whole, letterboxed against black, at its
+     * own aspect ratio.
+     */
+    var fillScreenVideo by mutableStateOf(prefs.getBoolean(KEY_FILL_SCREEN, true))
         private set
 
     /** The gate that applies to a game with [playerCount] singers in it. */
@@ -126,6 +145,11 @@ class GameSettings(context: Context) {
     fun updateLowLatencyVideo(value: Boolean) {
         lowLatencyVideo = value
         prefs.edit().putBoolean(KEY_LOW_LATENCY, value).apply()
+    }
+
+    fun updateFillScreenVideo(value: Boolean) {
+        fillScreenVideo = value
+        prefs.edit().putBoolean(KEY_FILL_SCREEN, value).apply()
     }
 
     fun updateDifficulty(value: Difficulty) {

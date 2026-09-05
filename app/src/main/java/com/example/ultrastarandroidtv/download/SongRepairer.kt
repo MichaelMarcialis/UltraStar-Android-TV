@@ -19,16 +19,6 @@ import com.example.ultrastarandroidtv.usdb.UsdbSidecar
 import com.example.ultrastarandroidtv.usdb.metaTagsFrom
 import com.example.ultrastarandroidtv.usdb.readUsdbSidecar
 
-/**
- * How few pixels a cover may have before it is worth fetching a better one.
- *
- * USDB serves exactly one cover per song and it is genuinely **200x200** — fine as a row icon,
- * visibly soft as a card on a 4K television, and softer than the rest of a library whose covers the
- * desktop tool fetched at 1000x1000. Anything at or below this is a thumbnail standing in for
- * artwork; the threshold sits well above 200 and well below 1000 so neither case is ambiguous.
- */
-const val MIN_COVER_PIXELS = 400
-
 /** What a song on the card is missing, and where the missing part can be got from. */
 data class RepairPlan(
     /**
@@ -43,25 +33,20 @@ data class RepairPlan(
     val videoId: String?,
     val needsAudio: Boolean,
     val needsVideo: Boolean,
-    val needsCover: Boolean,
     /**
-     * Whether the cover it has is a thumbnail rather than artwork.
+     * Whether the song has no artwork at all.
      *
-     * Separate from [needsCover] because the two are different acts on the card: one writes a file
-     * that is not there, the other *replaces* one that is. Keeping them apart is also what lets a
-     * replacement be refused when what came back is no better than what is already there.
+     * A cover a song already has is left alone whatever size it is. Repair used to measure them
+     * and offer to replace anything under 400 pixels on its shorter edge — real enough, since
+     * USDB's own covers are 200x200 and visibly soft on a 4K set — and it is gone on the user's
+     * call after an evening of living with it. It put "Repair 7 songs" on screen for seven songs
+     * nobody could see anything wrong with, every one of which then failed because there was
+     * nothing better to be had. Any artwork is now good artwork: a simpler promise, and one the
+     * app can actually keep.
      */
-    val needsBetterCover: Boolean,
+    val needsCover: Boolean,
     /** A full URL the chart names for its cover, when it names a fetchable one. */
     val coverUrl: String?,
-    /**
-     * How many pixels the cover it already has measures on its shorter edge, or 0 for no cover.
-     *
-     * Carried so that "this was tried and there was nothing better" can be remembered against a
-     * *particular* picture — see [RepairMemory]. Artwork arriving by any other route changes this
-     * number, and the song is offered again.
-     */
-    val coverPixels: Int = 0,
     /**
      * Which reading of the card this was worked out from — see [SongLibraryCache.generation].
      *
@@ -72,17 +57,17 @@ data class RepairPlan(
     val scan: Int = 0,
 ) {
     val isWorthDoing: Boolean
-        get() = needsAudio || needsVideo || needsCover || needsBetterCover
+        get() = needsAudio || needsVideo || needsCover
 
     /**
      * What this plan is asking for, in a form that can be compared with a later one.
      *
      * Deliberately not the whole plan: the scan it came from changes every time the card is read
-     * and says nothing about what is wanted. The cover's size is in it because a bigger picture
-     * arriving is exactly the thing that should make a fruitless attempt worth making again.
+     * and says nothing about what is wanted, so a plan already tried in vain would otherwise look
+     * like a new one on the very next reading of the card.
      */
     val signature: String
-        get() = "a$needsAudio v$needsVideo c$needsCover b$needsBetterCover px$coverPixels"
+        get() = "a$needsAudio v$needsVideo c$needsCover"
 }
 
 sealed interface RepairOutcome {
@@ -149,14 +134,6 @@ class SongRepairer(
     private val http: Http,
     private val tree: DocumentTree,
     private val writer: DocumentWriter,
-    /**
-     * How many pixels a cover has on its shorter edge.
-     *
-     * Injected because measuring an image needs Android's `BitmapFactory`, and everything else in
-     * this class is ordinary logic that can be tested without a device. The rule — *is this a
-     * thumbnail* — is the part worth pinning, not the decoder.
-     */
-    private val measureCover: (ByteArray) -> Int = { 0 },
 ) {
 
     /**
@@ -173,14 +150,11 @@ class SongRepairer(
         // Media can only be fetched when the folder says where it came from; artwork can be
         // fetched from the song's own name. Deciding those separately is what stops a missing
         // video id from cancelling a repair that never needed one.
-        val coverPixels = song.coverId?.let(::coverPixels) ?: 0
         val plan = RepairPlan(
             videoId = videoId,
             needsAudio = song.audioId == null && videoId != null,
             needsVideo = song.videoId == null && videoId != null,
             needsCover = song.coverId == null,
-            needsBetterCover = coverPixels in 1 until MIN_COVER_PIXELS,
-            coverPixels = coverPixels,
             coverUrl = tags.coverFile?.takeIf {
                 it.startsWith("http://", true) || it.startsWith("https://", true)
             },
@@ -188,17 +162,6 @@ class SongRepairer(
         )
         return plan.takeIf { it.isWorthDoing }
     }
-
-    /**
-     * How big the artwork a song already has really is, on its shorter edge.
-     *
-     * Reads the file, which is the expensive part of asking — so it is only ever asked about a
-     * song that *has* a cover. A cover that will not decode measures 0 and is left alone:
-     * unreadable and low-resolution are different problems, and guessing between them would
-     * replace files for no reason.
-     */
-    private fun coverPixels(coverId: String): Int =
-        runCatching { measureCover(tree.readBytes(coverId)) }.getOrDefault(0)
 
     /**
      * Where a song says its media came from: its own chart first, then the sidecar.
@@ -318,30 +281,24 @@ class SongRepairer(
             gotAudio = true
         }
 
-        if (plan.needsCover || plan.needsBetterCover) {
+        // Only ever artwork that is *not* there. Nothing here replaces a cover a song already
+        // has, so there is no name clash to resolve and no original that can be lost.
+        if (plan.needsCover) {
             onStage(RepairStage.Artwork)
             val bytes = coverBytes(song, plan)
-            val existing = song.coverId
-            gotCover = when {
-                bytes == null -> false
-                // Replacing artwork that is already there, in place. Writing it under a new name
-                // would leave both on the card and the Storage Access Framework would suffix the
-                // second, so the song would keep pointing at the thumbnail it already had.
-                existing != null -> replaceCover(existing, bytes)
-                else -> {
-                    val name = "$base [CO].jpg"
-                    val coverId = writer.writeFile(song.folderId, name, "image/jpeg", bytes)
-                    val pointed = coverId != null && repointChart(
-                        song,
-                        audioFile = null,
-                        coverFile = tree.list(song.folderId)
-                            .firstOrNull { it.id == coverId }?.name ?: name,
-                    )
-                    // Same rule as the music: a picture the chart does not name is litter, and
-                    // retrying would add another beside it rather than replacing it.
-                    if (!pointed && coverId != null) writer.delete(coverId)
-                    pointed
-                }
+            gotCover = if (bytes == null) false else {
+                val name = "$base [CO].jpg"
+                val coverId = writer.writeFile(song.folderId, name, "image/jpeg", bytes)
+                val pointed = coverId != null && repointChart(
+                    song,
+                    audioFile = null,
+                    coverFile = tree.list(song.folderId)
+                        .firstOrNull { it.id == coverId }?.name ?: name,
+                )
+                // Same rule as the music: a picture the chart does not name is litter, and
+                // retrying would add another beside it rather than replacing it.
+                if (!pointed && coverId != null) writer.delete(coverId)
+                pointed
             }
         }
 
@@ -362,21 +319,6 @@ class SongRepairer(
             )
         }
         return RepairOutcome.Repaired(audio = gotAudio, video = gotVideo, cover = gotCover)
-    }
-
-    /**
-     * Swaps a thumbnail for something better, and **only** when it really is better.
-     *
-     * Measured before it is written, because the sources here can perfectly well hand back another
-     * 200x200: the chart's own `co=` tag sometimes points at the same thumbnail USDB serves, and
-     * iTunes has small artwork for obscure records. Replacing like with like would rewrite files
-     * across the whole library to no effect and lose the original in the process.
-     */
-    private fun replaceCover(coverId: String, bytes: ByteArray): Boolean {
-        val had = runCatching { measureCover(tree.readBytes(coverId)) }.getOrDefault(0)
-        val offered = measureCover(bytes)
-        if (offered <= had) return false
-        return writer.overwrite(coverId, bytes)
     }
 
     /** Cover sources, best first — the same order a fresh download uses, minus USDB's thumbnail. */

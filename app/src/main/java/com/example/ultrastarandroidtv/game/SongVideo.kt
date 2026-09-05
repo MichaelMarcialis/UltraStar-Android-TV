@@ -262,6 +262,17 @@ fun SongVideo(
      * is strictly better there, and it is already what a song with no video gets.
      */
     onStillImage: () -> Unit = {},
+    /**
+     * Whether the picture fills the screen, cropping what will not fit.
+     *
+     * A setting rather than a rule, and the only thing it changes is the two lines that size the
+     * view plus whether a measured letterbox crop is applied at all. **The measuring still
+     * happens either way**, because the frames it reads are the same frames the still-image test
+     * reads — so turning this off saves nothing and would only mean the answer is thrown away
+     * one step later. Shown whole, a file's baked-in bars are part of its picture and belong on
+     * screen with it; cropping them is exactly the zoom this setting turns off.
+     */
+    fillScreen: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     if (videoUri == null) return
@@ -413,7 +424,7 @@ fun SongVideo(
             return@LaunchedEffect
         }
 
-        if (smallest != Float.MAX_VALUE) crop = smallest
+        if (smallest != Float.MAX_VALUE && fillScreen) crop = smallest
         revealed = true
     }
 
@@ -422,8 +433,14 @@ fun SongVideo(
     // and the overflow is cut off.
     BoxWithConstraints(modifier.background(Color.Black).clipToBounds()) {
         val boxAspect = maxWidth / maxHeight
-        val width = (if (aspect > boxAspect) maxHeight * aspect else maxWidth) * crop
-        val height = (if (aspect > boxAspect) maxHeight else maxWidth / aspect) * crop
+
+        // The whole of the setting, in two lines. Filling means matching the screen on whichever
+        // axis leaves no gap and letting the other overflow; fitting is the same comparison the
+        // other way round, so the picture lands inside the screen with black either side of it.
+        // `crop` is 1 unless filling, so it drops out of the second case.
+        val wide = if (fillScreen) aspect > boxAspect else aspect < boxAspect
+        val width = (if (wide) maxHeight * aspect else maxWidth) * crop
+        val height = (if (wide) maxHeight else maxWidth / aspect) * crop
 
         // A TextureView rather than a SurfaceView. A SurfaceView is a separate compositor layer
         // that is not reliably clipped by its parent, so sizing it past the screen edge — which

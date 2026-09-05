@@ -197,8 +197,7 @@ fun SongsScreen(
                 http = downloads.http,
                 tree = it,
                 writer = it,
-                measureCover = CoverLoader::shortestEdge,
-            )
+                )
         }
     }
 
@@ -248,17 +247,6 @@ fun SongsScreen(
         }
     }
 
-    /**
-     * Songs measured as wearing a thumbnail rather than artwork.
-     *
-     * Falls out of the survey above, which has already read and measured every cover — so the
-     * filter costs nothing beyond what Repair was doing anyway. It is the one filter state the
-     * scanner cannot answer on its own.
-     */
-    val softArtwork = remember(repairable) {
-        repairable.filter { it.second.needsBetterCover }.map { it.first.textId }.toSet()
-    }
-
     // Back to the song that was being looked at: scroll to it, then focus it.
     //
     // Two steps and both are needed. A lazy grid does not compose what is off screen, so the
@@ -267,7 +255,7 @@ fun SongsScreen(
     LaunchedEffect(mode, returningTo, songs) {
         val textId = returningTo ?: return@LaunchedEffect
         if (mode != SongsMode.List) return@LaunchedEffect
-        val at = arrange(songs, sort, filter, softArtwork).indexOfFirst { it.textId == textId }
+        val at = arrange(songs, sort, filter).indexOfFirst { it.textId == textId }
         if (at >= 0) {
             gridState.scrollToItem(at)
             repeat(FOCUS_ATTEMPTS) {
@@ -461,7 +449,7 @@ fun SongsScreen(
                             onClick = { filter = option },
                             // A filter matching nothing is a dead end on a remote: it takes the
                             // focus, empties the screen, and leaves nowhere obvious to go back to.
-                            enabled = songs.any { matches(it, option, softArtwork) },
+                            enabled = songs.any { matches(it, option) },
                         )
                         Spacer(Modifier.width(6.dp))
                     }
@@ -500,8 +488,8 @@ fun SongsScreen(
 
                 Spacer(Modifier.height(14.dp))
 
-                val arranged = remember(songs, sort, filter, softArtwork) {
-                    arrange(songs, sort, filter, softArtwork)
+                val arranged = remember(songs, sort, filter) {
+                    arrange(songs, sort, filter)
                 }
                 // Indexed from the *filtered* list, which is the one a letter jumps into.
                 // Taken from the whole library instead, a filter like "No music" left letters on

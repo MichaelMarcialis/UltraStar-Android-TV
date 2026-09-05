@@ -7,7 +7,6 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.example.ultrastarandroidtv.library.CoverLoader
 import com.example.ultrastarandroidtv.library.LibraryLocation
 import com.example.ultrastarandroidtv.library.SafDocumentTree
 import com.example.ultrastarandroidtv.library.SongLibraryCache
@@ -195,7 +194,6 @@ class Downloads(private val context: Context) {
             http = http,
             tree = card,
             writer = card,
-            measureCover = CoverLoader::shortestEdge,
         )
         val outcome = runCatching {
             withContext(Dispatchers.IO) {

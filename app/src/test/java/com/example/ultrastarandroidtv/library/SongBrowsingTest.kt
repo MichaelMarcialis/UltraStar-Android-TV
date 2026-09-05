@@ -223,24 +223,24 @@ class SongBrowsingTest {
     )
 
     @Test
-    fun `soft artwork is the one state the scanner cannot answer on its own`() {
-        val soft = song("Thumbnail", "A", audio = "a", cover = "c")
-        val sharp = song("Proper", "B", audio = "a", cover = "c")
-        val songs = listOf(soft, sharp)
+    fun `every filter is something the scanner already knows`() {
+        // A song with artwork is a song with artwork, whatever size the picture is. A "soft
+        // artwork" state lived here briefly and needed every cover read and decoded to answer;
+        // it went with the repair it was made for.
+        val songs = listOf(
+            song("Complete", "A", audio = "a", video = "v", cover = "c"),
+            song("Silent", "B", audio = null, cover = "c"),
+        )
 
-        // Both look complete to every other filter, which is exactly why "Repair 7 songs"
-        // appeared over a row of chips insisting nothing was missing.
-        assertEquals(2, arrange(songs, SongSort.Title, SongFilterState.Ready).size)
         assertEquals(
-            listOf("Thumbnail"),
-            arrange(songs, SongSort.Title, SongFilterState.SoftArtwork, setOf(soft.textId))
+            listOf("Complete"),
+            arrange(songs, SongSort.Title, SongFilterState.Ready).map { it.song.metadata.title },
+        )
+        assertEquals(
+            listOf("Silent"),
+            arrange(songs, SongSort.Title, SongFilterState.MissingMusic)
                 .map { it.song.metadata.title },
         )
-    }
-
-    @Test
-    fun `nothing measured means nothing is claimed to be soft`() {
-        val songs = listOf(song("A", "X", audio = "a", cover = "c"))
-        assertTrue(arrange(songs, SongSort.Title, SongFilterState.SoftArtwork).isEmpty())
+        assertTrue(arrange(songs, SongSort.Title, SongFilterState.MissingArtwork).isEmpty())
     }
 }

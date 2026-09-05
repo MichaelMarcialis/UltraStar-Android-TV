@@ -193,13 +193,25 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
         )
 
         SettingRow(
+            label = "Fill the screen with video",
+            explanation = "Zooms a song's music video until it fills the television, cropping " +
+                "whatever will not fit — and measures away any black bars baked into the file. " +
+                "Most videos here are 4:3 rips, so shown whole they sit in a black box. Turn " +
+                "this off to see each video whole at its own shape instead.",
+            value = if (settings.fillScreenVideo) 1.0 else 0.0,
+            range = 0.0..1.0,
+            step = 1.0,
+            format = { if (it >= 0.5) "On" else "Off" },
+            onChange = { settings.updateFillScreenVideo(it >= 0.5) },
+        )
+
+        SettingRow(
             label = "Low-latency picture",
-            explanation = "Drives the television at 120 Hz while this app is open, which is the " +
-                "only way this device has of asking it to hurry: most of a television's delay " +
-                "is motion smoothing, and there is nothing to smooth at 120 Hz. Worth 8 ms on " +
-                "the Shield's side alone, measured, and probably far more on the set. The cost " +
-                "is a second or two of black screen as the app opens and closes. Turn it off " +
-                "and dial the display lead again to see what it was buying.",
+            explanation = "Drives the television at 120 Hz while this app is open, to skip its " +
+                "motion smoothing. Off, because measuring a song with it on found the opposite " +
+                "of what it promised: it saves 8 ms on the Shield's side and adds about 25 ms " +
+                "further down the pipeline, and it makes music videos judder. Here so it can be " +
+                "measured again if this television or the amplifier ever changes.",
             value = if (settings.lowLatencyVideo) 1.0 else 0.0,
             range = 0.0..1.0,
             step = 1.0,

@@ -7,23 +7,21 @@ import android.content.Context
  *
  * ## Why this has to be remembered at all
  *
- * A repair is offered on the strength of what the *card* says is missing, and for music and video
- * that is the whole story — the folder either has the file or it does not. Artwork is different:
- * a cover under [MIN_COVER_PIXELS] is a thumbnail standing in for artwork, and whether anything
- * better exists cannot be known without asking iTunes. So the survey counts those songs as worth
- * repairing, the repair asks, iTunes has nothing bigger, and the song is counted again next time.
+ * A repair is offered on the strength of what the *card* says is missing, which is only half the
+ * question. Whether the missing part can actually be *got* is the other half, and nothing in the
+ * folder can answer it: a song with no artwork is offered a repair, iTunes turns out to have no
+ * artwork for it either, and the song is counted again on the next look at the card — for ever.
  *
- * Reported from the sofa exactly as it behaves: "Repair 7 songs" with every filter saying nothing
- * was missing, which then ran through seven songs saying nothing could be found — and offered the
- * same seven again straight afterwards. An action that cannot succeed must not keep asking to be
- * pressed.
+ * Reported from the sofa as exactly that: "Repair 7 songs", which then ran through seven songs
+ * saying nothing could be found and offered the same seven again straight afterwards. An action
+ * that cannot succeed must not keep asking to be pressed.
  *
  * ## What is remembered, and what un-remembers it
  *
- * The song, and a description of what was wanted — see [RepairPlan.signature]. That description
- * carries the cover's own size, so replacing the artwork by any other route changes the signature
- * and the song is offered again. Anything the card gains later does the same, because a plan for
- * a song missing its music is a different plan from one wanting a better picture.
+ * The song, and a description of what was wanted — see [RepairPlan.signature]. Anything the card
+ * gains or loses later changes that description and the song is offered again, because a plan for
+ * a song missing its music is a different plan from one missing only its picture. A repair that
+ * fetches anything at all forgets the song outright.
  *
  * ## Where it is applied
  *
