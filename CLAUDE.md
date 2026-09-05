@@ -943,13 +943,51 @@ The same again on a song with no video, so it is the mode rather than anything a
 
 **And the CPU was never the problem.** Measured during a song with video, both microphones capturing, from `/proc/<pid>/stat`: **44 % of one core**, with 276 % of the four idle. The ~90 % figure in the 2026-09-03 notes was a projection for the *pitch work alone* after the analysis hop was halved, and it is not what the whole app costs.
 
-**Game mode, asked a third time, and the answer has not moved** (2026-09-05):
+**Game mode, asked a third time — and then the television went on the network and it was built** (2026-09-05):
 
 - **ALLM is still refused by the Shield.** `allmSupported false`, `gameContentTypeSupported false`, `minimalPostProcessingSupported false`, `deviceProductInfo null` — and `dumpsys window` shows the app *is* asking (`preferMinimalPostProcessing=true`), so the request is being dropped below us. Unchanged from 2026-09-03.
 - **The 120 Hz route is withdrawn**, for the reasons above. It was the one thing that worked and it is worse than not doing it.
-- **The television is still not on the network**, which is the only remaining route and the one that would actually do what was asked. A sweep of the whole subnet found no host answering on webOS's 3000 or 3001, and no LG OUI in the ARP table after touching all 254 addresses. Connect the C1 to the network and this becomes an evening's work: a webOS SSAP WebSocket, one pairing prompt accepted once on the set, Game Optimizer on as the app opens and back as it closes.
+- **The television looked as though it was not on the network, and it was simply switched off.** A sweep found no host answering on webOS's 3000 or 3001 — because a webOS set in standby drops off the network entirely. With it on, everything works; see the section below, which is the built and verified feature.
 
 **Driving gameplay from adb needs a temporary bypass, and it is worth writing down because it is how everything above was measured.** The claim screen waits for a real voice, which `input keyevent` cannot supply, so `PlayerCountScreen`'s `onPick` was pointed straight at `Screen.Picker` with a lineup built from `micSession.usableMics` — real microphones, real capture threads, real pitch work, no singing. Removed afterwards, the same trick as the settings screen's probe rows and the forced `Refused` microphone. It is the only way to see gameplay from here.
+
+**Game mode on the television, working** (`tv/`, 2026-09-05). Asked for three times and refused twice; the answer was the television's own network API all along, and the only thing standing in the way was that the set was not on the network. It is now, and the whole thing is verified on hardware: **opening the app puts the C1 into Game Optimizer and closing it puts FILMMAKER back**, with nobody touching a remote.
+
+Measured rather than assumed at every step — `tools/lg_game_mode.py` is the harness that settled the protocol before a line of Kotlin was written, and it stays for the next time LG changes something.
+
+- **The set has to be switched on.** A webOS television in standby drops off the network completely: no ping, and all 1,039 ports tried came back closed. It answers on 3000 (plain) and 3001 (TLS) the moment it is on. That is why an SSDP sweep found "no LG at all" on 2026-09-03 — the search was right and the set was asleep.
+
+- **Discovery is one SSDP search for `urn:lge-com:service:webos-second-screen:1`**, LG's own service rather than `ssdp:all`, so the answer is the televisions and nothing else. It works from the Shield over Ethernet with no multicast lock. Nobody ever types an IP address, and the address that comes back is remembered so the next launch skips the search.
+
+- **Send no `Origin` header.** With one, the C1 closes the connection with **`1008 invalid origin`** before it looks at the payload — which reads like a protocol bug anywhere but where it is. A browser is obliged to send one; a native client must not.
+
+- **Answer the pings**, or the set hangs up with *"client did not respond to ping"*.
+
+- **Pairing is one prompt on the television**, accepted once, and the client key is kept for ever after. The prompt expires after about eighty seconds and answers **`403 cancelled`** — the same answer as pressing No, so the app says how to ask again rather than what the code was.
+
+- **The manifest is LG's own, copied verbatim and deliberately unedited.** The obvious first move — putting this app's name in `localizedAppNames` so the prompt says who is asking — breaks it: the `signed` block carries a signature over its own contents. The prompt therefore says "LG Remote App".
+
+- **`createToast` is a trap.** SSAP does not expose `luna://` services, and the way round is a notification whose `onclose` handler names the luna URI. A toast takes that payload, answers `returnValue: true` with a toast id, and **does nothing at all**, because nothing ever closes a toast. It has to be `createAlert` and then `closeAlert`: the set fires the handler on the way down. Measured both ways on the C1 — the toast reported success and the picture mode did not move.
+
+- **The set will not say which picture mode it is in.** `getSystemSettings` refuses that one key — *"Some keys are not allowed for the request. ( pictureMode )"* — and `getSystemSettingDesc` refuses it too. What it will hand over is `backlight`, `contrast`, `brightness`, `color` and `energySaving`, and most other picture keys are refused as well.
+  - **So a mode is recognised by its values.** Measured on this set: Game 75/85/55, FILMMAKER 25/85/50, Cinema 80/85/50, Vivid 100/100/70 — all distinct. Turning the feature on walks the modes once, records what each looks like, and stops at the one matching what was on screen to begin with. Here that was the first candidate and the walk took one step with no visible flicker.
+  - **Exact matches only.** A near match is a *different* mode with similar values, and putting somebody's television into the wrong one is worse than admitting the mode is unknown.
+  - **A guard stops the set being trapped in Game Optimizer**: values matching the game preset are never adopted as the mode to go back to. Without it, opening the app twice would file game as the mode to restore and there would be no way out but the remote.
+  - Values come back as `85` sometimes and `"85"` others — the same call, moments apart — so a fingerprint is held and compared as text.
+
+- **More than one television can answer, and here two did.** This house has webOS sets at `.212` and `.234`, and the Shield is plugged into `.234`. Taking the first found meant every attempt went to a television nobody was looking at, which reset the connection and read exactly like a bug in this app. **They are told apart by the one thing an app cannot see and a person cannot miss: the prompt appears on the television in front of you.** Each is tried in turn and whichever one is accepted is remembered; a set that refuses outright is skipped in a fraction of a second.
+
+- **A failed handshake must close its socket.** The `WebSocket` constructor threw with the socket still open, so every failed attempt left a connection to the television — and a set allows only a handful at once, so a few failures stop being retryable and start being refused, which looks exactly like being blocked.
+
+- **`tv/WebSocket.kt` is hand-written**, about a hundred and fifty lines: the handshake, masked text frames out, unmasked in, and a pong. OkHttp is not already a dependency and adding a networking stack to send a dozen JSON objects at a television on the same LAN is not a trade this repo makes.
+
+- **It is LG-only, and that is a real limit.** Samsung and Sony use entirely different protocols; "any brand" would mean implementing each one. What *is* brand-agnostic is the shape: discover, pair once, learn, restore.
+
+- Engaged on `ON_START` and released on `ON_STOP` — the same choice `PauseWhenBackgrounded` makes, because a permission dialog over the app pauses it and a television flicking out of game mode for that would be its own small bug. Everything runs on the controller's own scope, so a set that is off, unplugged or on another network costs the app nothing: not a frame, not a stall on the way out.
+
+**Verified on hardware by reading the television's own values**, not by eye: before FILMMAKER (backlight 25), app opened **GAME (75)**, Home pressed **FILMMAKER (25)**.
+
+**And `uiautomator dump` puts a toast on the screen.** Repeated polling made the Shield show *"Accessibility service 🪦"* at the bottom of the picture, which arrived as a bug report about the television. It is UiAutomator's own temporary accessibility service being announced as it dies. Poll `run-as … cat shared_prefs/…` or logcat instead — cheaper, and it does not draw on the screen being tested.
 
 **Still unverified on hardware by a person singing**: the arrow, the praise, the point animation, the stars and the high scores. Gameplay *itself* is now reachable from adb with the bypass described in the 2026-09-05 section — real microphones, no voice — which is how the video path, the crop, the fades and the frame timing were measured. The settings screen itself *is* verified there, difficulty dial included. `adb logcat -s Gameplay Loudness` reports the settings in effect — difficulty and tolerance among them — and the measured gain, once per song.
 

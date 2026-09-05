@@ -46,7 +46,7 @@ fun PauseWhenBackgrounded(player: Player) {
  * between Compose versions — this depends on nothing but `ContextWrapper`, and answers null rather
  * than throwing if it is ever composed somewhere without an activity.
  */
-private fun Context.lifecycleOwner(): LifecycleOwner? {
+internal fun Context.lifecycleOwner(): LifecycleOwner? {
     var context: Context? = this
     while (context != null) {
         if (context is LifecycleOwner) return context
