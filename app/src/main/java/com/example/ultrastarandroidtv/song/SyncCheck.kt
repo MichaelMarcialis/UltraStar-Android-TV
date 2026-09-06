@@ -77,6 +77,23 @@ private const val MAX_SHIFT_SECONDS = 8.0
 private const val MIN_NOTES = 20
 
 /**
+ * How far from zero a weak peak has to land before it is evidence of the wrong recording.
+ *
+ * Without this the check accuses songs it simply cannot read. A chart with little melodic signal
+ * — quiet vocals, a dense mix, a lot of rap — scores low at *every* offset, so its best guess is
+ * near enough noise; and if that guess happens to land a third of a second out, a rule that only
+ * looked at confidence would announce "the notes do not match this recording" about a song that
+ * is perfectly fine. Measured on this card: David Bowie's "Heroes" peaks at 1.20x at +0.28 s and
+ * plays correctly.
+ *
+ * The distinction that does hold up: *no offset fits, and the best guess is not even near where
+ * the chart claims to be* is real evidence of a different recording. Every genuine mismatch here
+ * is at least a second out and most are tens of seconds. Anything closer than this is reported as
+ * [SyncVerdict.Unscoreable] — "cannot tell", which is honest — rather than as an accusation.
+ */
+private const val MISMATCH_MIN_OFFSET = 1.0
+
+/**
  * How many frames a window's own length puts between a moment and the frame that describes it.
  *
  * **This is a real correction, not a nicety, and the Python tool this grew from did not have it.**
@@ -191,12 +208,20 @@ fun checkSync(song: UltraStarSong, profile: ChromaProfile): SyncVerdict {
     val confidence = bestScore / (total / scored)
     val offset = bestShift * CHROMA_HOP_SECONDS
 
+    val distance = kotlin.math.abs(offset)
     return when {
-        confidence < CONFIDENT_PEAK && kotlin.math.abs(offset) > ALIGNED_SECONDS ->
-            SyncVerdict.Mismatch(confidence)
-        kotlin.math.abs(offset) <= ALIGNED_SECONDS -> SyncVerdict.Aligned
-        kotlin.math.abs(offset) > MAX_SHIFT_SECONDS -> SyncVerdict.Mismatch(confidence)
-        else -> SyncVerdict.Shifted(offset, confidence)
+        // A confident peak is the only thing worth acting on, and only where a `#GAP` error
+        // could plausibly have put it.
+        confidence >= CONFIDENT_PEAK -> when {
+            distance <= ALIGNED_SECONDS -> SyncVerdict.Aligned
+            distance <= MAX_SHIFT_SECONDS -> SyncVerdict.Shifted(offset, confidence)
+            else -> SyncVerdict.Mismatch(confidence)
+        }
+        // No confident peak anywhere. Whether that means the wrong recording or simply a song
+        // this method cannot read is decided by where the best guess landed -- see
+        // [MISMATCH_MIN_OFFSET].
+        distance >= MISMATCH_MIN_OFFSET -> SyncVerdict.Mismatch(confidence)
+        else -> SyncVerdict.Unscoreable
     }
 }
 

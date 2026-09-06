@@ -72,6 +72,23 @@ class SyncCheckTest {
     }
 
     @Test
+    fun `a song this cannot read is not accused of being the wrong recording`() {
+        // The Heroes case, found by sweeping the real card: a chart with little melodic signal
+        // scores low at every offset, so its best guess is near enough noise -- and a rule that
+        // looked only at confidence announced "the notes do not match this recording" about a
+        // song that plays perfectly. Saying nothing is the honest answer there.
+        val song = songOf(MELODY)
+
+        // Built rather than played, so "faint" is exact: every frame nearly flat across the
+        // twelve classes, with a bias of a few percent towards what the chart asks for, six
+        // frames — a third of a second — from where it claims. That is the shape of a song whose
+        // melody this cannot hear, and it must not be read as an accusation.
+        val verdict = checkSync(song, faintProfile(song, biasFrames = 6, bias = 0.03f))
+
+        assertTrue("expected no accusation, was $verdict", verdict !is SyncVerdict.Mismatch)
+    }
+
+    @Test
     fun `noise is a mismatch rather than a confident nonsense`() {
         val song = songOf(MELODY)
         val random = Random(7)
@@ -177,7 +194,36 @@ class SyncCheckTest {
      * [shiftSeconds] moves the *audio* later, which is what a chart starting too early looks like
      * from the outside — so a positive shift here should come back as a positive offset.
      */
-    private fun renderProfile(song: UltraStarSong, shiftSeconds: Double): ChromaProfile {
+    /**
+     * A profile that barely favours the chart at all, [biasFrames] away from where it says.
+     *
+     * Flat everywhere else, so the peak-to-mean ratio is whatever [bias] makes it and nothing
+     * about the fixture is left to luck.
+     */
+    private fun faintProfile(song: UltraStarSong, biasFrames: Int, bias: Float): ChromaProfile {
+        val beats = BeatTimeConverter(song.metadata)
+        val notes = song.voiceParts.flatMap { it.lines }.flatMap { it.notes }
+        val last = notes.last()
+        val frames = ((beats.beatToSeconds(last.startBeat + last.durationBeats) + 2.0) /
+            CHROMA_HOP_SECONDS).toInt()
+        val data = FloatArray(frames * 12) { 1f / 12f }
+
+        for (note in notes) {
+            val from = (beats.beatToSeconds(note.startBeat) / CHROMA_HOP_SECONDS).toInt() + biasFrames
+            val to = (beats.beatToSeconds(note.startBeat + note.durationBeats) /
+                CHROMA_HOP_SECONDS).toInt() + biasFrames
+            val pitchClass = ((note.pitch % 12) + 12) % 12
+            for (frame in from until minOf(to, frames)) {
+                if (frame >= 0) data[frame * 12 + pitchClass] += bias
+            }
+        }
+        return ChromaProfile(data, frames)
+    }
+
+    private fun renderProfile(
+        song: UltraStarSong,
+        shiftSeconds: Double,
+    ): ChromaProfile {
         val beats = BeatTimeConverter(song.metadata)
         val notes = song.voiceParts.flatMap { it.lines }.flatMap { it.notes }
         val lastEnd = beats.beatToSeconds(notes.last().startBeat + notes.last().durationBeats)

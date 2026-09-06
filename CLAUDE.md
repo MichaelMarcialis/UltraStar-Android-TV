@@ -1050,6 +1050,14 @@ Writing tests for this found a real error. A frame is computed from `window` sam
 
 Two decimal places of agreement on the mismatch confidence, from two entirely separate implementations.
 
+**Sweeping the card again with the corrected metric found one more bad song and one bad rule** (2026-09-06).
+
+- **Kelly Clarkson's "Because Of You" was 0.33 s out at 2.42x confidence** — as clear a `#GAP` error as the card holds, and the *old* metric hid it: 0.33 minus the 0.15 s bias read as 0.18, which was inside the tolerance and called fine. Fixed and re-verified at +0.00 s.
+- **The verdict logic was accusing songs it simply could not read.** "Heroes" peaks at 1.20x at +0.28 s and plays perfectly — a chart with little melodic signal scores low at *every* offset, so its best guess is near enough noise, and a rule that looked only at confidence announced "the notes do not match this recording" about it.
+  - The distinction that holds up is **where the weak guess landed**. *No offset fits, and the best guess is not even near where the chart claims* is real evidence of a different recording; every genuine mismatch on this card is at least a second out and most are tens of seconds. Closer than [MISMATCH_MIN_OFFSET] (1 s) the answer is `Unscoreable` — "cannot tell", which is honest — rather than an accusation.
+  - Confirmed on the television afterwards: Heroes `Unscoreable`, Magic Dance `Mismatch(1.10)`, Suffragette City `Mismatch(1.24)`, Because Of You `Shifted(+0.33, 2.42)`.
+- **The library's own centre of mass is about +0.07 s, not zero.** Across 114 aligned songs the offsets cluster at 0.00 / +0.05 / +0.09 — one or two hops late, consistently. Probably real: a singer lands a note a moment after its written start, and the energy a frame sees follows the voice rather than the chart. Left alone, because it is inside one analysis hop of zero and chasing it would be tuning to this card.
+
 **What it will not do.** It only ever fixes a *constant* offset; a chart whose `#BPM` is wrong drifts, and no single number repairs that. A rap or spoken-word chart has little melodic signal, scores low and is left alone — `Unscoreable`, which is deliberately not a failure. And there is still no way to sweep the existing library from the television; that is a Songs-screen action waiting to be built, and `tools/check_song_sync.py --card` does it from here in the meantime.
 
 **Still unverified on hardware by a person singing**: the arrow, the praise, the point animation, the stars and the high scores. Gameplay *itself* is now reachable from adb with the bypass described in the 2026-09-05 section — real microphones, no voice — which is how the video path, the crop, the fades and the frame timing were measured. The settings screen itself *is* verified there, difficulty dial included. `adb logcat -s Gameplay Loudness` reports the settings in effect — difficulty and tolerance among them — and the measured gain, once per song.
