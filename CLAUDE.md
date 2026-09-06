@@ -1109,6 +1109,14 @@ Two decimal places of agreement on the mismatch confidence, from two entirely se
 
 **The TLS path is the one thing here not yet verified on hardware** — the television was switched off when the change was made, and a webOS set in standby answers nothing at all.
 
+**Picture settings are per input *and* per HDR state, which is why the fingerprints went flat** (2026-09-06). Every mode reading backlight 100 / contrast 100 / colour 55 was not the set breaking: a PlayStation was driving an HDR signal at the time, and LG keeps a separate profile for that. The values readable over SSAP describe whatever profile is live, so a measurement taken while something else is playing says nothing about the Shield's input.
+- **Learning and restoring are therefore only meaningful for the input and state the app is actually on.** Worth remembering before reading anything into a fingerprint captured at a random moment.
+- The guard added for it stands on its own merits: a set that reports the same values for every mode makes the first candidate match trivially, and believing that would restore whatever happens to be first in the list.
+
+**Game mode is never recorded as the mode to go back to** (2026-09-06, from review). Pairing while the television was *already* in Game Optimizer would match on `game` and file it as the restore target — and then every release would put it straight back, the set trapped in game mode for ever. The `engageNow` guard cannot help, because it only stops the mode being adopted *later*. What somebody had before is unknowable from there, so an earlier non-game answer is kept if there is one and otherwise pairing refuses and says to set the usual picture mode first.
+
+**Checking an address and then resolving it is two reads** (2026-09-06, from review). The timing check compared the granted folder's URI and then asked for the tree again, so a folder changed between those two calls handed old document ids to a new tree — the exact race the check was added to prevent. The tree object is captured up front now, and the comparison only says it is still current.
+
 **Still unverified on hardware by a person singing**: the arrow, the praise, the point animation, the stars and the high scores. Gameplay *itself* is now reachable from adb with the bypass described in the 2026-09-05 section — real microphones, no voice — which is how the video path, the crop, the fades and the frame timing were measured. The settings screen itself *is* verified there, difficulty dial included. `adb logcat -s Gameplay Loudness` reports the settings in effect — difficulty and tolerance among them — and the measured gain, once per song.
 
 **Not started:** nothing from the original roadmap. Next work is whatever testing turns up.

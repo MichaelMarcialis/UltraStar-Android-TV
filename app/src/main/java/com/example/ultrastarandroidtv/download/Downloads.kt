@@ -460,21 +460,25 @@ class Downloads(private val context: Context) {
         if (timing.checking != null) return
         timing.checking = song.textId
 
-        // The tree this song was named in, taken now rather than when the work starts. A
-        // document id only means anything inside its own tree, and this job can wait — for a
-        // song to finish, or for a decode ahead of it — so the folder can change underneath it.
-        // At best the ids then fail to resolve; at worst one exists under both grants and this
-        // rewrites a `#GAP` in somebody else's chart. The same hazard `runRepair` already
-        // guards, for the same reason.
+        // The tree this song was named in, resolved now rather than when the work starts. A
+        // document id only means anything inside its own tree, and this job can wait — for a song
+        // to finish, or for a decode ahead of it — so the folder can change underneath it. At
+        // best the ids then fail to resolve; at worst one exists under both grants and this
+        // rewrites a `#GAP` in somebody else's chart. The same hazard `runRepair` already guards.
+        //
+        // **The tree object is captured, not just its address.** Comparing the address and then
+        // asking for the tree again is two reads of a thing that can change between them, which
+        // is the very race this is here to stop; the comparison then only says the folder has not
+        // changed *since*, and the instance is the one the ids came from either way.
         val askedIn = cardUri()?.toString()
+        val askedTree = card()
 
         scope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
                     holdWhileSinging(atABoundary = true)
-                    if (cardUri()?.toString() != askedIn) return@withContext null
-                    val card = card() ?: return@withContext null
-                    checkOne(card, song)
+                    if (askedTree == null || cardUri()?.toString() != askedIn) return@withContext null
+                    checkOne(askedTree, song)
                 } ?: return@launch
                 Log.i(TIMING_TAG, "${song.folderName}: $result")
                 timing.remember(song.textId, result)

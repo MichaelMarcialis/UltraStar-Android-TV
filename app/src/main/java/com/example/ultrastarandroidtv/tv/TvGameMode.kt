@@ -228,6 +228,28 @@ class TvGameMode(context: Context) {
                     memory.restoreMode = null
                     return
                 }
+
+                // **Game mode is never the way back.** A set that is already in Game Optimizer
+                // when somebody pairs would otherwise have that recorded as the mode to restore,
+                // and then every release puts it straight back — the television trapped in game
+                // mode for ever, which is the exact thing the guard in `engageNow` exists to
+                // prevent and cannot help with, because it only stops the mode being adopted
+                // *later*. What somebody had before is unknowable from here, so the honest
+                // answers are to keep an earlier one or to ask.
+                if (mode == GAME_PICTURE_MODE) {
+                    val known = memory.restoreMode?.takeIf { it != GAME_PICTURE_MODE }
+                    if (known == null) {
+                        status = "Your television is already in game mode, so there is no way to " +
+                            "tell what to put back. Set the picture mode you normally use and " +
+                            "turn this on again."
+                        memory.restoreMode = null
+                    } else {
+                        tv.setPictureMode(known)
+                        status = "Ready. Your picture mode will be put back when the app closes."
+                    }
+                    return
+                }
+
                 memory.restoreMode = mode
                 status = "Ready. Your picture mode will be put back when the app closes."
                 return
