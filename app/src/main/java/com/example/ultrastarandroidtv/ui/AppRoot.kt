@@ -51,11 +51,6 @@ fun AppRoot() {
     val context = LocalContext.current
     val settings = remember { GameSettings(context) }
 
-    // Applied here rather than in MainActivity so that turning it off in Settings takes effect
-    // on the spot -- the blink as the link renegotiates is itself the confirmation that it did
-    // something, which is the one bit of feedback this setting can give from inside the app.
-    PreferLowLatencyVideo(settings.lowLatencyVideo)
-
     // The television's own game mode, which is the thing 120 Hz was a poor substitute for. Owned
     // here for the life of the app because that is exactly the span it describes: on when the app
     // is on screen, back to the picture mode that was there when it is not.

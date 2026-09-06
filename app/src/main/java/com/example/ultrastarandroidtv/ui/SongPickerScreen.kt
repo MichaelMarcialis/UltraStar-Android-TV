@@ -121,17 +121,42 @@ private val CARD_WIDTH = 200.dp
  * [containerSize] the viewport, so the distance to travel is however far the card is from where
  * a centred card would start.
  */
-/** How far left of the viewport a card has to start to sit in the middle of it. */
-private fun centringOffset(viewport: Int, card: Int): Int =
-    if (viewport <= card) 0 else -((viewport - card) / 2)
+/**
+ * Where the focused card sits: hard against the left margin, in line with everything else.
+ *
+ * It was centred for a day, which is a defensible answer and not the one the screen wanted. The
+ * page's heading, its chips and its letter rail all start at [ROW_PADDING], and a focused card
+ * floating in the middle of the row is the one element on the screen that answers to nothing.
+ * Left-aligned, the cursor sits on a line the eye already knows, and the whole row reads as a
+ * list being stepped through rather than a carousel being spun.
+ *
+ * The lookahead is the other half of it: everything to the right of the focused card is songs
+ * not yet considered, where centring spent half the screen on ones already passed.
+ */
+private val ROW_PADDING = 56.dp
 
+/**
+ * Puts the focused card at the left margin, whichever direction it was reached from.
+ *
+ * A spec rather than a scroll on focus, and that distinction matters: the spec *is* the scroll
+ * the focus already asks for, so there is one movement. An `animateScrollToItem` on top would be
+ * a second animation chasing the first, and the two look visibly different.
+ *
+ * Compose's default is to scroll the least it can get away with, which leaves the card against
+ * whichever edge it arrived at — right when stepping right, left when stepping left. Correct for
+ * a list being dragged, wrong for one being stepped through, because the cursor's position then
+ * depends on which way you came.
+ *
+ * [offset] is the card's leading edge measured from the viewport's, so the distance to travel is
+ * however far that is from the margin.
+ */
 @OptIn(ExperimentalFoundationApi::class)
-private val CenterFocused = object : BringIntoViewSpec {
+private fun leftAligned(marginPx: Float) = object : BringIntoViewSpec {
     override fun calculateScrollDistance(
         offset: Float,
         size: Float,
         containerSize: Float,
-    ): Float = offset - (containerSize - size) / 2f
+    ): Float = offset - marginPx
 }
 
 /**
@@ -238,7 +263,8 @@ fun SongPickerScreen(
     /** False until the row has been put somewhere, so the first jump starts in the middle copy. */
     var placed by remember { mutableStateOf(false) }
     val row = rememberLazyListState()
-    val cardWidthPx = with(LocalDensity.current) { CARD_WIDTH.roundToPx() }
+    val marginPx = with(LocalDensity.current) { ROW_PADDING.toPx() }
+    val leftMargin = remember(marginPx) { leftAligned(marginPx) }
 
     BackHandler {
         // One thing at a time, and always the innermost. Leaving the screen from inside the
@@ -386,11 +412,11 @@ fun SongPickerScreen(
         // before it can be focused, and the focus requester it carries only exists once it has
         // been composed — hence waiting for frames rather than asking straight away.
         //
-        // Landed centred, rather than at the left edge and centred afterwards. Focusing the card
-        // asks [CenterFocused] for the same place, so scrolling to the edge first would put a
-        // visible slide in front of somebody arriving at the screen. Zero before the row has been
-        // measured, which is simply the old behaviour and is corrected by the focus.
-        row.scrollToItem(position, centringOffset(row.layoutInfo.viewportSize.width, cardWidthPx))
+        // Landed where the focus is about to ask for it anyway. A LazyRow with content padding
+        // puts item zero's leading edge at the margin for a scroll offset of zero, which is
+        // exactly where [leftAligned] wants it -- so there is no correcting slide to watch when
+        // arriving at the screen or jumping to a letter.
+        row.scrollToItem(position, 0)
         repeat(FOCUS_ATTEMPTS) {
             withFrameNanos { }
             if (runCatching { opening.requestFocus() }.isSuccess) return@LaunchedEffect
@@ -441,7 +467,7 @@ fun SongPickerScreen(
             .background(GameTheme.background)
             .padding(vertical = 32.dp),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 56.dp)) {
+        Column(modifier = Modifier.padding(horizontal = ROW_PADDING)) {
             // The ways out live in the top-right corner, which was empty, rather than on a row of
             // their own under the title. That row is what the controls now use, and six buttons
             // across the top is how "Main menu" ends up wrapped onto two lines.
@@ -506,7 +532,7 @@ fun SongPickerScreen(
                 found = arranged.size,
                 onQuery = { filter = filter.copy(query = it) },
                 onDone = { pane = PickerPane.Browse },
-                modifier = Modifier.padding(horizontal = 56.dp),
+                modifier = Modifier.padding(horizontal = ROW_PADDING),
             )
 
             PickerPane.Genre -> ChoicePane(
@@ -518,7 +544,7 @@ fun SongPickerScreen(
                     filter = filter.copy(genre = it)
                     pane = PickerPane.Browse
                 },
-                modifier = Modifier.padding(horizontal = 56.dp),
+                modifier = Modifier.padding(horizontal = ROW_PADDING),
             )
 
             PickerPane.Decade -> ChoicePane(
@@ -530,7 +556,7 @@ fun SongPickerScreen(
                     filter = filter.copy(decade = it)
                     pane = PickerPane.Browse
                 },
-                modifier = Modifier.padding(horizontal = 56.dp),
+                modifier = Modifier.padding(horizontal = ROW_PADDING),
             )
 
             PickerPane.Browse -> {
@@ -539,15 +565,15 @@ fun SongPickerScreen(
                         "Nothing matches. Clear the filters to see the rest.",
                         style = MaterialTheme.typography.bodyLarge,
                         color = GameTheme.lyricIdle,
-                        modifier = Modifier.padding(horizontal = 56.dp),
+                        modifier = Modifier.padding(horizontal = ROW_PADDING),
                     )
                 }
 
-                CompositionLocalProvider(LocalBringIntoViewSpec provides CenterFocused) {
+                CompositionLocalProvider(LocalBringIntoViewSpec provides leftMargin) {
                     LazyRow(
                         state = row,
                         modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 56.dp),
+                        contentPadding = PaddingValues(horizontal = ROW_PADDING),
                         horizontalArrangement = Arrangement.spacedBy(20.dp),
                     ) {
                         // The library, repeated. A position is not a song: several positions show the
@@ -615,7 +641,7 @@ fun SongPickerScreen(
                             val index = firstIndexUnder(arranged, sort, letter)
                             if (index >= 0) jumpTo(index)
                         },
-                        modifier = Modifier.padding(horizontal = 56.dp),
+                        modifier = Modifier.padding(horizontal = ROW_PADDING),
                     )
                 }
             }

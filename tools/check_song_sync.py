@@ -40,7 +40,14 @@ LOW_HZ, HIGH_HZ = 150.0, 2000.0
 
 # A chart aligned to its own audio lands this close to zero; further out means it is describing
 # something else. Generous next to the ~0.09 s the controls actually reach.
-ALIGNED_SECONDS = 0.6
+# How far a peak may sit from zero and still count as aligned.
+#
+# Tightened from 0.6 s, which was too generous to be useful: Jimmy Cliff's "You Can Get It If You
+# Really Want" peaked at +0.51 s -- nine beats of a 257 BPM song, plainly wrong from the sofa --
+# and this called it "ok". Two known-good songs land at -0.14 and -0.09 s, and the sweep's own
+# resolution is one hop, 46 ms, so a quarter of a second is still several times the noise floor
+# while catching anything a singer would notice.
+ALIGNED_SECONDS = 0.25
 
 CARD = "/storage/5002-E7C7/UltraStar"
 AUDIO_SUFFIXES = (".mp3", ".m4a", ".ogg", ".opus", ".wav")

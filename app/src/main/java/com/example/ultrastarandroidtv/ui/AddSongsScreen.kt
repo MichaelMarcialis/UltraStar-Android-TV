@@ -893,11 +893,44 @@ private fun ResultCard(
     modifier: Modifier = Modifier,
 ) {
     val state = queued?.status
+
+    // A failed download can be tried again; anything else already downloaded, queued or owned
+    // cannot be re-added.
+    val addable = enabled && !alreadyOnCard && !folderTaken &&
+        (state == null || state is QueueStatus.Failed)
+
     Button(
-        onClick = onPick,
-        // A failed download can be tried again; anything else in the queue cannot be re-added.
-        enabled = enabled && !alreadyOnCard && !folderTaken &&
-            (state == null || state is QueueStatus.Failed),
+        // Pressing a card that has nothing left to offer does nothing, and says why on its own
+        // face -- "Already yours", "Added", "Folder name taken".
+        onClick = { if (addable) onPick() },
+        // **Never disabled, however little it has to offer.** A disabled TV button cannot take
+        // focus, and a grid full of holes is a grid the D-pad cannot be driven through: reported
+        // from the sofa as pressing down and landing on the first song of the next row instead of
+        // the one directly below, and only "after a song or two has been downloaded" -- which is
+        // exactly when cards start dropping out of the focus map. Compose's two-dimensional
+        // search finds nothing in the beam below, falls back to the next thing in traversal
+        // order, and that is the start of the next row.
+        //
+        // The screen already had this rule and applied it to one case only: "Music unavailable"
+        // is deliberately still pressable so that a card holding the focus cannot have it taken
+        // away. The same reasoning covers every other state, so the rule is now the button's
+        // rather than one branch's.
+        enabled = true,
+        // With `enabled` no longer saying it, the *colour* has to. Both halves are stated
+        // explicitly, unfocused included: a TV Button leaves its content dark on dark otherwise,
+        // which is how forty of forty-one drawn keys once became unreadable ghosts.
+        colors = if (addable) {
+            ButtonDefaults.colors()
+        } else {
+            ButtonDefaults.colors(
+                containerColor = GameTheme.trackBackground,
+                contentColor = GameTheme.lyricIdle,
+                // Still visibly focused. A card that cannot be pressed must still show where the
+                // cursor is, or driving past it looks like the remote has stopped working.
+                focusedContainerColor = GameTheme.noteIdle,
+                focusedContentColor = GameTheme.lyricActive,
+            )
+        },
         modifier = modifier
             .fillMaxWidth()
             .onFocusChanged { if (it.isFocused) onFocus() else onBlur() },

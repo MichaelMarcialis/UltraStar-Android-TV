@@ -15,7 +15,6 @@ private const val KEY_WINDOW = "window_seconds"
 private const val KEY_MIC_SOLO = "mic_threshold_solo"
 private const val KEY_MIC_DUET = "mic_threshold_duet"
 private const val KEY_DIFFICULTY = "difficulty"
-private const val KEY_LOW_LATENCY = "low_latency_video"
 private const val KEY_FILL_SCREEN = "fill_screen_video"
 
 /** Bounds for the sliders, and the reason each one has the range it does. */
@@ -99,19 +98,6 @@ class GameSettings(context: Context) {
         private set
 
     /**
-     * Whether to drive the television at its highest refresh rate while the app is open.
-     *
-     * **Off by default, having been on for two days.** It was the only lever this device has on
-     * the television's own share of the lag, since the Shield cannot signal Auto Low Latency
-     * Mode — and measured during an actual song it costs about 25 ms of display latency to save
-     * the 8.35 ms it buys, and makes a music video judder into the bargain. `ui/LowLatencyVideo.kt`
-     * carries the numbers. Kept as a setting so the measurement can be repeated if the
-     * television or the amplifier between them ever changes.
-     */
-    var lowLatencyVideo by mutableStateOf(prefs.getBoolean(KEY_LOW_LATENCY, false))
-        private set
-
-    /**
      * Whether a song's video fills the screen, cropping what will not fit.
      *
      * On by default, because it is what makes a background look like a background: most of the
@@ -140,11 +126,6 @@ class GameSettings(context: Context) {
     fun updateWindow(seconds: Double) {
         windowSeconds = seconds.coerceIn(SettingsRange.window)
         prefs.edit().putFloat(KEY_WINDOW, windowSeconds.toFloat()).apply()
-    }
-
-    fun updateLowLatencyVideo(value: Boolean) {
-        lowLatencyVideo = value
-        prefs.edit().putBoolean(KEY_LOW_LATENCY, value).apply()
     }
 
     fun updateFillScreenVideo(value: Boolean) {

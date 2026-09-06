@@ -115,11 +115,10 @@ class SyncCalibration(
          * Zero, and arrived at the same way the 40 ms it replaces was: by playing songs.
          *
          * It sat at 40 ms from an evening of dialling it up until the lyric met the sing line as
-         * it was sung. Two things have happened since that make zero the better answer, and the
-         * user's own verdict from the sofa after more play is that it feels better: the app is
-         * driven at 120 Hz while it is open (`ui/LowLatencyVideo.kt`), which takes 8.35 ms off
-         * the Shield's own presentation deadline and skips the television's motion interpolation
-         * with it, and the arrow's other latency terms were re-measured and shrunk.
+         * it was sung. The user's own verdict after more play is that zero feels better, and the
+         * arrow's other latency terms were re-measured and shrunk in between. The television is
+         * also asked for its own game mode now (`tv/TvGameMode.kt`), which turns off most of the
+         * processing this number was compensating for.
          *
          * Still a real setting with a real range, because it describes the *television* rather
          * than this app — a different set, or this one in a different picture mode, will want a
