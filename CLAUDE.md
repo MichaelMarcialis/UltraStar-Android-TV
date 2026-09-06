@@ -1091,6 +1091,15 @@ Two decimal places of agreement on the mismatch confidence, from two entirely se
 
 **Projectivy caches app art on disk, and force-stopping it is not enough.** The corrected banner still drew the old pale square after a reinstall and a restart of the launcher; `adb shell pm trim-caches 128G` cleared it, which is non-destructive — caches only, no settings. Worth knowing before concluding an asset change did not take.
 
+**The banner wears the wide logo, the icon wears the square one** (2026-09-06). Android already keeps these apart — `android:banner` and `android:icon` are different resources — so the two shapes need no trickery, only two source files. The banner is the wordmark lockup at 2.6:1, which is what the launcher row is full of (Netflix, Plex, Paramount+ are all wordmarks); the launcher icon stays the square mark, because a wordmark squeezed into a circle is unreadable.
+
+**Karaoke Revolution's angled bridge, and the format does account for it** (2026-09-06). Asked from the sofa, with a screenshot: KR joins two note bars with a short ramp when the vocal is sustained across a pitch change. UltraStar marks exactly that case — a syllable of **`~`** and nothing else, "keep holding the last one" — and this app already parsed it and drew nothing for it.
+
+- **Measured before building anything**, across all 117 charts on the card: **2,234** notes are a held syllable at a different pitch from the one before, **77 %** of them at the minimum gap the format uses, in **96 of 117 songs**. Not an edge case.
+- The first measurement asked the wrong question and is worth recording as a trap: only **2** of 48,896 adjacent note pairs literally touch (`start + length == next start`). Charts essentially always leave a beat between notes, so "contiguous" finds nothing and the tilde is the only signal that means anything.
+- **It is drawn and never scored.** The two notes stay two notes, each judged against its own pitch over its own beats, and the gap between them is judged by nobody — which is also true of KR's ramp. Dimmer than a note and never lit, so it cannot read as a bar somebody missed.
+- **Never across a line break.** A line's first note can be a tilde in real charts, and bridging there would join two phrases a singer breathes between.
+
 **Still unverified on hardware by a person singing**: the arrow, the praise, the point animation, the stars and the high scores. Gameplay *itself* is now reachable from adb with the bypass described in the 2026-09-05 section — real microphones, no voice — which is how the video path, the crop, the fades and the frame timing were measured. The settings screen itself *is* verified there, difficulty dial included. `adb logcat -s Gameplay Loudness` reports the settings in effect — difficulty and tolerance among them — and the measured gain, once per song.
 
 **Not started:** nothing from the original roadmap. Next work is whatever testing turns up.

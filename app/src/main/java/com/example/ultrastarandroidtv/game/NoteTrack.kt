@@ -13,6 +13,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalDensity
@@ -267,6 +268,33 @@ private fun DrawScope.drawNotes(
     low: Float,
     high: Float,
 ) {
+    // The bridges first, so a note always draws over its own end of one.
+    //
+    // Karaoke Revolution's angled connector, and the UltraStar format carries the same
+    // information: a syllable of `~` means the vowel is held while the pitch moves. Two thousand
+    // of them on this card. Without it, two bars a tone apart look like two attacks and get sung
+    // as two; with it, the eye reads one long note that bends.
+    for (i in visible) {
+        val placed = geometry.placements[i]
+        if (!placed.heldFromPrevious || i == 0) continue
+        val before = geometry.placements[i - 1]
+        val from = Offset(
+            geometry.xFor(before.endSeconds - GameTheme.noteGapSeconds, nowSeconds, width),
+            geometry.yFor(before.midi.toFloat(), noteArea, low, high),
+        )
+        val to = Offset(
+            geometry.xFor(placed.startSeconds, nowSeconds, width),
+            geometry.yFor(placed.midi.toFloat(), noteArea, low, high),
+        )
+        drawLine(
+            color = GameTheme.noteHold,
+            start = from,
+            end = to,
+            strokeWidth = noteHeight * GameTheme.noteHoldShare,
+            cap = StrokeCap.Round,
+        )
+    }
+
     for (i in visible) {
         val placed = geometry.placements[i]
         val left = geometry.xFor(placed.startSeconds, nowSeconds, width)

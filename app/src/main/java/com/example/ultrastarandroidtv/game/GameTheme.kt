@@ -49,6 +49,15 @@ object GameTheme {
     val noteFreestyle = Color(0xFF23262F)
 
     /** The note currently under the playhead, lifted so the eye can find its place instantly. */
+    /**
+     * The bridge drawn between a note and the held syllable that follows it.
+     *
+     * Dimmer than a note and deliberately never lit: it is not scored and nothing can be earned
+     * on it, so it must not look like a bar somebody has missed. It says "carry on", which is
+     * exactly the amount of attention it should ask for.
+     */
+    val noteHold = Color(0xFF2C3240)
+
     val noteActive = Color(0xFF4A5468)
     val noteActiveGolden = Color(0xFF917826)
 
@@ -237,6 +246,9 @@ object GameTheme {
     val minNoteHeight = 7.dp
 
     val noteGapSeconds = 0.012 // Trimmed off each note's end so neighbours do not fuse into one bar.
+
+    /** How thick the held-syllable bridge is, as a share of a note's height. */
+    val noteHoldShare = 0.3f
     val trackPadding = 20.dp
 
     /**
