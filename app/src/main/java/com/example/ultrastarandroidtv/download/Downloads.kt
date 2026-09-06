@@ -460,10 +460,19 @@ class Downloads(private val context: Context) {
         if (timing.checking != null) return
         timing.checking = song.textId
 
+        // The tree this song was named in, taken now rather than when the work starts. A
+        // document id only means anything inside its own tree, and this job can wait — for a
+        // song to finish, or for a decode ahead of it — so the folder can change underneath it.
+        // At best the ids then fail to resolve; at worst one exists under both grants and this
+        // rewrites a `#GAP` in somebody else's chart. The same hazard `runRepair` already
+        // guards, for the same reason.
+        val askedIn = cardUri()?.toString()
+
         scope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
                     holdWhileSinging(atABoundary = true)
+                    if (cardUri()?.toString() != askedIn) return@withContext null
                     val card = card() ?: return@withContext null
                     checkOne(card, song)
                 } ?: return@launch

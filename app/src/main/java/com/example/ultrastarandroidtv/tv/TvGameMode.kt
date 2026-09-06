@@ -156,7 +156,7 @@ class TvGameMode(context: Context) {
                 "Accept the pairing prompt on the television…"
             }
             val paired = runCatching {
-                WebOsTv(host).use { tv ->
+                openTv(host).use { tv ->
                     memory.clientKey = tv.register(null)
                     memory.host = host
                     memory.model = tv.modelName()
@@ -174,7 +174,16 @@ class TvGameMode(context: Context) {
                 Log.i(TAG, "not this one ($host): ${it.message}")
                 false
             }
-            if (paired) return@withContext
+            if (paired) {
+                // Straight into game mode, rather than waiting for the next launch.
+                //
+                // Engaging happens on `ON_START`, and by the time somebody has turned this on in
+                // Settings that has long since fired — so the row said "On" while the television
+                // sat in whatever mode learning had just put back. The one moment the two must
+                // agree is the moment somebody switches it on and looks up at the set.
+                runCatching { engageNow() }.onFailure { Log.i(TAG, "paired but could not engage", it) }
+                return@withContext
+            }
             memory.forget()
         }
         status = "No television accepted the pairing prompt. Turn this off and on to try again."
@@ -273,11 +282,25 @@ class TvGameMode(context: Context) {
         throw TvException("No television answered. It has to be switched on.")
     }
 
-    private fun <T> open(host: String, block: (WebOsTv) -> T): T = WebOsTv(host).use { tv ->
+    private fun <T> open(host: String, block: (WebOsTv) -> T): T = openTv(host).use { tv ->
         memory.clientKey = tv.register(memory.clientKey)
         memory.host = host
         block(tv)
     }
+
+    /**
+     * A connection to [host], pinned to the certificate this app paired with.
+     *
+     * The pin is only *recorded* when there is not one already — first use establishes it, and
+     * after that a set presenting a different certificate is refused before the key is sent.
+     */
+    private fun openTv(host: String) = WebOsTv(
+        host = host,
+        expectedPin = memory.certificatePin,
+        onPin = { fingerprint ->
+            if (memory.certificatePin == null) memory.certificatePin = fingerprint
+        },
+    )
 
     private fun reasonFor(error: Throwable): String = when {
         // The set's own prompt times out after about eighty seconds and answers this, which is

@@ -4,8 +4,13 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.security.MessageDigest
 import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.Base64
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.X509TrustManager
 
 /**
  * A WebSocket client with nothing in it but what the television needs.
@@ -30,13 +35,52 @@ import java.util.Base64
  *
  * Blocking by design, and every call belongs on a background thread.
  */
-internal class WebSocket(host: String, port: Int, timeoutMillis: Int = 5_000) : AutoCloseable {
+internal class WebSocket(
+    host: String,
+    port: Int,
+    /**
+     * Whether to wrap the connection in TLS, which is what port 3001 expects.
+     *
+     * **Preferred, because the pairing key is a bearer credential.** It is a working key to
+     * somebody's television with broad control permissions, and on port 3000 it is sent in the
+     * clear on every single connection — so anything watching the home network could lift it and
+     * keep it. Encrypting it is worth more than the private storage and backup exclusions it
+     * already has, since those protect the copy at rest and this protects the copy in flight.
+     */
+    secure: Boolean = false,
+    timeoutMillis: Int = 5_000,
+) : AutoCloseable {
 
-    private val socket = Socket().apply {
-        connect(InetSocketAddress(host, port), timeoutMillis)
-        soTimeout = timeoutMillis
-        tcpNoDelay = true
+    private val socket: Socket = if (!secure) {
+        Socket().apply {
+            connect(InetSocketAddress(host, port), timeoutMillis)
+            soTimeout = timeoutMillis
+            tcpNoDelay = true
+        }
+    } else {
+        // The set signs with its own certificate, so there is no chain to validate and no name to
+        // check against an IP address. Accepting anything here is not the end of the story: the
+        // caller compares [peerFingerprint] with the one recorded when the television was paired,
+        // which is what actually identifies it — trust on first use, the same shape as SSH.
+        val context = SSLContext.getInstance("TLS")
+        context.init(null, arrayOf(AcceptAndRemember), SecureRandom())
+        (context.socketFactory.createSocket() as SSLSocket).apply {
+            connect(InetSocketAddress(host, port), timeoutMillis)
+            soTimeout = timeoutMillis
+            tcpNoDelay = true
+            startHandshake()
+        }
     }
+
+    /**
+     * SHA-256 of the certificate the set presented, or null on a plain connection.
+     *
+     * The thing a caller pins. Read before anything is sent: once the key has gone out it is too
+     * late to discover this was a different television.
+     */
+    val peerFingerprint: String? = (socket as? SSLSocket)
+        ?.session?.peerCertificates?.firstOrNull()?.let { fingerprintOf(it.encoded) }
+
     private val input: InputStream = socket.getInputStream()
     private val output: OutputStream = socket.getOutputStream()
     private val random = SecureRandom()
@@ -169,6 +213,24 @@ internal class WebSocket(host: String, port: Int, timeoutMillis: Int = 5_000) : 
     }
 
     private companion object {
+        /**
+         * Accepts every certificate, and is not the security decision it looks like.
+         *
+         * A webOS set signs with its own certificate: nothing issued it, so nothing can validate
+         * it, and refusing self-signed certificates here would simply mean never connecting. What
+         * identifies the television is [peerFingerprint] matching the one recorded when somebody
+         * accepted the pairing prompt on it.
+         */
+        private val AcceptAndRemember = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
+
+        fun fingerprintOf(encoded: ByteArray): String =
+            MessageDigest.getInstance("SHA-256").digest(encoded)
+                .joinToString("") { "%02x".format(it) }
+
         const val OPCODE_TEXT = 0x1
         const val OPCODE_BINARY = 0x2
         const val OPCODE_CLOSE = 0x8

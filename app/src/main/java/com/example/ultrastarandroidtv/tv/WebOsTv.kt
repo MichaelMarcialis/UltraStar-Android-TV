@@ -3,8 +3,12 @@ package com.example.ultrastarandroidtv.tv
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** The port a webOS set listens on for plain SSAP. 3001 is the same thing wrapped in TLS. */
-private const val SSAP_PORT = 3000
+/**
+ * The ports a webOS set listens on: 3001 is SSAP wrapped in TLS, 3000 is the same thing in the
+ * clear. Tried in that order, and the plain one only when the set does not answer on the other.
+ */
+private const val SSAP_TLS_PORT = 3001
+private const val SSAP_PLAIN_PORT = 3000
 
 /**
  * How long to wait for the pairing prompt to be accepted.
@@ -75,11 +79,45 @@ class TvException(message: String) : Exception(message)
  */
 class WebOsTv(
     private val host: String,
+    /**
+     * The certificate this television presented last time, or null the first time.
+     *
+     * Trust on first use: the fingerprint recorded when somebody accepted the pairing prompt is
+     * what identifies the set afterwards. A different one means a different machine answering on
+     * that address, and the pairing key is not sent to it.
+     */
+    private val expectedPin: String? = null,
+    /** Called with the fingerprint of whatever answered, so a first connection can record it. */
+    private val onPin: (String) -> Unit = {},
     private val socketFactory: (String, Int) -> WebSocketLike = { h, p -> RealWebSocket(h, p) },
 ) : AutoCloseable {
 
-    private val socket = socketFactory(host, SSAP_PORT)
+    private val socket = connect()
     private var counter = 0
+
+    /**
+     * Opens the best connection the set will accept, and checks it is the same set as last time.
+     *
+     * TLS first. The plain port is the fallback rather than the default because everything sent
+     * over it, the pairing key included, is readable by anything on the network.
+     */
+    private fun connect(): WebSocketLike {
+        val secure = runCatching { socketFactory(host, SSAP_TLS_PORT) }.getOrNull()
+        val socket = secure ?: socketFactory(host, SSAP_PLAIN_PORT)
+
+        val fingerprint = socket.peerFingerprint
+        if (fingerprint != null) {
+            if (expectedPin != null && expectedPin != fingerprint) {
+                socket.close()
+                throw TvException(
+                    "That is not the television this app was paired with. Turn game mode off " +
+                        "and on again to pair with the one that is there now.",
+                )
+            }
+            onPin(fingerprint)
+        }
+        return socket
+    }
 
     /**
      * Registers, and returns the key to use next time.
@@ -215,10 +253,14 @@ class WebOsTv(
 interface WebSocketLike : AutoCloseable {
     fun send(text: String)
     fun receive(timeoutMillis: Int = 5_000): String?
+
+    /** SHA-256 of the certificate the set presented, or null on a plain connection. */
+    val peerFingerprint: String? get() = null
 }
 
 private class RealWebSocket(host: String, port: Int) : WebSocketLike {
-    private val socket = WebSocket(host, port)
+    private val socket = WebSocket(host, port, secure = port == SSAP_TLS_PORT)
+    override val peerFingerprint: String? get() = socket.peerFingerprint
     override fun send(text: String) = socket.send(text)
     override fun receive(timeoutMillis: Int): String? = socket.receive(timeoutMillis)
     override fun close() = socket.close()

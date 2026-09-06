@@ -4,6 +4,7 @@ import android.content.Context
 
 private const val PREFS = "tv_game_mode"
 private const val KEY_CLIENT = "client_key"
+private const val KEY_PIN = "certificate"
 private const val KEY_HOST = "host"
 private const val KEY_MODEL = "model"
 private const val KEY_RESTORE = "restore_mode"
@@ -34,6 +35,17 @@ class TvMemory(context: Context) {
     var clientKey: String?
         get() = prefs.getString(KEY_CLIENT, null)
         set(value) = prefs.edit().putString(KEY_CLIENT, value).apply()
+
+    /**
+     * The certificate the television presented when it was paired.
+     *
+     * Trust on first use. There is nothing to validate a self-signed certificate against, so what
+     * makes the set identifiable afterwards is that it presents the same one — and a mismatch
+     * means the pairing key is not handed over.
+     */
+    var certificatePin: String?
+        get() = prefs.getString(KEY_PIN, null)
+        set(value) = prefs.edit().putString(KEY_PIN, value).apply()
 
     var host: String?
         get() = prefs.getString(KEY_HOST, null)

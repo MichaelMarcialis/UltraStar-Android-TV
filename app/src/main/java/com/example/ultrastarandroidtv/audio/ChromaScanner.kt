@@ -90,6 +90,7 @@ object ChromaScanner {
         val down = Downsampler(builder)
         val deadline = System.currentTimeMillis() + BUDGET_MILLIS
         var inputDone = false
+        var finished = false
         var channels = 0
         var rate = 0
 
@@ -132,11 +133,24 @@ object ChromaScanner {
                         down.add(buffer, info.offset, info.size)
                     }
                     codec.releaseOutputBuffer(out, false)
-                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                        finished = true
+                        break
+                    }
                 }
             }
         }
 
+        // **The whole recording, or nothing.** Falling out of the loop on the deadline leaves a
+        // profile of however much decoded in time, and a *prefix* of a song is the worst possible
+        // input to this: the chart still overlaps most of it, so the sweep can find a confident
+        // peak somewhere in the part that was read and `#GAP` gets rewritten from audio that was
+        // never heard to the end. A missing answer is safe — the verdict becomes "could not tell"
+        // and the chart is left exactly as it was.
+        if (!finished) {
+            Log.w(TAG, "gave up after ${BUDGET_MILLIS}ms with the recording unfinished")
+            return null
+        }
         val profile = builder.build()
         return profile.takeIf { it.frames > 0 }
     }

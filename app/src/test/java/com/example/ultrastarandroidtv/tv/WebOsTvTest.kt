@@ -151,10 +151,58 @@ class WebOsTvTest {
 
     // ---------------------------------------------------------------------------------------
 
+    // ---------------------------------------------------------------------------------------
+    // Which television is on the other end
+    // ---------------------------------------------------------------------------------------
+
+    @Test
+    fun `a set presenting a different certificate is refused before the key is sent`() {
+        // The pairing key is a working credential for somebody's television. Trust on first use
+        // only means anything if the second use checks, and it has to check *before* registering
+        // -- once the key has gone out it cannot be taken back.
+        val socket = FakeSocket(peerFingerprint = "bb")
+
+        assertThrows(TvException::class.java) {
+            WebOsTv("192.0.2.1", expectedPin = "aa") { _, _ -> socket }
+        }
+        assertTrue("nothing may be sent to it", socket.sent.isEmpty())
+    }
+
+    @Test
+    fun `the first connection records the certificate it found`() {
+        var learned: String? = null
+        val socket = FakeSocket(
+            """{"type":"registered","id":"register_1","payload":{"client-key":"k"}}""",
+            peerFingerprint = "aa",
+        )
+
+        WebOsTv("192.0.2.1", expectedPin = null, onPin = { learned = it }) { _, _ -> socket }
+            .register(null)
+
+        assertEquals("aa", learned)
+    }
+
+    @Test
+    fun `the same set is accepted`() {
+        val socket = FakeSocket(
+            """{"type":"registered","id":"register_1","payload":{"client-key":"k"}}""",
+            peerFingerprint = "aa",
+        )
+
+        val tv = WebOsTv("192.0.2.1", expectedPin = "aa") { _, _ -> socket }
+
+        assertEquals("k", tv.register("k"))
+    }
+
+    // ---------------------------------------------------------------------------------------
+
     private fun tvOver(socket: FakeSocket) = WebOsTv("192.0.2.1") { _, _ -> socket }
 
     /** A scripted set: hands back the prepared replies in order, and keeps what was sent. */
-    private class FakeSocket(vararg replies: String) : WebSocketLike {
+    private class FakeSocket(
+        vararg replies: String,
+        override val peerFingerprint: String? = null,
+    ) : WebSocketLike {
         val sent = mutableListOf<String>()
         private val queue = ArrayDeque(replies.toList())
 
