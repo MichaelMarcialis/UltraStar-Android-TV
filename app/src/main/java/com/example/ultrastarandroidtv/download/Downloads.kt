@@ -7,9 +7,16 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.example.ultrastarandroidtv.audio.ChromaScanner
 import com.example.ultrastarandroidtv.library.LibraryLocation
 import com.example.ultrastarandroidtv.library.SafDocumentTree
+import com.example.ultrastarandroidtv.library.ScannedSong
 import com.example.ultrastarandroidtv.library.SongLibraryCache
+import com.example.ultrastarandroidtv.library.SongTextDecoder
+import com.example.ultrastarandroidtv.song.SyncVerdict
+import com.example.ultrastarandroidtv.song.UltraStarSongParser
+import com.example.ultrastarandroidtv.song.checkSync
+import com.example.ultrastarandroidtv.song.shiftGap
 import com.example.ultrastarandroidtv.net.ITunesArtwork
 import com.example.ultrastarandroidtv.net.UrlHttp
 import com.example.ultrastarandroidtv.net.YouTubeAudio
@@ -18,12 +25,19 @@ import com.example.ultrastarandroidtv.usdb.UsdbDetails
 import com.example.ultrastarandroidtv.usdb.UsdbSearch
 import com.example.ultrastarandroidtv.usdb.UsdbSession
 import com.example.ultrastarandroidtv.usdb.UsdbSong
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** How often the worker looks for something to do when the queue is empty or held. */
 private const val IDLE_POLL_MS = 250L
+
+/** Where a timing sweep reports itself, so it can be followed from `adb` instead of the sofa. */
+private const val TIMING_TAG = "Timing"
 
 /** How long a finished download stays on screen before the notice fades of its own accord. */
 const val ANNOUNCEMENT_SECONDS = 6
@@ -105,6 +119,18 @@ class Downloads(private val context: Context) {
      * ever. See [RepairMemory] — it is applied to the batch only, never to a song's own button.
      */
     val repairMemory = RepairMemory(context)
+
+    /** What listening to a song found, kept so it need not be listened to twice. */
+    val timing = TimingMemory(context)
+
+    /**
+     * Where the timing sweep runs.
+     *
+     * Its own scope rather than the `work` loop everything else uses, because this is not a
+     * queue: it is a job somebody starts deliberately about one song, it must not hold up a
+     * download behind it, and it has to outlive the screen that started it.
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * Set while a song is being sung. Stops the *next* step of a download from starting; see the
@@ -416,6 +442,56 @@ class Downloads(private val context: Context) {
      */
     private fun holdWhilePaused(stage: DownloadStage) {
         holdWhileSinging(stage !is DownloadStage.DownloadingVideo || stage.percent == 0)
+    }
+
+    /**
+     * Listens to one song and puts its timing right, if that is what it needs.
+     *
+     * About fifteen seconds: a decode of the whole recording and a transform over it. Deliberately
+     * one song rather than a library — see [TimingMemory] for why the sweep this replaces was the
+     * wrong shape. It still runs on this class's own scope and still honours [paused], because
+     * fifteen seconds is long enough to walk away from and long enough to matter if a song starts.
+     */
+    fun checkTiming(song: ScannedSong, cache: SongLibraryCache) {
+        if (timing.checking != null) return
+        scope.launch {
+            timing.checking = song.textId
+            val result = withContext(Dispatchers.IO) {
+                holdWhileSinging(atABoundary = true)
+                val card = card() ?: return@withContext null
+                checkOne(card, song)
+            }
+            timing.checking = null
+            if (result == null) return@launch
+            Log.i(TIMING_TAG, "${song.folderName}: $result")
+            timing.remember(song.textId, result)
+            // Only a correction makes the scan out of date, and only then is a rescan worth the
+            // five seconds it costs.
+            if (result == TimingResult.Corrected) cache.markChanged()
+        }
+    }
+
+    /** One song: read it, listen to it, and move `#GAP` if that is what it needs. */
+    private fun checkOne(card: SafDocumentTree, song: ScannedSong): TimingResult {
+        val audioId = song.audioId ?: return TimingResult.Unknown
+        val chart = runCatching { SongTextDecoder.decode(card.readBytes(song.textId)) }.getOrNull()
+            ?: return TimingResult.Unknown
+        val parsed = runCatching { UltraStarSongParser.parse(chart) }.getOrNull()
+            ?: return TimingResult.Unknown
+        val profile = ChromaScanner.scan(context, card.uriFor(audioId).toString())
+            ?: return TimingResult.Unknown
+
+        return when (val verdict = checkSync(parsed, profile)) {
+            is SyncVerdict.Shifted -> {
+                val moved = shiftGap(chart, verdict.offsetSeconds)
+                val written = moved != null &&
+                    card.overwrite(song.textId, moved.toByteArray(Charsets.UTF_8))
+                if (written) TimingResult.Corrected else TimingResult.Unknown
+            }
+            is SyncVerdict.Mismatch -> TimingResult.Wrong
+            SyncVerdict.Aligned -> TimingResult.Fine
+            SyncVerdict.Unscoreable -> TimingResult.Unknown
+        }
     }
 
     private fun holdWhileSinging(atABoundary: Boolean) {

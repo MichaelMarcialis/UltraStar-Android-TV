@@ -53,6 +53,7 @@ import com.example.ultrastarandroidtv.download.Downloads
 import com.example.ultrastarandroidtv.download.RepairPlan
 import com.example.ultrastarandroidtv.download.RepairStatus
 import com.example.ultrastarandroidtv.download.SongRepairer
+import com.example.ultrastarandroidtv.download.TimingResult
 import com.example.ultrastarandroidtv.download.repairQueueProgress
 import com.example.ultrastarandroidtv.download.repairStatusLabel
 import com.example.ultrastarandroidtv.download.repairSummary
@@ -421,7 +422,6 @@ fun SongsScreen(
                     }
                     ProgressBar(repairing, modifier = Modifier.fillMaxWidth())
                 }
-
                 Spacer(Modifier.height(16.dp))
 
                 // Sorting and filtering, small and across the top rather than down the side. This
@@ -483,8 +483,7 @@ fun SongsScreen(
                                 modifier = Modifier.padding(horizontal = 8.dp),
                             )
                         }
-                    }
-                }
+                    }                }
 
                 Spacer(Modifier.height(14.dp))
 
@@ -614,6 +613,30 @@ fun SongsScreen(
                         )
                     }
 
+                    // What listening to this song found, in its own words. This page is where
+                    // somebody comes when a song sounded wrong, so "the notes do not match this
+                    // recording" is the answer to the question they arrived with.
+                    if (downloads.timing.checking == song.textId) {
+                        Spacer(Modifier.height(14.dp))
+                        Text(
+                            "Listening to this song…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = GameTheme.lyricIdle,
+                        )
+                    } else {
+                        downloads.timing.resultFor(song.textId)?.let { result ->
+                            Spacer(Modifier.height(14.dp))
+                            Text(
+                                result.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = when (result) {
+                                    TimingResult.Wrong -> GameTheme.sparkWarm
+                                    else -> GameTheme.lyricIdle
+                                },
+                            )
+                        }
+                    }
+
                     val job = downloads.repairs.jobs.firstOrNull { it.song.textId == song.textId }
                     job?.let {
                         Spacer(Modifier.height(14.dp))
@@ -655,6 +678,33 @@ fun SongsScreen(
                                         ),
                                     )
                                 }
+                            }
+                        }
+                        // Listening to one song, where somebody has already decided this is the
+                        // song worth asking about. A library-wide version of this existed for an
+                        // afternoon and was removed: its cost grows with the library and its
+                        // value does not -- see [TimingMemory].
+                        //
+                        // Offered again after an answer, unlike Repair, because the question is
+                        // cheap and a person may have changed the files underneath it.
+                        //
+                        // **It stays on screen while it works**, saying "Listening…" rather than
+                        // disappearing. Taking away the button somebody has just pressed takes
+                        // the focus with it, and where focus lands after that is luck -- which on
+                        // a remote is the difference between a screen you can drive and one you
+                        // cannot. The press is refused while a check is running, by the same
+                        // guard that stops two at once.
+                        if (canModify && song.isPlayable) {
+                            val listening = downloads.timing.checking != null
+                            Spacer(Modifier.width(16.dp))
+                            Button(onClick = { downloads.checkTiming(song, cache) }) {
+                                Text(
+                                    if (listening) "Listening…" else "Check timing",
+                                    modifier = Modifier.padding(
+                                        horizontal = 16.dp,
+                                        vertical = 4.dp,
+                                    ),
+                                )
                             }
                         }
                         if (canModify) {
