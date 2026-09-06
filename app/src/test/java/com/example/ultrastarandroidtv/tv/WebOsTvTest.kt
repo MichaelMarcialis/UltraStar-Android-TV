@@ -183,6 +183,37 @@ class WebOsTvTest {
     }
 
     @Test
+    fun `a pinned set is never talked to in the clear`() {
+        // Falling back to the plain port would hand the pairing key over unencrypted and with no
+        // identity check at all -- so a moment's trouble on 3001, or anybody able to cause one,
+        // would undo both protections at once. A set reached securely before must be reachable
+        // securely again.
+        val plain = FakeSocket(peerFingerprint = null)
+
+        assertThrows(TvException::class.java) {
+            WebOsTv("192.0.2.1", expectedPin = "aa") { _, port ->
+                if (port == 3001) throw java.io.IOException("refused") else plain
+            }
+        }
+        assertTrue("nothing may be sent over it", plain.sent.isEmpty())
+    }
+
+    @Test
+    fun `a set that has never been paired may still use the plain port`() {
+        // Some older sets answer on 3000 only. With nothing pinned there is no secure pairing to
+        // downgrade, so this is a first contact rather than a step backwards.
+        val plain = FakeSocket(
+            """{"type":"registered","id":"register_1","payload":{"client-key":"k"}}""",
+        )
+
+        val tv = WebOsTv("192.0.2.1", expectedPin = null) { _, port ->
+            if (port == 3001) throw java.io.IOException("refused") else plain
+        }
+
+        assertEquals("k", tv.register(null))
+    }
+
+    @Test
     fun `the same set is accepted`() {
         val socket = FakeSocket(
             """{"type":"registered","id":"register_1","payload":{"client-key":"k"}}""",

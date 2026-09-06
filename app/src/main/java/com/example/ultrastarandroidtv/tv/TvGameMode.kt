@@ -155,9 +155,11 @@ class TvGameMode(context: Context) {
             } else {
                 "Accept the pairing prompt on the television…"
             }
+            var accepted = false
             val paired = runCatching {
                 openTv(host).use { tv ->
                     memory.clientKey = tv.register(null)
+                    accepted = true
                     memory.host = host
                     memory.model = tv.modelName()
                     status = "Learning the picture modes…"
@@ -185,6 +187,13 @@ class TvGameMode(context: Context) {
                 return@withContext
             }
             memory.forget()
+
+            // Somebody accepted the prompt on this set and learning still could not find a way
+            // back — the television was already in game mode, or it reports the same values for
+            // every mode. [learn] has already said which, in words somebody can act on, so the
+            // search stops here rather than moving to the next television and overwriting that
+            // with a message about prompts nobody was ever shown.
+            if (accepted) return@withContext
         }
         status = "No television accepted the pairing prompt. Turn this off and on to try again."
     }

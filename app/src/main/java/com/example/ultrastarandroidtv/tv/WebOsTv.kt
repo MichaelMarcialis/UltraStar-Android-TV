@@ -98,11 +98,20 @@ class WebOsTv(
     /**
      * Opens the best connection the set will accept, and checks it is the same set as last time.
      *
-     * TLS first. The plain port is the fallback rather than the default because everything sent
-     * over it, the pairing key included, is readable by anything on the network.
+     * TLS first, always. The plain port exists for a set that will not answer on 3001 at all, and
+     * **is refused outright once a certificate has been pinned**: falling back would hand the
+     * pairing key over unencrypted and unchecked, so a moment of trouble on 3001 — or anybody
+     * able to cause one — would undo both protections at once. A set that has been reached
+     * securely before is expected to be reachable securely again.
      */
     private fun connect(): WebSocketLike {
         val secure = runCatching { socketFactory(host, SSAP_TLS_PORT) }.getOrNull()
+        if (secure == null && expectedPin != null) {
+            throw TvException(
+                "This television would not accept a secure connection, and this app will not " +
+                    "send its key any other way. Try again in a moment.",
+            )
+        }
         val socket = secure ?: socketFactory(host, SSAP_PLAIN_PORT)
 
         val fingerprint = socket.peerFingerprint

@@ -203,9 +203,11 @@ class Tv:
     def __init__(self, host: str, port: int | None = None):
         self.host = host
         self.counter = 0
-        # 3000 is plain ws and 3001 is wss; a C1 answers on both, but which one a
-        # given firmware leaves open has changed before, so try the cheap one first.
-        attempts = [(port, port == 3001)] if port else [(3000, False), (3001, True)]
+        # **TLS first.** Both ports answer on a C1, and the saved pairing token goes out on
+        # every connection — so preferring the plain one would make this diagnostic the unsafe
+        # way to talk to the same television the app talks to securely. Plaintext stays as a
+        # fallback for a set that will not answer on 3001, and can be asked for explicitly.
+        attempts = [(port, port == 3001)] if port else [(3001, True), (3000, False)]
         last = None
         for p, secure in attempts:
             try:

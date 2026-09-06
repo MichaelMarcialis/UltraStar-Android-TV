@@ -466,18 +466,19 @@ class Downloads(private val context: Context) {
         // best the ids then fail to resolve; at worst one exists under both grants and this
         // rewrites a `#GAP` in somebody else's chart. The same hazard `runRepair` already guards.
         //
-        // **The tree object is captured, not just its address.** Comparing the address and then
-        // asking for the tree again is two reads of a thing that can change between them, which
-        // is the very race this is here to stop; the comparison then only says the folder has not
-        // changed *since*, and the instance is the one the ids came from either way.
-        val askedIn = cardUri()?.toString()
-        val askedTree = card()
+        // **One read of the granted folder, and the tree built from that one read.** Asking for
+        // the address and then asking for the tree is two reads of a thing that can change
+        // between them — the very race this is here to stop — so the address is taken once and
+        // the tree is built from it rather than from a second look. The comparison later only
+        // says the folder is still the same one, which is a different question.
+        val askedUri = cardUri()
+        val askedTree = askedUri?.let { SafDocumentTree(context.contentResolver, it) }
 
         scope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
                     holdWhileSinging(atABoundary = true)
-                    if (askedTree == null || cardUri()?.toString() != askedIn) return@withContext null
+                    if (askedTree == null || cardUri() != askedUri) return@withContext null
                     checkOne(askedTree, song)
                 } ?: return@launch
                 Log.i(TIMING_TAG, "${song.folderName}: $result")

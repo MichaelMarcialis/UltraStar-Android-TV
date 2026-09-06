@@ -1117,6 +1117,13 @@ Two decimal places of agreement on the mismatch confidence, from two entirely se
 
 **Checking an address and then resolving it is two reads** (2026-09-06, from review). The timing check compared the granted folder's URI and then asked for the tree again, so a folder changed between those two calls handed old document ids to a new tree — the exact race the check was added to prevent. The tree object is captured up front now, and the comparison only says it is still current.
 
+**A third review round, and two of the four were protections undoing themselves** (2026-09-06).
+
+- **A pinned television is never talked to in the clear.** The TLS change fell back to port 3000 whenever 3001 did not answer — which hands the pairing key over unencrypted *and* unchecked, since a plain connection has no fingerprint to compare. A moment's trouble on 3001, or anybody able to cause one, would have undone both protections at once. Refused outright once a certificate is pinned; the plain port survives only as first contact for a set that has never been reached securely.
+- **The harness was the unsafe way to talk to the same set**, trying 3000 before 3001, so every `info` or `mode` run sent the saved token in the clear. TLS first there too.
+- **One read of the granted folder, not two.** Capturing the tree by calling `card()` still asked for the address a second time, which is the very race the capture was added to close. The address is taken once and the tree built from it.
+- **"Paired but could not learn" is not "nobody accepted the prompt".** When registration succeeded and learning could not find a way back, the pairing loop cleared the key and then overwrote `learn`'s actionable message — "your television is already in game mode, set the one you normally use" — with a message about prompts nobody had been shown. The search now stops at the set that was accepted and keeps what it said.
+
 **Still unverified on hardware by a person singing**: the arrow, the praise, the point animation, the stars and the high scores. Gameplay *itself* is now reachable from adb with the bypass described in the 2026-09-05 section — real microphones, no voice — which is how the video path, the crop, the fades and the frame timing were measured. The settings screen itself *is* verified there, difficulty dial included. `adb logcat -s Gameplay Loudness` reports the settings in effect — difficulty and tolerance among them — and the measured gain, once per song.
 
 **Not started:** nothing from the original roadmap. Next work is whatever testing turns up.
