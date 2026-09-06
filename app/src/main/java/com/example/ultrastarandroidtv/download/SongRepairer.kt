@@ -134,6 +134,13 @@ class SongRepairer(
     private val http: Http,
     private val tree: DocumentTree,
     private val writer: DocumentWriter,
+    /**
+     * Puts a chart in time with music that has just been fetched for it.
+     *
+     * A repair is exactly the case a fresh download is: a chart written by one person and audio
+     * taken from a video by another, meeting for the first time. See [SyncCorrector].
+     */
+    private val sync: SyncCorrector = SyncCorrector.NONE,
 ) {
 
     /**
@@ -267,7 +274,7 @@ class SongRepairer(
             // allowed to point at it -- the same rule a fresh download follows, and for the same
             // reason: a `#MP3:` naming a file that is not there is a song that will not play.
             val savedAs = tree.list(song.folderId).firstOrNull { it.id == audioId }?.name ?: name
-            if (!repointChart(song, audioFile = savedAs, coverFile = null)) {
+            if (!repointChart(song, audioFile = savedAs, coverFile = null, audioId = audioId)) {
                 // The audio goes with the failure. Left behind it is a file the chart does not
                 // name, and the next attempt would be given a *suffixed* copy by SAF rather
                 // than replacing it -- so every retry would leave one more orphan in the
@@ -373,10 +380,23 @@ class SongRepairer(
      * data is how every syllable in the library got hyphenated once already. [retargetChart] only
      * ever touches header lines and preserves line endings byte for byte.
      */
-    private fun repointChart(song: ScannedSong, audioFile: String?, coverFile: String?): Boolean {
+    /**
+     * Points the chart at what is now beside it, and — when music has just arrived — puts it in
+     * time with that music first.
+     *
+     * [audioId] is null for a cover-only repair, where there is no new recording to measure
+     * against and the chart's timing is none of this method's business.
+     */
+    private fun repointChart(
+        song: ScannedSong,
+        audioFile: String?,
+        coverFile: String?,
+        audioId: String? = null,
+    ): Boolean {
         val text = runCatching { SongTextDecoder.decode(tree.readBytes(song.textId)) }.getOrNull()
             ?: return false
-        val updated = retargetChart(text, audioFile, coverFile)
+        val timed = if (audioId == null) text else sync.correct(audioId, text).chart
+        val updated = retargetChart(timed, audioFile, coverFile)
         // Overwritten in place rather than written again by name. Creating a document whose name
         // is already taken gets it suffixed, and a second `.txt` in a folder is a second song in
         // the picker -- identical to the first and pointing at the same audio.

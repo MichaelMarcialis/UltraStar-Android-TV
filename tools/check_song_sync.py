@@ -119,10 +119,19 @@ def align(chart_path, media_path):
     profile = chroma(media_path)
     frames = len(profile)
 
+    # A frame is computed from `window` samples starting at `f * HOP`, so the moment it really
+    # describes is its centre, half a window later. Mapping a note straight onto `start / HOP`
+    # reads the audio a half-window late, and the sweep hands that back as a negative offset --
+    # which is exactly why two songs known to be in time used to land at -0.09 s and -0.14 s
+    # instead of at zero. Corrected here and in the app, which must agree.
+    centre = WINDOW // 2 // HOP
+
     at, want = [], []
     for start, end, pitch_class in notes:
-        first = int(start / HOP_SECONDS)
-        last = max(int(end / HOP_SECONDS), first + 1)
+        # Rounded rather than truncated: truncation always moves a note earlier, by half a
+        # frame on average, which is 23 ms of bias in the number this whole script reports.
+        first = round(start / HOP_SECONDS) - centre
+        last = max(round(end / HOP_SECONDS) - centre, first + 1)
         at.extend(range(first, last))
         want.extend([pitch_class] * (last - first))
     at, want = np.array(at), np.array(want)

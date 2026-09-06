@@ -1007,9 +1007,50 @@ Measured rather than assumed at every step — `tools/lg_game_mode.py` is the ha
 Reported as Jimmy Cliff's "You Can Get It If You Really Want" being off like Magic Dance. It is not like Magic Dance at all, and `tools/check_song_sync.py` says why: it peaks at **1.51× the mean** — comfortably in the band a genuine chart occupies — but **at +0.51 s**. A real peak in the wrong place means the chart *does* describe this recording and is simply out of time with it, which is a `#GAP` error and nothing more. Magic Dance has no peak worth the name at any offset, which is a different recording and unfixable.
 
 - **`newGap = oldGap + offset`**, and the fix is verified by re-scoring rather than by ear: the corrected chart has to peak within a tenth of a second of zero before it is written back. Six songs fixed on the card that way — Jimmy Cliff (+0.51 s), David Bowie's "Modern Love" (−2.28 s), Mulan's "True To Your Heart" (−0.28 s), "A Million Dreams" (−0.33 s), The Monkees' "I'm A Believer" (+3.44 s) and Weezer's "El scorcho" (+1.49 s).
-- **`ALIGNED_SECONDS` was too generous at 0.6 s** and called Jimmy Cliff "ok". That is nine beats of a 257 BPM song. It is 0.25 s now: two known-good songs land at −0.14 and −0.09 s and the sweep's own resolution is one hop, 46 ms, so a quarter of a second is still several times the noise floor while catching anything a singer would notice.
+- **`ALIGNED_SECONDS` was too generous at 0.6 s** and called Jimmy Cliff "ok". That is nine beats of a 257 BPM song. It is 0.25 s now. (The "known-good songs land at −0.14 and −0.09 s" noted here was not a property of those songs at all — it was a half-window bias in the measurement itself, found the next day and corrected. See the section below.)
 - **Seven remain MISMATCH and no offset will help them**: Magic Dance, "Suffragette City", "Young Americans", "Friend Like Me", "In Summer", "Twist And Shout [DUET]" and "Cherry Bomb". Each needs a different chart or different audio — which is what the Add-songs screen is for.
 - Worth re-running after any batch of downloads. 123 songs took about forty minutes.
+
+**The app checks a song's timing when it downloads it** (`song/SyncCheck.kt`, `audio/ChromaScanner.kt`, `download/SyncCorrector.kt`, 2026-09-06). What was a Python script on the workstation is now a thing the app does for itself, at the one moment it costs nothing.
+
+- **Why at download time.** A chart and a recording arrive from two different places — the chart from USDB, the audio from whichever YouTube upload the chart's meta tags name — and until now nothing checked that they agreed. Six of 123 songs on this card were out of time, and every one was found by somebody starting the song and noticing, which is the worst possible moment. After a download the audio is already on the card, nobody is singing, and half a minute has just been spent waiting on somebody else's throttle.
+
+- **It moves `#GAP` and nothing else, and only when it is sure.** A confident peak in the wrong place means the chart *does* describe this recording — `SyncVerdict.Shifted`, and one number fixes it. No peak worth the name means it was written against a *different* recording — `Mismatch`, which no offset repairs, so the chart is left exactly as it came and the screen says so. Getting these two confused is the whole risk: a chart moved by a meaningless number is a song that is wrong *and* edited.
+
+- **The correction is announced, never silent.** "Added — Timing corrected by +0.5 s" on the row and in the finished-download notice. An app that edits somebody's files quietly is one nobody can trust, and it is also the only warning available for a chart that does not match its recording at all.
+
+- **Wired into repair as well as download**, because a repair is the same meeting of a chart and a recording from different places. `repointChart` takes the new audio's id and puts the chart in time before pointing it at the file.
+
+**How it works, and what it costs**
+
+Pitch, not rhythm — the same method the tool established, for the same reason recorded there: onsets correlate nearly as well at every bar line of a 4/4 song, and that approach once reported a +34 s offset for a song that was perfectly in sync. Each analysis frame of the recording is reduced to how much energy sits in each of the twelve pitch classes; the chart becomes "which class should be sounding in this frame"; the two are correlated across a ±45 s sweep.
+
+- **It reuses what was already here.** `Fft.kt` — written for the visualiser — does the transform, and `ChromaScanner` decodes with the `MediaExtractor`/`MediaCodec` pair `LoudnessScanner` already uses on this library. The genuinely new part is about a hundred lines.
+- **Nothing is held as samples.** Three and a half minutes at 11 kHz is nine megabytes of float on a device with a 192 MB heap limit; the decoder streams into `ChromaBuilder`, which emits twelve numbers every 46 ms. A long song's whole profile is about 200 KB.
+- **Unlike loudness, it decodes the whole file.** Loudness is an average and five windows will do; this needs the *sequence*, because the melody a song moves through is what identifies where the chart belongs.
+- **Measured on the Shield: 6–13 s a song** — SAF read, decode and transform together, the first one slowest. Against a 27 s throttle and a video download, modest.
+
+**The half-window bias, which was in the tool from the beginning and in every number it ever reported**
+
+Writing tests for this found a real error. A frame is computed from `window` samples starting at `f * hop`, so the moment it describes is its **centre**, half a window later — but a note was mapped straight onto `start / hop`, which reads the audio a half-window late and hands that back as a negative offset.
+
+- **It is worth 0.19 s, and it was hiding in plain sight.** The two known-good control songs landed at **−0.14 s and −0.09 s** rather than at zero, and that was written down as though it were a property of those songs. With the correction they read **+0.05 s and +0.05 s** — one hop, which is the resolution.
+- Frame indices are **rounded rather than truncated** for the same reason: truncation always moves a note earlier, by half a frame on average, which is another 23 ms of bias in the one number this exists to report.
+- **Both fixes are in the tool as well**, because a sweep from the workstation and a check on the television have to agree about the same song.
+- **The six songs corrected before this was found were each about 0.15 s over**, exactly as predicted, and have been re-measured and re-corrected: they now sit at 0.00–0.05 s.
+
+**Verified on hardware against songs whose answers were already known**, through the app's own SAF path rather than a file path — scoped storage blocks direct card reads, and the first probe said "files missing" for that reason:
+
+| song | the app said | the tool says |
+|---|---|---|
+| Toto — Africa (untouched, known good) | Aligned | 1.93× at +0.05 s |
+| David Bowie — Magic Dance (known mismatch) | **Mismatch, confidence 1.10** | 1.09× |
+| Jimmy Cliff (just corrected) | Aligned | +0.00 s |
+| Weezer — El scorcho (just corrected) | Aligned | +0.00 s |
+
+Two decimal places of agreement on the mismatch confidence, from two entirely separate implementations.
+
+**What it will not do.** It only ever fixes a *constant* offset; a chart whose `#BPM` is wrong drifts, and no single number repairs that. A rap or spoken-word chart has little melodic signal, scores low and is left alone — `Unscoreable`, which is deliberately not a failure. And there is still no way to sweep the existing library from the television; that is a Songs-screen action waiting to be built, and `tools/check_song_sync.py --card` does it from here in the meantime.
 
 **Still unverified on hardware by a person singing**: the arrow, the praise, the point animation, the stars and the high scores. Gameplay *itself* is now reachable from adb with the bypass described in the 2026-09-05 section — real microphones, no voice — which is how the video path, the crop, the fades and the frame timing were measured. The settings screen itself *is* verified there, difficulty dial included. `adb logcat -s Gameplay Loudness` reports the settings in effect — difficulty and tolerance among them — and the measured gain, once per song.
 

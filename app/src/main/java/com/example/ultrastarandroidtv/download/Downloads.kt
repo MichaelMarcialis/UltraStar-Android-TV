@@ -194,6 +194,7 @@ class Downloads(private val context: Context) {
             http = http,
             tree = card,
             writer = card,
+            sync = syncFor(card),
         )
         val outcome = runCatching {
             withContext(Dispatchers.IO) {
@@ -280,6 +281,7 @@ class Downloads(private val context: Context) {
             http = http,
             tree = card,
             writer = card,
+            sync = syncFor(card),
         )
         val outcome = runCatching {
             withContext(Dispatchers.IO) {
@@ -343,6 +345,7 @@ class Downloads(private val context: Context) {
             http = http,
             tree = card,
             writer = card,
+            sync = syncFor(card),
         )
 
         val first = attempt(downloader, entry, entry.song)
@@ -391,7 +394,7 @@ class Downloads(private val context: Context) {
 
     private fun saved(outcome: DownloadOutcome.Saved): QueueStatus {
         _downloaded.add(outcome.folderName.lowercase())
-        return QueueStatus.Done(outcome.folderName)
+        return QueueStatus.Done(outcome.folderName, outcome.timingNote)
     }
 
     /** Folder names on the card, lowercased, so a replacement never collides with one. */
@@ -433,7 +436,8 @@ class Downloads(private val context: Context) {
     private fun announce(entry: QueuedSong) {
         val name = "${entry.song.artist} — ${entry.song.title}".trim(' ', '—')
         announcement = when (val status = entry.status) {
-            is QueueStatus.Done -> Announcement(name, "Added to your songs", good = true)
+            is QueueStatus.Done ->
+                Announcement(name, status.note?.let { "Added — $it" } ?: "Added to your songs", good = true)
             is QueueStatus.Failed -> Announcement(name, status.message, good = false)
             else -> return
         }
@@ -445,6 +449,16 @@ class Downloads(private val context: Context) {
      * Resolved per download rather than held, so choosing a different folder part-way through an
      * evening is picked up without anything having to be told about it.
      */
+    /**
+     * The timing check, bound to the folder the files are being written into.
+     *
+     * Built per job rather than once, because it needs to turn a document id into a URI and that
+     * is a property of the *tree* — a corrector held across a change of song folder would be
+     * pointing at the old one.
+     */
+    private fun syncFor(card: SafDocumentTree): SyncCorrector =
+        CardSyncCorrector(context) { id -> card.uriFor(id).toString() }
+
     private fun card(): SafDocumentTree? {
         val uri = cardUri() ?: return null
         return SafDocumentTree(context.contentResolver, uri)

@@ -83,6 +83,15 @@ sealed interface DownloadOutcome {
         val audioBytes: Int,
         val coverSaved: Boolean,
         val videoSaved: Boolean,
+        /**
+         * What the timing check found, or null when it had nothing to say.
+         *
+         * Worth carrying all the way to the screen: a chart whose `#GAP` has just been moved half
+         * a second is a file this app edited, and an app that edits somebody's files quietly is
+         * one nobody can trust. It is also the only warning available for a chart that does not
+         * match its recording at all — the alternative is finding out mid-song.
+         */
+        val timingNote: String? = null,
     ) : DownloadOutcome
 
     data class Failed(val problem: DownloadProblem, val message: String) : DownloadOutcome
@@ -141,6 +150,13 @@ class SongDownloader(
     private val writer: DocumentWriter,
     /** Injected so the throttle can be tested without actually waiting half a minute. */
     private val sleepMillis: (Long) -> Unit = { Thread.sleep(it) },
+    /**
+     * Puts a chart in time with the recording that arrived beside it.
+     *
+     * Injected because measuring it needs a decoder, and everything else in this class is
+     * ordinary logic that runs on a workstation. See [SyncCorrector].
+     */
+    private val sync: SyncCorrector = SyncCorrector.NONE,
 ) {
 
     fun download(song: UsdbSong, onStage: (DownloadStage) -> Unit = {}): DownloadOutcome {
@@ -329,11 +345,17 @@ class SongDownloader(
         val audioName = names[audioId] ?: "$folderName.$audioExtension"
         val coverName = coverId?.let { names[it] }
 
+        // The music is on the card and nothing is written yet, which is the one moment the chart
+        // can be put right without rewriting anything: measure it against the recording it will
+        // actually be sung to, and correct `#GAP` before the file exists at all.
+        val timing = sync.correct(audioId, chart)
+
         val chartId = writer.writeFile(
             parentId = folderId,
             name = "$folderName.txt",
             mimeType = "text/plain",
-            bytes = retargetChart(chart, audioName, coverName, usdbId).toByteArray(Charsets.UTF_8),
+            bytes = retargetChart(timing.chart, audioName, coverName, usdbId)
+                .toByteArray(Charsets.UTF_8),
         ) ?: return giveUp("The song file could not be saved to the card.")
 
         // Everything above this line is the song. The video is added afterwards on purpose: it is
@@ -348,6 +370,7 @@ class SongDownloader(
             audioBytes = audioBytes.size,
             coverSaved = coverName != null,
             videoSaved = videoSaved,
+            timingNote = timing.note,
         )
     }
 
