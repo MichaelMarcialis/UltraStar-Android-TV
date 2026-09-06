@@ -196,6 +196,15 @@ class TvGameMode(context: Context) {
      * Stops at the first mode whose values match the ones read on the way in, because that is the
      * mode the television was already in — there is nothing further to learn that this feature
      * needs, and every extra attempt is another flicker on screen.
+     *
+     * **A match on the very first candidate has to be checked**, and that is not paranoia: a C1
+     * was observed reporting the *same* five values for every picture mode there is — vivid,
+     * cinema, eco, standard and game all reading backlight 100 / contrast 100 / colour 55, where
+     * the day before they had been plainly different. Whatever puts a set into that state (an HDR
+     * signal on the input is the likeliest), the effect is that the first mode tried always
+     * "matches", so this would confidently record whatever happens to be first in the list as the
+     * mode to go back to, and restore that instead of what somebody actually had. Believing a
+     * measurement that cannot fail is worse than admitting the instrument is blind.
      */
     private fun learn(tv: WebOsTv) {
         val before = tv.fingerprint()
@@ -203,12 +212,22 @@ class TvGameMode(context: Context) {
             status = "The television will not say what its picture looks like."
             return
         }
-        for (mode in KNOWN_PICTURE_MODES) {
+        for ((index, mode) in KNOWN_PICTURE_MODES.withIndex()) {
             tv.setPictureMode(mode)
             Thread.sleep(SETTLE_MILLIS)
             val seen = tv.fingerprint()
             memory.learn(mode, seen)
             if (seen.values == before.values) {
+                // An immediate match is only believable if a different mode looks different. One
+                // extra change to find out, and only in the case where the doubt exists.
+                if (index == 0 && !valuesVaryByMode(tv, seen)) {
+                    tv.setPictureMode(mode)
+                    status = "This television reports the same picture values for every mode, " +
+                        "so there is no way to tell which one you had. Game mode is not safe to " +
+                        "switch on here."
+                    memory.restoreMode = null
+                    return
+                }
                 memory.restoreMode = mode
                 status = "Ready. Your picture mode will be put back when the app closes."
                 return
@@ -223,6 +242,22 @@ class TvGameMode(context: Context) {
         memory.restoreMode = fallback
         status = "Ready, but your picture mode was not one this app recognises — " +
             "it will go back to ${prettyName(fallback)}."
+    }
+
+    /**
+     * Whether this set's readable values actually differ between picture modes.
+     *
+     * Asked by trying one deliberately unlike the first candidate and seeing whether anything
+     * moves. Vivid is the loudest mode a television has, so if its numbers match Filmmaker's the
+     * numbers are telling us nothing at all.
+     */
+    private fun valuesVaryByMode(tv: WebOsTv, reference: PictureFingerprint): Boolean {
+        val probe = KNOWN_PICTURE_MODES.firstOrNull { it == "vivid" } ?: return true
+        tv.setPictureMode(probe)
+        Thread.sleep(SETTLE_MILLIS)
+        val seen = tv.fingerprint()
+        memory.learn(probe, seen)
+        return seen.values != reference.values
     }
 
     private fun engageNow() {
