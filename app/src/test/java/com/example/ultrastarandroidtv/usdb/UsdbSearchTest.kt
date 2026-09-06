@@ -294,12 +294,34 @@ class UsdbSearchTest {
         assertEquals(2, keywordSearches(SongFilter(keyword = "queen")).size)
     }
 
-    /** With a field already named, splitting would be arguing with what was asked for. */
+    /**
+     * With a field already named, the keyword goes to the field that is still free.
+     *
+     * It used to be *dropped* instead, which quietly widened the search: `keyword="dancing
+     * queen", artist="abba"` produced a search for every ABBA song on USDB and called it a search
+     * for "dancing queen". Splitting is also off the table here — the caller has already said
+     * which field the artist is, and arguing with that is not this function's job.
+     */
     @Test
-    fun `a keyword is not split when the artist was given explicitly`() {
+    fun `a keyword constrains the field that is still free, and is never dropped`() {
         val searches = keywordSearches(SongFilter(keyword = "dancing queen", artist = "abba"))
 
-        assertEquals(2, searches.size)
+        assertEquals(1, searches.size)
+        assertEquals("abba", searches.single().artist)
+        assertEquals("dancing queen", searches.single().title)
+        assertEquals("", searches.single().keyword)
+    }
+
+    /** Nowhere left to put it, so the filter is honoured as given rather than widened. */
+    @Test
+    fun `a keyword with both fields already named is ignored, not merged`() {
+        val searches = keywordSearches(
+            SongFilter(keyword = "anything", artist = "abba", title = "waterloo"),
+        )
+
+        assertEquals(1, searches.size)
+        assertEquals("abba", searches.single().artist)
+        assertEquals("waterloo", searches.single().title)
     }
 
     /**

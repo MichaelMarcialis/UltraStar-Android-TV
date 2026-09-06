@@ -259,9 +259,12 @@ fun SongsScreen(
         val at = arrange(songs, sort, filter).indexOfFirst { it.textId == textId }
         if (at >= 0) {
             gridState.scrollToItem(at)
-            repeat(FOCUS_ATTEMPTS) {
+            // `return@repeat` would only end the current iteration and go round again -- the loop
+            // has to be left outright, or every successful return from a song asks for focus
+            // eleven more times.
+            for (attempt in 0 until FOCUS_ATTEMPTS) {
                 withFrameNanos { }
-                if (runCatching { returning.requestFocus() }.isSuccess) return@repeat
+                if (runCatching { returning.requestFocus() }.isSuccess) break
             }
         } else {
             runCatching { first.requestFocus() }

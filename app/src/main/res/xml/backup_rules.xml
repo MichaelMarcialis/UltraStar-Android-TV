@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-   Everything is backed up except the USDB login. A password that rides a cloud backup off the
-   device is a password stored somewhere nobody chose to store it, and it is worth nothing to a
-   restore anyway: the account is the user's, and signing in again is one screen.
+   Everything is backed up except two files, and both are credentials for something outside this
+   app.
+
+   The USDB login: a password that rides a cloud backup off the device is a password stored
+   somewhere nobody chose to store it, and it is worth nothing to a restore anyway — the account
+   is the user's and signing in again is one screen.
+
+   The television's pairing token: it is a working key to control somebody's television, together
+   with its address on their network. Restored onto a different device it would let that device
+   drive a set nobody had paired it with, and it is one prompt to obtain again.
    Used on API 30 and below; API 31+ reads data_extraction_rules.xml instead.
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="usdb_account.xml" />
+    <exclude domain="sharedpref" path="tv_game_mode.xml" />
 </full-backup-content>

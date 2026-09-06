@@ -30,7 +30,10 @@ data class SongFilter(
     /**
      * One box that searches artist *and* title — what somebody actually types when they want a
      * song. USDB has no field that spans both, so this becomes two searches; see [UsdbSearch].
-     * Set alongside [artist] or [title] it simply adds to them.
+     *
+     * Set alongside [artist] or [title] it constrains only whichever of them is still free, and
+     * with both already set it is ignored — there is nowhere left to put it, since USDB matches
+     * each field as a substring and two terms in one field match neither.
      */
     val keyword: String = "",
     val artist: String = "",
@@ -332,10 +335,17 @@ internal fun answersPhrase(song: UsdbSong, phrase: String): Boolean =
  */
 fun keywordSearches(filter: SongFilter): List<SongFilter> {
     val word = filter.keyword.trim()
-    val searches = mutableListOf(
-        filter.copy(keyword = "", artist = joinTerms(filter.artist, word)),
-        filter.copy(keyword = "", title = joinTerms(filter.title, word)),
-    )
+    // One keyword becomes one search per field it could constrain — but only a field the caller
+    // has left free. Merging it into a field that is already set is not possible (USDB matches
+    // each field as a substring, so two terms in one field match neither), and *dropping* it, as
+    // this did, quietly widened the search instead: `keyword="queen", artist="abba"` searched
+    // every ABBA song and called the result a search for Queen.
+    val searches = mutableListOf<SongFilter>()
+    if (filter.artist.isBlank()) searches += filter.copy(keyword = "", artist = word)
+    if (filter.title.isBlank()) searches += filter.copy(keyword = "", title = word)
+    // Both already constrained: the keyword has nowhere to go, so the filter is honoured as
+    // given rather than a third meaning being invented for it.
+    if (searches.isEmpty()) searches += filter.copy(keyword = "")
 
     val space = word.indexOf(' ')
     if (space > 0 && filter.artist.isBlank() && filter.title.isBlank()) {
@@ -347,9 +357,6 @@ fun keywordSearches(filter: SongFilter): List<SongFilter> {
     }
     return searches
 }
-
-private fun joinTerms(existing: String, word: String): String =
-    if (existing.isBlank()) word else existing.trim()
 
 /**
  * What to try when the ordinary searches found nothing at all.

@@ -49,9 +49,15 @@ import time
 
 KEY_FILE = os.path.join(os.path.expanduser("~"), ".lg_webos_client_key")
 
-# The permissions a remote asks for. Trimmed to what is actually used here plus the
-# handful the set refuses to pair without; an over-long list is not more capable, it
-# just makes the prompt on the television longer.
+# LG's own test manifest, copied verbatim and deliberately unedited.
+#
+# The `signed` block carries a signature over its own contents, so changing anything inside it --
+# the obvious first move being to put this app's name in `localizedAppNames` so the prompt says
+# who is asking -- makes a manifest that no longer matches its own signature. This copy had been
+# edited in exactly that way, and had a permission miscased into `READ_original_SETTINGS` with
+# it. Pairing happened to work anyway, so the set evidently does not check; that is not a reason
+# to ship a manifest that lies about itself, and it has to stay what `WebOsTv.kt` sends or the
+# two will not behave the same way on a firmware that does check.
 MANIFEST = {
     "manifestVersion": 1,
     "appVersion": "1.1",
@@ -59,14 +65,14 @@ MANIFEST = {
         "created": "20140509",
         "appId": "com.lge.test",
         "vendorId": "com.lge",
-        "localizedAppNames": {"": "UltraStar Android TV"},
+        "localizedAppNames": {"": "LG Remote App", "ko-KR": "\ub9ac\ubaa8\ucee8 \uc571", "zxx-XX": "\u041b\u0413 R\u044d\u043cot\u044d A\u041f\u041f"},
         "localizedVendorNames": {"": "LG Electronics"},
         "permissions": ["TEST_SECURE", "CONTROL_INPUT_TEXT", "CONTROL_MOUSE_AND_KEYBOARD",
                         "READ_INSTALLED_APPS", "READ_LGE_SDX", "READ_NOTIFICATIONS",
                         "SEARCH", "WRITE_SETTINGS", "WRITE_NOTIFICATION_ALERT",
                         "CONTROL_POWER", "READ_CURRENT_CHANNEL", "READ_RUNNING_APPS",
                         "READ_UPDATE_INFO", "UPDATE_FROM_REMOTE_APP",
-                        "READ_original_SETTINGS", "CONTROL_DISPLAY"],
+                        "READ_ORIGINAL_SETTINGS", "CONTROL_DISPLAY"],
         "serial": "2f930e2d2cfe083771f68e4fe7bb07",
     },
     "permissions": [

@@ -83,7 +83,22 @@ class SyncCheckTest {
         // twelve classes, with a bias of a few percent towards what the chart asks for, six
         // frames — a third of a second — from where it claims. That is the shape of a song whose
         // melody this cannot hear, and it must not be read as an accusation.
-        val verdict = checkSync(song, faintProfile(song, biasFrames = 6, bias = 0.03f))
+        val verdict = checkSync(song, faintProfile(song, biases = listOf(6 to 0.03f)))
+
+        assertTrue("expected no accusation, was $verdict", verdict !is SyncVerdict.Mismatch)
+    }
+
+    @Test
+    fun `a chart that fits where it says is never called the wrong recording`() {
+        // The case a review caught. Judging a weak result by *where its peak landed* is judging
+        // noise: across a ninety-second sweep a meaningless peak is more than a second from zero
+        // almost every time, so that test alone would eventually accuse any song this cannot
+        // hear. Here the chart plainly does describe this recording -- it scores well at the
+        // position it claims -- and something further out happens to score a little better.
+        val song = songOf(MELODY)
+        val profile = faintProfile(song, biases = listOf(0 to 0.05f, 90 to 0.055f))
+
+        val verdict = checkSync(song, profile)
 
         assertTrue("expected no accusation, was $verdict", verdict !is SyncVerdict.Mismatch)
     }
@@ -195,26 +210,31 @@ class SyncCheckTest {
      * from the outside — so a positive shift here should come back as a positive offset.
      */
     /**
-     * A profile that barely favours the chart at all, [biasFrames] away from where it says.
+     * A profile that barely favours the chart, by [biases] — each an offset in frames and how
+     * much to add there.
      *
-     * Flat everywhere else, so the peak-to-mean ratio is whatever [bias] makes it and nothing
-     * about the fixture is left to luck.
+     * Flat everywhere else, so the peak-to-mean ratio is whatever the biases make it and nothing
+     * about the fixture is left to luck. More than one bias is what lets a chart score well
+     * where it claims *and* have its maximum somewhere else, which is the interesting case.
      */
-    private fun faintProfile(song: UltraStarSong, biasFrames: Int, bias: Float): ChromaProfile {
+    private fun faintProfile(song: UltraStarSong, biases: List<Pair<Int, Float>>): ChromaProfile {
         val beats = BeatTimeConverter(song.metadata)
         val notes = song.voiceParts.flatMap { it.lines }.flatMap { it.notes }
         val last = notes.last()
-        val frames = ((beats.beatToSeconds(last.startBeat + last.durationBeats) + 2.0) /
+        val frames = ((beats.beatToSeconds(last.startBeat + last.durationBeats) + 8.0) /
             CHROMA_HOP_SECONDS).toInt()
         val data = FloatArray(frames * 12) { 1f / 12f }
 
-        for (note in notes) {
-            val from = (beats.beatToSeconds(note.startBeat) / CHROMA_HOP_SECONDS).toInt() + biasFrames
-            val to = (beats.beatToSeconds(note.startBeat + note.durationBeats) /
-                CHROMA_HOP_SECONDS).toInt() + biasFrames
-            val pitchClass = ((note.pitch % 12) + 12) % 12
-            for (frame in from until minOf(to, frames)) {
-                if (frame >= 0) data[frame * 12 + pitchClass] += bias
+        for ((biasFrames, bias) in biases) {
+            for (note in notes) {
+                val from = (beats.beatToSeconds(note.startBeat) / CHROMA_HOP_SECONDS).toInt() +
+                    biasFrames
+                val to = (beats.beatToSeconds(note.startBeat + note.durationBeats) /
+                    CHROMA_HOP_SECONDS).toInt() + biasFrames
+                val pitchClass = ((note.pitch % 12) + 12) % 12
+                for (frame in from until minOf(to, frames)) {
+                    if (frame >= 0) data[frame * 12 + pitchClass] += bias
+                }
             }
         }
         return ChromaProfile(data, frames)

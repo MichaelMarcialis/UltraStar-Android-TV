@@ -94,6 +94,28 @@ private const val MIN_NOTES = 20
 private const val MISMATCH_MIN_OFFSET = 1.0
 
 /**
+ * How well a chart may score *where it says it is* and still be called the wrong recording.
+ *
+ * The second, independent signal, and the one that keeps the first honest. Reasoning about where
+ * a weak peak landed is reasoning about noise: across a ninety-second sweep, a peak that means
+ * nothing lands more than a second from zero almost every time, so [MISMATCH_MIN_OFFSET] on its
+ * own would eventually accuse any song this cannot hear.
+ *
+ * A chart written for its own recording scores at least respectably where it claims to be, even
+ * when its peak is unimpressive; a chart written for a *different* one scores no better than
+ * chance there. Measured across this card: the six genuine mismatches sit at **0.96 to 1.06** and
+ * the songs this method merely cannot hear sit at **1.08 to 1.24**.
+ *
+ * **This does not separate them on its own either**, and that is the point of requiring both. A
+ * handful of songs that are perfectly in time also score as low as **1.05** as written — what
+ * saves them is that their peak is where the chart says it is, so the distance test never fires.
+ * Neither number is trustworthy alone; a song is only called the wrong recording when no offset
+ * fits, *and* the best guess is nowhere near where the chart claims, *and* the chart scores no
+ * better than chance there.
+ */
+private const val MISMATCH_MAX_AS_WRITTEN = 1.15
+
+/**
  * How many frames a window's own length puts between a moment and the frame that describes it.
  *
  * **This is a real correction, not a nicety, and the Python tool this grew from did not have it.**
@@ -182,6 +204,7 @@ fun checkSync(song: UltraStarSong, profile: ChromaProfile): SyncVerdict {
     var scored = 0
     var bestScore = -1.0
     var bestShift = 0
+    var atZero = -1.0
 
     for (shift in -span..span) {
         var sum = 0.0
@@ -198,14 +221,17 @@ fun checkSync(song: UltraStarSong, profile: ChromaProfile): SyncVerdict {
         val score = sum / inside
         total += score
         scored++
+        if (shift == 0) atZero = score
         if (score > bestScore) {
             bestScore = score
             bestShift = shift
         }
     }
 
-    if (scored == 0 || total <= 0.0) return SyncVerdict.Unscoreable
-    val confidence = bestScore / (total / scored)
+    if (scored == 0 || total <= 0.0 || atZero < 0.0) return SyncVerdict.Unscoreable
+    val mean = total / scored
+    val confidence = bestScore / mean
+    val asWritten = atZero / mean
     val offset = bestShift * CHROMA_HOP_SECONDS
 
     val distance = kotlin.math.abs(offset)
@@ -217,10 +243,12 @@ fun checkSync(song: UltraStarSong, profile: ChromaProfile): SyncVerdict {
             distance <= MAX_SHIFT_SECONDS -> SyncVerdict.Shifted(offset, confidence)
             else -> SyncVerdict.Mismatch(confidence)
         }
-        // No confident peak anywhere. Whether that means the wrong recording or simply a song
-        // this method cannot read is decided by where the best guess landed -- see
-        // [MISMATCH_MIN_OFFSET].
-        distance >= MISMATCH_MIN_OFFSET -> SyncVerdict.Mismatch(confidence)
+        // No confident peak anywhere, so this is either the wrong recording or a song whose
+        // melody cannot be heard. Two independent things have to agree before it is called the
+        // former: the best guess is nowhere near where the chart claims to be, *and* the chart
+        // scores no better than chance at the position it claims. Either alone is noise.
+        distance >= MISMATCH_MIN_OFFSET && asWritten <= MISMATCH_MAX_AS_WRITTEN ->
+            SyncVerdict.Mismatch(confidence)
         else -> SyncVerdict.Unscoreable
     }
 }

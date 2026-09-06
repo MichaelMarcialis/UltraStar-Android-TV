@@ -76,6 +76,16 @@ sealed interface RepairOutcome {
         val audio: Boolean,
         val video: Boolean,
         val cover: Boolean,
+        /**
+         * What the timing check said about the music that just arrived, or null.
+         *
+         * Carried for the same reason a download carries it: fetching music for a chart puts two
+         * files together that have never met, and if that made this app *edit the chart* — or
+         * showed that the two do not belong together at all — saying so is not optional. A repair
+         * that silently rewrote somebody's `#GAP` would be the app changing files behind their
+         * back.
+         */
+        val timingNote: String? = null,
     ) : RepairOutcome {
         /** What to put in front of somebody, shortest useful form. */
         val summary: String
@@ -89,7 +99,7 @@ sealed interface RepairOutcome {
                     1 -> "Got the ${parts[0]}"
                     else -> "Got the " + parts.dropLast(1).joinToString(", ") + " and " + parts.last()
                 }
-            }
+            }.let { got -> timingNote?.let { "$got — $it" } ?: got }
     }
 
     data class Failed(val problem: DownloadProblem, val message: String) : RepairOutcome
@@ -150,6 +160,15 @@ class SongRepairer(
      * in the folder says where its media came from. A Repair button that answers "there is nothing
      * I can do" is worse than no button, so the question is asked before it is shown.
      */
+    /**
+     * What the timing check found while this repair was running, if anything.
+     *
+     * A field rather than a return value because it comes from three levels down inside
+     * [repointChart], which already answers a different question — whether the chart could be
+     * written at all. One repair at a time, one instance per repair, so there is nothing to race.
+     */
+    private var timingNote: String? = null
+
     fun plan(song: ScannedSong, scan: Int = 0): RepairPlan? {
         val tags = mediaTagsFor(song)
         val videoId = tags.audioSource
@@ -325,7 +344,12 @@ class SongRepairer(
                 "Nothing could be found for this song.",
             )
         }
-        return RepairOutcome.Repaired(audio = gotAudio, video = gotVideo, cover = gotCover)
+        return RepairOutcome.Repaired(
+            audio = gotAudio,
+            video = gotVideo,
+            cover = gotCover,
+            timingNote = timingNote,
+        )
     }
 
     /** Cover sources, best first — the same order a fresh download uses, minus USDB's thumbnail. */
@@ -395,8 +419,9 @@ class SongRepairer(
     ): Boolean {
         val text = runCatching { SongTextDecoder.decode(tree.readBytes(song.textId)) }.getOrNull()
             ?: return false
-        val timed = if (audioId == null) text else sync.correct(audioId, text).chart
-        val updated = retargetChart(timed, audioFile, coverFile)
+        val timing = if (audioId == null) null else sync.correct(audioId, text)
+        timingNote = timing?.note
+        val updated = retargetChart(timing?.chart ?: text, audioFile, coverFile)
         // Overwritten in place rather than written again by name. Creating a document whose name
         // is already taken gets it suffixed, and a second `.txt` in a folder is a second song in
         // the picker -- identical to the first and pointing at the same audio.

@@ -163,12 +163,19 @@ class TvGameMode(context: Context) {
                     status = "Learning the picture modes…"
                     learn(tv)
                 }
-                true
+                // **Paired means paired *and* able to undo itself.** Learning is what produces
+                // the mode to go back to, and it can end without one -- a set that will not
+                // report its picture values, or a failure part way through the walk. Keeping the
+                // key anyway would leave an app that switches a television into Game Optimizer
+                // on every launch and can never put it back, which is worse than not having the
+                // feature. So the key is only kept when there is a way home.
+                memory.restoreMode != null
             }.getOrElse {
                 Log.i(TAG, "not this one ($host): ${it.message}")
                 false
             }
             if (paired) return@withContext
+            memory.forget()
         }
         status = "No television accepted the pairing prompt. Turn this off and on to try again."
     }
@@ -210,6 +217,10 @@ class TvGameMode(context: Context) {
     }
 
     private fun engageNow() {
+        // Belt and braces against the same thing pairing guards: never enter a mode there is no
+        // way out of. If this is ever reached without a mode to restore, doing nothing leaves the
+        // television as its owner set it.
+        if (memory.restoreMode == null) return
         withTv { tv ->
             val learned = memory.learned()
             val now = tv.fingerprint()

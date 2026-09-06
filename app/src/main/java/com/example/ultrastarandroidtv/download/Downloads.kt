@@ -453,21 +453,31 @@ class Downloads(private val context: Context) {
      * fifteen seconds is long enough to walk away from and long enough to matter if a song starts.
      */
     fun checkTiming(song: ScannedSong, cache: SongLibraryCache) {
+        // Claimed here rather than inside the coroutine, and this is the whole point of the
+        // guard: `launch` returns immediately, so a slot taken on the other side of it is taken
+        // *later* than the next press arrives, and two quick presses would both get through and
+        // decode at once. Both callers are on the main thread, so this is enough.
         if (timing.checking != null) return
+        timing.checking = song.textId
+
         scope.launch {
-            timing.checking = song.textId
-            val result = withContext(Dispatchers.IO) {
-                holdWhileSinging(atABoundary = true)
-                val card = card() ?: return@withContext null
-                checkOne(card, song)
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    holdWhileSinging(atABoundary = true)
+                    val card = card() ?: return@withContext null
+                    checkOne(card, song)
+                } ?: return@launch
+                Log.i(TIMING_TAG, "${song.folderName}: $result")
+                timing.remember(song.textId, result)
+                // Only a correction makes the scan out of date, and only then is a rescan worth
+                // the five seconds it costs.
+                if (result == TimingResult.Corrected) cache.markChanged()
+            } finally {
+                // Released whatever happened. Without this a single unexpected exception leaves
+                // the button saying "Listening…" for the rest of the session, with nothing able
+                // to start another check.
+                timing.checking = null
             }
-            timing.checking = null
-            if (result == null) return@launch
-            Log.i(TIMING_TAG, "${song.folderName}: $result")
-            timing.remember(song.textId, result)
-            // Only a correction makes the scan out of date, and only then is a rescan worth the
-            // five seconds it costs.
-            if (result == TimingResult.Corrected) cache.markChanged()
         }
     }
 
