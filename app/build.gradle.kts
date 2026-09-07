@@ -22,6 +22,29 @@ val keystoreProperties = Properties().apply {
     if (file.exists()) file.inputStream().use { load(it) }
 }
 
+// **A half-written file must be as safe as a missing one.** Checking only that the file had
+// *something* in it was enough to pass a `storeFile` of null straight into `rootProject.file`,
+// which throws during configuration -- so a typo in a release-only file broke `assembleDebug` and
+// the unit tests too, which is precisely what the comment above promises cannot happen.
+//
+// So all four keys have to be there and be non-blank, or there is no signing config at all. The
+// file naming a keystore that does not exist is left to AGP, which says so clearly at signing
+// time; this is only about not crashing before anything has been asked for.
+val requiredSigningKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+val missingSigningKeys = requiredSigningKeys.filter { keystoreProperties.getProperty(it).isNullOrBlank() }
+val canSignRelease = keystoreProperties.isNotEmpty() && missingSigningKeys.isEmpty()
+
+// Said out loud, because somebody who wrote a `keystore.properties` meant to sign something. An
+// unsigned APK appearing quietly under a name they were not expecting is the kind of silence this
+// project tries not to keep -- and AGP does name the file `app-release-unsigned.apk`, so the
+// warning and the output agree.
+if (keystoreProperties.isNotEmpty() && !canSignRelease) {
+    logger.warn(
+        "keystore.properties is missing ${missingSigningKeys.joinToString()} -- " +
+            "the release build will be unsigned."
+    )
+}
+
 android {
     namespace = "com.example.ultrastarandroidtv"
     ndkVersion = "30.0.15729638"
@@ -51,8 +74,8 @@ android {
     }
 
     signingConfigs {
-        // Only declared when the properties file is actually there; see the note above.
-        if (keystoreProperties.isNotEmpty()) {
+        // Only declared when every key it needs is actually there; see the note above.
+        if (canSignRelease) {
             create("release") {
                 storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
                 storePassword = keystoreProperties.getProperty("storePassword")

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -49,7 +50,15 @@ fun SongSourceNotice(
     onBack: () -> Unit,
 ) {
     val accept = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { accept.requestFocus() } }
+    // A frame first. A `LaunchedEffect` body runs after composition but before the focus modifier
+    // is necessarily attached and placed, and `runCatching` then swallows the failure -- leaving a
+    // screen with two buttons and nothing focused, which on a remote cannot be driven at all. It
+    // happens not to fire on the Shield this was written on; that is not the same as being safe on
+    // somebody else's slower box, which is the whole point of shipping it.
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        runCatching { accept.requestFocus() }
+    }
     BackHandler(onBack = onBack)
 
     Column(
