@@ -14,7 +14,15 @@ sealed interface QueueStatus {
 
     data class Working(val stage: DownloadStage) : QueueStatus
 
-    data class Done(val folderName: String) : QueueStatus
+    /**
+     * Finished, and whatever the timing check had to say about it.
+     *
+     * [note] is null almost always. It is set when this app *changed* the chart — moving `#GAP`
+     * to put the notes in time with the recording — or when the chart turns out not to describe
+     * that recording at all. Both are things somebody should be told rather than discover in the
+     * middle of singing.
+     */
+    data class Done(val folderName: String, val note: String? = null) : QueueStatus
 
     data class Failed(val problem: DownloadProblem, val message: String) : QueueStatus
 }
@@ -170,7 +178,7 @@ fun stageLabel(stage: DownloadStage): String = when (stage) {
 fun statusLabel(status: QueueStatus): String = when (status) {
     QueueStatus.Queued -> "Waiting its turn"
     is QueueStatus.Working -> stageLabel(status.stage)
-    is QueueStatus.Done -> "Added to your songs"
+    is QueueStatus.Done -> status.note?.let { "Added — $it" } ?: "Added to your songs"
     is QueueStatus.Failed -> status.message
 }
 

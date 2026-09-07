@@ -6,8 +6,10 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="usdb_account.xml" />
+        <exclude domain="sharedpref" path="tv_game_mode.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="usdb_account.xml" />
+        <exclude domain="sharedpref" path="tv_game_mode.xml" />
     </device-transfer>
 </data-extraction-rules>

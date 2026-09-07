@@ -4,12 +4,19 @@ import android.content.Context
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.example.ultrastarandroidtv.library.CoverLoader
+import com.example.ultrastarandroidtv.audio.ChromaScanner
 import com.example.ultrastarandroidtv.library.LibraryLocation
 import com.example.ultrastarandroidtv.library.SafDocumentTree
+import com.example.ultrastarandroidtv.library.ScannedSong
 import com.example.ultrastarandroidtv.library.SongLibraryCache
+import com.example.ultrastarandroidtv.library.SongTextDecoder
+import com.example.ultrastarandroidtv.song.SyncVerdict
+import com.example.ultrastarandroidtv.song.UltraStarSongParser
+import com.example.ultrastarandroidtv.song.checkSync
+import com.example.ultrastarandroidtv.song.shiftGap
 import com.example.ultrastarandroidtv.net.ITunesArtwork
 import com.example.ultrastarandroidtv.net.UrlHttp
 import com.example.ultrastarandroidtv.net.YouTubeAudio
@@ -18,12 +25,19 @@ import com.example.ultrastarandroidtv.usdb.UsdbDetails
 import com.example.ultrastarandroidtv.usdb.UsdbSearch
 import com.example.ultrastarandroidtv.usdb.UsdbSession
 import com.example.ultrastarandroidtv.usdb.UsdbSong
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** How often the worker looks for something to do when the queue is empty or held. */
 private const val IDLE_POLL_MS = 250L
+
+/** Where a timing sweep reports itself, so it can be followed from `adb` instead of the sofa. */
+private const val TIMING_TAG = "Timing"
 
 /** How long a finished download stays on screen before the notice fades of its own accord. */
 const val ANNOUNCEMENT_SECONDS = 6
@@ -77,6 +91,21 @@ class Downloads(private val context: Context) {
     val details = UsdbDetails(session)
     val youTube = YouTubeAudio(http)
 
+    /**
+     * Whether each USDB song's music can actually be fetched, by song id.
+     *
+     * Kept here rather than on the Add-songs screen so a verdict is worked out **once**: the check
+     * costs a USDB detail page and a YouTube lookup, and searching for the same band twice in an
+     * evening used to pay for both again. Absent means "not asked yet"; a check that fails for any
+     * other reason records nothing at all, because a network blip must not label a good song broken.
+     *
+     * Deliberately **not** written to disk. A video can be taken down or restored between sessions,
+     * and a stored "unavailable" would go on refusing a song that came back — which is the one
+     * error nobody would think to look for. Living as long as the app is enough to stop the same
+     * question being asked twice while somebody is browsing.
+     */
+    val availability = mutableStateMapOf<Int, Boolean>()
+
     /** Shared with the Songs screen, which repairs a song without going near USDB. */
     val artwork = ITunesArtwork(http)
 
@@ -84,6 +113,24 @@ class Downloads(private val context: Context) {
 
     /** Songs already on the card waiting to have a missing file filled in. */
     val repairs = RepairQueue()
+
+    /**
+     * Repairs already tried and found fruitless, so the same seven songs are not offered for
+     * ever. See [RepairMemory] — it is applied to the batch only, never to a song's own button.
+     */
+    val repairMemory = RepairMemory(context)
+
+    /** What listening to a song found, kept so it need not be listened to twice. */
+    val timing = TimingMemory(context)
+
+    /**
+     * Where the timing sweep runs.
+     *
+     * Its own scope rather than the `work` loop everything else uses, because this is not a
+     * queue: it is a job somebody starts deliberately about one song, it must not hold up a
+     * download behind it, and it has to outlive the screen that started it.
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * Set while a song is being sung. Stops the *next* step of a download from starting; see the
@@ -173,7 +220,7 @@ class Downloads(private val context: Context) {
             http = http,
             tree = card,
             writer = card,
-            measureCover = CoverLoader::shortestEdge,
+            sync = syncFor(card),
         )
         val outcome = runCatching {
             withContext(Dispatchers.IO) {
@@ -189,8 +236,18 @@ class Downloads(private val context: Context) {
             )
         }
         return when (outcome) {
-            is RepairOutcome.Repaired -> RepairStatus.Done(outcome.summary)
+            is RepairOutcome.Repaired -> {
+                // Something arrived, so whatever was remembered about this song is out of date.
+                repairMemory.forget(job.song.textId)
+                RepairStatus.Done(outcome.summary)
+            }
             is RepairOutcome.Failed -> {
+                // Asked, and there was nothing to be had. Worth remembering: the survey cannot
+                // tell in advance whether a better cover exists, so without this the song is
+                // counted into "Repair N songs" again on the very next look at the card.
+                if (outcome.problem == DownloadProblem.NOTHING_FETCHED) {
+                    repairMemory.rememberNothing(job.song.textId, job.plan)
+                }
                 // Only when the *music* was the thing that could not be got. A video-only
                 // repair fails with the same reason when its upload has gone -- and swapping
                 // in a different chart there would delete a song that plays perfectly well,
@@ -250,6 +307,7 @@ class Downloads(private val context: Context) {
             http = http,
             tree = card,
             writer = card,
+            sync = syncFor(card),
         )
         val outcome = runCatching {
             withContext(Dispatchers.IO) {
@@ -313,6 +371,7 @@ class Downloads(private val context: Context) {
             http = http,
             tree = card,
             writer = card,
+            sync = syncFor(card),
         )
 
         val first = attempt(downloader, entry, entry.song)
@@ -361,7 +420,7 @@ class Downloads(private val context: Context) {
 
     private fun saved(outcome: DownloadOutcome.Saved): QueueStatus {
         _downloaded.add(outcome.folderName.lowercase())
-        return QueueStatus.Done(outcome.folderName)
+        return QueueStatus.Done(outcome.folderName, outcome.timingNote)
     }
 
     /** Folder names on the card, lowercased, so a replacement never collides with one. */
@@ -385,6 +444,80 @@ class Downloads(private val context: Context) {
         holdWhileSinging(stage !is DownloadStage.DownloadingVideo || stage.percent == 0)
     }
 
+    /**
+     * Listens to one song and puts its timing right, if that is what it needs.
+     *
+     * About fifteen seconds: a decode of the whole recording and a transform over it. Deliberately
+     * one song rather than a library — see [TimingMemory] for why the sweep this replaces was the
+     * wrong shape. It still runs on this class's own scope and still honours [paused], because
+     * fifteen seconds is long enough to walk away from and long enough to matter if a song starts.
+     */
+    fun checkTiming(song: ScannedSong, cache: SongLibraryCache) {
+        // Claimed here rather than inside the coroutine, and this is the whole point of the
+        // guard: `launch` returns immediately, so a slot taken on the other side of it is taken
+        // *later* than the next press arrives, and two quick presses would both get through and
+        // decode at once. Both callers are on the main thread, so this is enough.
+        if (timing.checking != null) return
+        timing.checking = song.textId
+
+        // The tree this song was named in, resolved now rather than when the work starts. A
+        // document id only means anything inside its own tree, and this job can wait — for a song
+        // to finish, or for a decode ahead of it — so the folder can change underneath it. At
+        // best the ids then fail to resolve; at worst one exists under both grants and this
+        // rewrites a `#GAP` in somebody else's chart. The same hazard `runRepair` already guards.
+        //
+        // **One read of the granted folder, and the tree built from that one read.** Asking for
+        // the address and then asking for the tree is two reads of a thing that can change
+        // between them — the very race this is here to stop — so the address is taken once and
+        // the tree is built from it rather than from a second look. The comparison later only
+        // says the folder is still the same one, which is a different question.
+        val askedUri = cardUri()
+        val askedTree = askedUri?.let { SafDocumentTree(context.contentResolver, it) }
+
+        scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    holdWhileSinging(atABoundary = true)
+                    if (askedTree == null || cardUri() != askedUri) return@withContext null
+                    checkOne(askedTree, song)
+                } ?: return@launch
+                Log.i(TIMING_TAG, "${song.folderName}: $result")
+                timing.remember(song.textId, result)
+                // Only a correction makes the scan out of date, and only then is a rescan worth
+                // the five seconds it costs.
+                if (result == TimingResult.Corrected) cache.markChanged()
+            } finally {
+                // Released whatever happened. Without this a single unexpected exception leaves
+                // the button saying "Listening…" for the rest of the session, with nothing able
+                // to start another check.
+                timing.checking = null
+            }
+        }
+    }
+
+    /** One song: read it, listen to it, and move `#GAP` if that is what it needs. */
+    private fun checkOne(card: SafDocumentTree, song: ScannedSong): TimingResult {
+        val audioId = song.audioId ?: return TimingResult.Unknown
+        val chart = runCatching { SongTextDecoder.decode(card.readBytes(song.textId)) }.getOrNull()
+            ?: return TimingResult.Unknown
+        val parsed = runCatching { UltraStarSongParser.parse(chart) }.getOrNull()
+            ?: return TimingResult.Unknown
+        val profile = ChromaScanner.scan(context, card.uriFor(audioId).toString())
+            ?: return TimingResult.Unknown
+
+        return when (val verdict = checkSync(parsed, profile)) {
+            is SyncVerdict.Shifted -> {
+                val moved = shiftGap(chart, verdict.offsetSeconds)
+                val written = moved != null &&
+                    card.overwrite(song.textId, moved.toByteArray(Charsets.UTF_8))
+                if (written) TimingResult.Corrected else TimingResult.Unknown
+            }
+            is SyncVerdict.Mismatch -> TimingResult.Wrong
+            SyncVerdict.Aligned -> TimingResult.Fine
+            SyncVerdict.Unscoreable -> TimingResult.Unknown
+        }
+    }
+
     private fun holdWhileSinging(atABoundary: Boolean) {
         if (!atABoundary) return
         while (paused) Thread.sleep(IDLE_POLL_MS)
@@ -403,7 +536,8 @@ class Downloads(private val context: Context) {
     private fun announce(entry: QueuedSong) {
         val name = "${entry.song.artist} — ${entry.song.title}".trim(' ', '—')
         announcement = when (val status = entry.status) {
-            is QueueStatus.Done -> Announcement(name, "Added to your songs", good = true)
+            is QueueStatus.Done ->
+                Announcement(name, status.note?.let { "Added — $it" } ?: "Added to your songs", good = true)
             is QueueStatus.Failed -> Announcement(name, status.message, good = false)
             else -> return
         }
@@ -415,6 +549,16 @@ class Downloads(private val context: Context) {
      * Resolved per download rather than held, so choosing a different folder part-way through an
      * evening is picked up without anything having to be told about it.
      */
+    /**
+     * The timing check, bound to the folder the files are being written into.
+     *
+     * Built per job rather than once, because it needs to turn a document id into a URI and that
+     * is a property of the *tree* — a corrector held across a change of song folder would be
+     * pointing at the old one.
+     */
+    private fun syncFor(card: SafDocumentTree): SyncCorrector =
+        CardSyncCorrector(context) { id -> card.uriFor(id).toString() }
+
     private fun card(): SafDocumentTree? {
         val uri = cardUri() ?: return null
         return SafDocumentTree(context.contentResolver, uri)

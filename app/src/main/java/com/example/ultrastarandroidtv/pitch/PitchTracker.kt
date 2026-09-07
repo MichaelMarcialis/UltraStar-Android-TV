@@ -20,6 +20,29 @@ private const val HOLD_FRACTION = 0.5f
 private const val HOLD_SECONDS = 0.15
 
 /**
+ * Samples per analysis, and samples of new audio between analyses.
+ *
+ * Named rather than left as literals in the constructor because **three different latencies are
+ * computed from these two numbers and they are not the same number**. Half the window is how far
+ * back a reading's centre sits; the hop is how often one is published, which sets both the median
+ * filter's delay and how stale the newest reading is when a frame picks it up. Both used to be
+ * written as `1024.0 / 48_000.0` in `GameSession`, which was correct only by coincidence — they
+ * meant different things and happened to agree.
+ *
+ * **The hop is half what it was.** Doubling the reading rate to about 94 a second buys 16 ms off
+ * how far behind the voice the arrow is drawn — a hop off the median's delay and half a hop off
+ * the reading's age — and it costs a second pass of [Yin] per window, on a device with three
+ * idle cores. The window is unchanged and cannot usefully shrink: [Yin] needs about two periods
+ * of the lowest pitch it is asked for, and 2048 samples at 48 kHz is already close to that for
+ * the 65 Hz floor.
+ */
+const val DEFAULT_WINDOW_SIZE = 2048
+const val DEFAULT_HOP_SIZE = 512
+
+/** What these microphones deliver, and what every latency here is measured in. */
+const val DEFAULT_SAMPLE_RATE = 48_000
+
+/**
  * Turns one mic's PCM stream into a series of [PitchReading]s.
  *
  * The USB layer delivers audio in whatever size a batch of isochronous packets happened to
@@ -63,9 +86,9 @@ private const val HOLD_SECONDS = 0.15
  *   between notes of a phrase, short enough that a rest ends it.
  */
 class PitchTracker(
-    private val sampleRate: Int = 48_000,
-    private val windowSize: Int = 2048,
-    private val hopSize: Int = 1024,
+    private val sampleRate: Int = DEFAULT_SAMPLE_RATE,
+    private val windowSize: Int = DEFAULT_WINDOW_SIZE,
+    private val hopSize: Int = DEFAULT_HOP_SIZE,
     private val minLevel: Float = 0.01f,
     private val holdLevel: Float = minLevel * HOLD_FRACTION,
     private val levelWindowSize: Int = windowSize / 2,

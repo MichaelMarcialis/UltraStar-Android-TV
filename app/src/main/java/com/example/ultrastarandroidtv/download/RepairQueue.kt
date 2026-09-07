@@ -182,7 +182,7 @@ private const val VIDEO_SECONDS = 4.0
 /** How far through a repair a stage sits, from 0 to 1, given what this one has to fetch. */
 fun repairProgress(status: RepairStatus, plan: RepairPlan): Float {
     val music = if (plan.needsAudio) MUSIC_SECONDS else 0.0
-    val artwork = if (plan.needsCover || plan.needsBetterCover) ARTWORK_SECONDS else 0.0
+    val artwork = if (plan.needsCover) ARTWORK_SECONDS else 0.0
     val video = if (plan.needsVideo) VIDEO_SECONDS else 0.0
     val total = LOOKUP_SECONDS + music + artwork + video
 

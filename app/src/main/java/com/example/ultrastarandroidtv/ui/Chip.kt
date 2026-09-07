@@ -3,6 +3,7 @@ package com.example.ultrastarandroidtv.ui
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Button
@@ -27,7 +28,18 @@ fun Chip(
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier,
+        // **`enabled = false` is not enough to keep the focus off it**, whatever the received
+        // wisdom about TV buttons says. Measured on the television: three presses of the centre
+        // key landed on a greyed-out "No artwork" chip and did nothing, which is exactly what a
+        // broken button looks like from a sofa. Said explicitly here so it does not depend on
+        // how a version of tv-material happens to wire `enabled` to focusability.
+        //
+        // Not focusable is the right answer *for a chip*, unlike a card in a grid, which is kept
+        // focusable even when it cannot be pressed: a hole in a row is stepped over by the next
+        // press, where a hole in a grid breaks vertical movement through it. There is always an
+        // enabled chip on these rows — sorting never runs out of options — so a row can never
+        // become unreachable.
+        modifier = modifier.focusProperties { canFocus = enabled },
         colors = ButtonDefaults.colors(
             containerColor = if (selected) GameTheme.playerColors[0] else GameTheme.trackBackground,
             contentColor = if (selected) GameTheme.background else GameTheme.lyricIdle,

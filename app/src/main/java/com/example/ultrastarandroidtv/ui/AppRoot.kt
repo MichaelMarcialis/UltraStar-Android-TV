@@ -18,6 +18,7 @@ import com.example.ultrastarandroidtv.library.SongLibraryCache
 import com.example.ultrastarandroidtv.mic.UsbMicSession
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.settings.Profiles
+import com.example.ultrastarandroidtv.tv.TvGameMode
 import com.example.ultrastarandroidtv.song.UltraStarSong
 
 /** A song that has been picked, with its media resolved to something the players can open. */
@@ -49,6 +50,12 @@ private enum class Screen {
 fun AppRoot() {
     val context = LocalContext.current
     val settings = remember { GameSettings(context) }
+
+    // The television's own game mode, which is the thing 120 Hz was a poor substitute for. Owned
+    // here for the life of the app because that is exactly the span it describes: on when the app
+    // is on screen, back to the picture mode that was there when it is not.
+    val tvGameMode = remember { TvGameMode(context) }
+    TvGameModeWhileOpen(tvGameMode)
     val profiles = remember { Profiles(context) }
 
     // Scanned once and kept for the session. Reading a fifty-song card over SAF takes seconds,
@@ -197,6 +204,7 @@ fun AppRoot() {
 
         Screen.Settings -> SettingsScreen(
             settings = settings,
+            tv = tvGameMode,
             onBack = toMenu,
         )
 

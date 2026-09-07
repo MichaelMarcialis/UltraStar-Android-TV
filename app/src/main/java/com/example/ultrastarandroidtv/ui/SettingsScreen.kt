@@ -36,12 +36,14 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Button
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.game.GameTheme
 import com.example.ultrastarandroidtv.settings.Difficulty
 import com.example.ultrastarandroidtv.settings.GameSettings
 import com.example.ultrastarandroidtv.settings.SettingsRange
+import com.example.ultrastarandroidtv.tv.TvGameMode
 import kotlin.math.roundToInt
 
 /**
@@ -56,7 +58,7 @@ import kotlin.math.roundToInt
  * twice is what stops it having to be *changed* twice, every time the number of singers changes.
  */
 @Composable
-fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
+fun SettingsScreen(settings: GameSettings, tv: TvGameMode, onBack: () -> Unit) {
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
     BackHandler(onBack = onBack)
@@ -84,11 +86,20 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
             )
             Spacer(Modifier.width(28.dp))
             Text(
-                "Left and right to adjust.  Up and down to move.  Back to return.",
+                "Left and right to adjust.  Up and down to move.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = GameTheme.lyricIdle,
                 modifier = Modifier.weight(1f).padding(bottom = 6.dp),
             )
+            // The way out, said as a button as well as being on the Back key.
+            //
+            // In the header rather than under the list, and that is the point of it: the header
+            // is the part of this screen that does not scroll, so the exit can never be scrolled
+            // off the bottom — which is exactly what happened to the hint that used to live down
+            // there. Pressing up from the first dial reaches it.
+            Button(onClick = onBack) {
+                Text("Main menu", modifier = Modifier.padding(horizontal = 12.dp))
+            }
         }
         Spacer(Modifier.height(16.dp))
 
@@ -180,6 +191,42 @@ fun SettingsScreen(settings: GameSettings, onBack: () -> Unit) {
             step = 0.05,
             format = { "%d%%".format((it * 100).roundToInt()) },
             onChange = { settings.updateDuetMicSensitivity(it.toFloat()) },
+        )
+
+        SettingRow(
+            label = "Game mode on the television",
+            // The only feedback there is. What this controls is a television, and whether it
+            // worked is not otherwise visible from inside the app -- so the status line is the
+            // row's explanation rather than a separate thing to find.
+            explanation = if (tv.isPaired) {
+                "Puts your television into its game mode while this app is open, and back to " +
+                    "the picture mode you had when it closes. " + tv.status.ifBlank {
+                        "Paired with ${tv.model ?: "your television"}."
+                    }
+            } else {
+                "Your television can turn its picture processing off, which is most of its " +
+                    "delay — LG calls it Game Optimizer. Turn this on and accept the prompt " +
+                    "that appears on the television; it takes a few seconds to learn your " +
+                    "picture modes, and only ever has to be done once. " + tv.status
+            },
+            value = if (tv.isPaired) 1.0 else 0.0,
+            range = 0.0..1.0,
+            step = 1.0,
+            format = { if (it >= 0.5) "On" else "Off" },
+            onChange = { if (it >= 0.5) tv.pair() else tv.forget() },
+        )
+
+        SettingRow(
+            label = "Fill the screen with video",
+            explanation = "Zooms a song's music video until it fills the television, cropping " +
+                "whatever will not fit — and measures away any black bars baked into the file. " +
+                "Most videos here are 4:3 rips, so shown whole they sit in a black box. Turn " +
+                "this off to see each video whole at its own shape instead.",
+            value = if (settings.fillScreenVideo) 1.0 else 0.0,
+            range = 0.0..1.0,
+            step = 1.0,
+            format = { if (it >= 0.5) "On" else "Off" },
+            onChange = { settings.updateFillScreenVideo(it >= 0.5) },
         )
         }
     }

@@ -112,6 +112,33 @@ class SongRepairerTest {
         assertTrue(plan.needsCover)
     }
 
+    @Test
+    fun `artwork a song already has is left alone whatever size it is`() {
+        // The whole of the "soft artwork" feature, removed on the user's call. A complete song
+        // has nothing left to repair, so it is not offered one -- which is what stops "Repair N
+        // songs" counting songs nobody can see anything wrong with.
+        val card = FakeFolder(chart = CHART_WITH_VIDEO, sidecar = null)
+        val song = card.song(audio = "audio", video = "video", cover = "cover")
+
+        assertNull(repairerFor(card).plan(song))
+    }
+
+    @Test
+    fun `a signature describes what is wanted, and not which scan asked`() {
+        // What [RepairMemory] rests on. "Asked and there was nothing to be had" has to survive
+        // the next reading of the card -- otherwise the same songs are counted into "Repair N
+        // songs" for ever -- and has to stop applying the moment the card changes.
+        val card = FakeFolder(chart = CHART_WITH_VIDEO, sidecar = null)
+        val song = card.song(audio = "audio", video = "video")
+
+        val first = repairerFor(card).plan(song, scan = 1)!!
+        val later = repairerFor(card).plan(song, scan = 9)!!
+        assertEquals(first.signature, later.signature)
+
+        val withoutMusic = repairerFor(card).plan(card.song(audio = null, video = "video"), scan = 9)!!
+        assertNotEquals(first.signature, withoutMusic.signature)
+    }
+
     // -------------------------------------------------------------------------------------
     // Doing it
     // -------------------------------------------------------------------------------------
@@ -398,7 +425,10 @@ class SongRepairerTest {
 
     // -------------------------------------------------------------------------------------
 
-    private fun repairerFor(card: FakeFolder, net: FakeNet = FakeNet()) = SongRepairer(
+    private fun repairerFor(
+        card: FakeFolder,
+        net: FakeNet = FakeNet(),
+    ) = SongRepairer(
         youTube = YouTubeAudio(net),
         artwork = ITunesArtwork(net),
         http = net,

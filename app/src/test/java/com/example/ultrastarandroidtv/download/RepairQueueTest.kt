@@ -317,7 +317,6 @@ class RepairQueueTest {
             needsAudio = audio,
             needsVideo = video,
             needsCover = cover,
-            needsBetterCover = false,
             coverUrl = null,
             scan = scan,
         )

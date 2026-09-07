@@ -40,7 +40,14 @@ LOW_HZ, HIGH_HZ = 150.0, 2000.0
 
 # A chart aligned to its own audio lands this close to zero; further out means it is describing
 # something else. Generous next to the ~0.09 s the controls actually reach.
-ALIGNED_SECONDS = 0.6
+# How far a peak may sit from zero and still count as aligned.
+#
+# Tightened from 0.6 s, which was too generous to be useful: Jimmy Cliff's "You Can Get It If You
+# Really Want" peaked at +0.51 s -- nine beats of a 257 BPM song, plainly wrong from the sofa --
+# and this called it "ok". Two known-good songs land at -0.14 and -0.09 s, and the sweep's own
+# resolution is one hop, 46 ms, so a quarter of a second is still several times the noise floor
+# while catching anything a singer would notice.
+ALIGNED_SECONDS = 0.25
 
 CARD = "/storage/5002-E7C7/UltraStar"
 AUDIO_SUFFIXES = (".mp3", ".m4a", ".ogg", ".opus", ".wav")
@@ -112,10 +119,19 @@ def align(chart_path, media_path):
     profile = chroma(media_path)
     frames = len(profile)
 
+    # A frame is computed from `window` samples starting at `f * HOP`, so the moment it really
+    # describes is its centre, half a window later. Mapping a note straight onto `start / HOP`
+    # reads the audio a half-window late, and the sweep hands that back as a negative offset --
+    # which is exactly why two songs known to be in time used to land at -0.09 s and -0.14 s
+    # instead of at zero. Corrected here and in the app, which must agree.
+    centre = WINDOW // 2 // HOP
+
     at, want = [], []
     for start, end, pitch_class in notes:
-        first = int(start / HOP_SECONDS)
-        last = max(int(end / HOP_SECONDS), first + 1)
+        # Rounded rather than truncated: truncation always moves a note earlier, by half a
+        # frame on average, which is 23 ms of bias in the number this whole script reports.
+        first = round(start / HOP_SECONDS) - centre
+        last = max(round(end / HOP_SECONDS) - centre, first + 1)
         at.extend(range(first, last))
         want.extend([pitch_class] * (last - first))
     at, want = np.array(at), np.array(want)

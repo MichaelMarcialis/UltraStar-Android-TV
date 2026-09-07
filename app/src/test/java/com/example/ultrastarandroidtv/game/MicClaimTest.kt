@@ -137,4 +137,35 @@ class MicClaimTest {
         assertNull(claim.update(floatArrayOf(0.30f, 0.01f), bothFree, 0.5))
         assertTrue(claim.progress(0.5) < 1f)
     }
+
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * The one bar each microphone draws, and why it is one bar.
+     *
+     * The screen used to stack a level meter with a separate hold bar underneath, which asked the
+     * room to read two moving things at once and work out which of them meant "keep going". This
+     * is both of them on one scale: the lower half is getting loud enough, the upper half is
+     * holding it.
+     */
+    @Test
+    fun `a bar below the gate fills the lower half in proportion`() {
+        assertEquals(0f, claim.claimProgress(0, 0f, 0.0), 0.001f)
+        assertEquals(0.25f, claim.claimProgress(0, 0.03f, 0.0), 0.001f)
+        assertEquals(0.5f, claim.claimProgress(0, 0.06f, 0.0), 0.001f)
+        // Loud but not leading -- another mic is louder still -- stops at the middle rather than
+        // creeping on towards a claim that is not going to happen.
+        assertEquals(0.5f, claim.claimProgress(0, 0.9f, 0.0), 0.001f)
+    }
+
+    @Test
+    fun `the halves join rather than jump`() {
+        // Leading requires the level to have reached the gate, so the lower half is always full
+        // by the time the upper half starts. The bar therefore passes through the middle once.
+        claim.update(floatArrayOf(0.5f, 0.0f), booleanArrayOf(true, true), 0.0)
+
+        assertEquals(0.5f, claim.claimProgress(0, 0.5f, 0.0), 0.001f)
+        assertEquals(0.75f, claim.claimProgress(0, 0.5f, 0.175), 0.001f)
+        assertEquals(1f, claim.claimProgress(0, 0.5f, 0.35), 0.001f)
+    }
 }

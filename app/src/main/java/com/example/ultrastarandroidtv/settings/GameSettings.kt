@@ -15,6 +15,7 @@ private const val KEY_WINDOW = "window_seconds"
 private const val KEY_MIC_SOLO = "mic_threshold_solo"
 private const val KEY_MIC_DUET = "mic_threshold_duet"
 private const val KEY_DIFFICULTY = "difficulty"
+private const val KEY_FILL_SCREEN = "fill_screen_video"
 
 /** Bounds for the sliders, and the reason each one has the range it does. */
 object SettingsRange {
@@ -96,6 +97,23 @@ class GameSettings(context: Context) {
     var difficulty by mutableStateOf(Difficulty.byName(prefs.getString(KEY_DIFFICULTY, null)))
         private set
 
+    /**
+     * Whether a song's video fills the screen, cropping what will not fit.
+     *
+     * On by default, because it is what makes a background look like a background: most of the
+     * videos in this library are 4:3 standard-definition rips and about half carry black bars
+     * baked into the frame on top of that, so shown whole they are a small picture in a large
+     * black surround. Filling the screen and measuring away the baked-in bars is the difference
+     * between a video behind the song and a video sitting in a box.
+     *
+     * Off is offered because it is a taste, not a fact: cropping does throw away the top and
+     * bottom (or the sides) of somebody else's framing, and a person who would rather see the
+     * whole picture is not wrong. Off shows the video whole, letterboxed against black, at its
+     * own aspect ratio.
+     */
+    var fillScreenVideo by mutableStateOf(prefs.getBoolean(KEY_FILL_SCREEN, true))
+        private set
+
     /** The gate that applies to a game with [playerCount] singers in it. */
     fun micThresholdFor(playerCount: Int): Float =
         if (playerCount >= 2) duetMicThreshold else soloMicThreshold
@@ -108,6 +126,11 @@ class GameSettings(context: Context) {
     fun updateWindow(seconds: Double) {
         windowSeconds = seconds.coerceIn(SettingsRange.window)
         prefs.edit().putFloat(KEY_WINDOW, windowSeconds.toFloat()).apply()
+    }
+
+    fun updateFillScreenVideo(value: Boolean) {
+        fillScreenVideo = value
+        prefs.edit().putBoolean(KEY_FILL_SCREEN, value).apply()
     }
 
     fun updateDifficulty(value: Difficulty) {

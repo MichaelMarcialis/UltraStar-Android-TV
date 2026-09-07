@@ -11,18 +11,27 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- `banner` is what a television actually shows. Android TV home screens draw the banner
+         rather than the icon (320x180 at xhdpi), and an app without one appears as a grey
+         placeholder with its name underneath. The icon still matters everywhere else that lists
+         apps, and `roundIcon` is gone: it only ever applied below API 26 and this app's minimum
+         is 30, so the adaptive icon covers every mask a launcher can ask for. -->
     <application
         android:allowBackup="true"
+        android:banner="@drawable/banner"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="UltraStar Android TV"
-        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.UltraStarAndroidTV">
 
+        <!-- The banner is repeated on the activity as well as the application. Launchers differ
+             about which they read, and one that asks the activity first finds nothing and falls
+             back to the stock green robot. -->
         <activity
             android:name=".MainActivity"
+            android:banner="@drawable/banner"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

@@ -262,6 +262,115 @@ class UsdbSearchTest {
         assertEquals("", byTitle.artist)
     }
 
+    /**
+     * The search people type most often, and the one the two above cannot answer.
+     *
+     * USDB matches each field as a *substring*, so "beatles yesterday" is contained in no artist
+     * and in no title and used to return nothing at all. Split at the first space it is two real
+     * server-side matches rather than a guess made here.
+     */
+    @Test
+    fun `two words are also sent as an artist and a title`() {
+        val searches = keywordSearches(SongFilter(keyword = "beatles yesterday"))
+
+        assertEquals(3, searches.size)
+        val split = searches[2]
+        assertEquals("beatles", split.artist)
+        assertEquals("yesterday", split.title)
+        assertEquals("", split.keyword)
+    }
+
+    /** Everything after the first space is the title, so "abba dancing queen" keeps its song whole. */
+    @Test
+    fun `only the first word becomes the artist`() {
+        val split = keywordSearches(SongFilter(keyword = "abba dancing queen"))[2]
+
+        assertEquals("abba", split.artist)
+        assertEquals("dancing queen", split.title)
+    }
+
+    @Test
+    fun `one word is not split`() {
+        assertEquals(2, keywordSearches(SongFilter(keyword = "queen")).size)
+    }
+
+    /**
+     * With a field already named, the keyword goes to the field that is still free.
+     *
+     * It used to be *dropped* instead, which quietly widened the search: `keyword="dancing
+     * queen", artist="abba"` produced a search for every ABBA song on USDB and called it a search
+     * for "dancing queen". Splitting is also off the table here — the caller has already said
+     * which field the artist is, and arguing with that is not this function's job.
+     */
+    @Test
+    fun `a keyword constrains the field that is still free, and is never dropped`() {
+        val searches = keywordSearches(SongFilter(keyword = "dancing queen", artist = "abba"))
+
+        assertEquals(1, searches.size)
+        assertEquals("abba", searches.single().artist)
+        assertEquals("dancing queen", searches.single().title)
+        assertEquals("", searches.single().keyword)
+    }
+
+    /** Nowhere left to put it, so the filter is honoured as given rather than widened. */
+    @Test
+    fun `a keyword with both fields already named is ignored, not merged`() {
+        val searches = keywordSearches(
+            SongFilter(keyword = "anything", artist = "abba", title = "waterloo"),
+        )
+
+        assertEquals(1, searches.size)
+        assertEquals("abba", searches.single().artist)
+        assertEquals("waterloo", searches.single().title)
+    }
+
+    /**
+     * The band's name is as often last as first.
+     *
+     * "god gave kiss" is somebody remembering three words of a song and the group who sang it, in
+     * the order they came to mind. Splitting at the *first* space reads that backwards — artist
+     * "god", title "gave kiss" — and finds nothing, which is what happened on the television.
+     */
+    @Test
+    fun `a last resort puts the last word in the artist field`() {
+        val tries = lastResorts(SongFilter(keyword = "god gave kiss"))
+
+        val split = tries.first()
+        assertEquals("kiss", split.artist)
+        assertEquals("god gave", split.title)
+        assertEquals("", split.keyword)
+    }
+
+    /**
+     * "ymca" finds nothing because the song is filed as "Y.M.C.A." and USDB matches substrings,
+     * so the letters somebody types are never contiguous in the title.
+     */
+    @Test
+    fun `a last resort spells a short word out with full stops`() {
+        assertEquals("y.m.c.a", dottedAcronym("ymca"))
+        assertEquals("s.o.s", dottedAcronym("SOS"))
+
+        val tries = lastResorts(SongFilter(keyword = "ymca"))
+        assertEquals(1, tries.size)
+        assertEquals("y.m.c.a", tries.first().title)
+        assertEquals("", tries.first().artist)
+    }
+
+    @Test
+    fun `only a short word of letters is spelled out`() {
+        assertNull(dottedAcronym("a"))
+        assertNull(dottedAcronym("yesterday"))
+        assertNull(dottedAcronym("abba1"))
+        assertNull(dottedAcronym("two words"))
+    }
+
+    /** With a field already named, a last resort would be arguing with what was asked for. */
+    @Test
+    fun `nothing is tried when the artist or title was given explicitly`() {
+        assertTrue(lastResorts(SongFilter(keyword = "god gave kiss", artist = "kiss")).isEmpty())
+        assertTrue(lastResorts(SongFilter(keyword = "ymca", title = "y")).isEmpty())
+    }
+
     /** Neither half may keep the keyword, or the second search would run it a third time. */
     @Test
     fun `the keyword is spent once it has been split`() {
@@ -349,6 +458,52 @@ class UsdbSearchTest {
         assertTrue(merged.songs.isEmpty())
         assertEquals(0, merged.totalResults)
         assertFalse(merged.hasMore)
+    }
+
+    @Test
+    fun `a phrase sweeps on its longest word`() {
+        // The most selective one: "god gave kiss" is better answered by "gave" than by "god",
+        // which is inside a great many titles.
+        assertEquals("gave", longestWord("god gave kiss"))
+        assertEquals("tonight", longestWord("tonight tonight"))
+    }
+
+    @Test
+    fun `a single word is not swept, because it is already a substring`() {
+        assertNull(longestWord("ymca"))
+        assertNull(longestWord("  gone  "))
+    }
+
+    @Test
+    fun `a phrase of very short words is left alone`() {
+        // Two letters as a title would return most of the site, which is worse than nothing.
+        assertNull(longestWord("a b"))
+    }
+
+    @Test
+    fun `the comma is what the sweep exists for`() {
+        // "tonight tonight" is a substring of no artist and of no title on USDB, because the
+        // song is filed as "Tonight, Tonight" -- so every earlier search returns nothing and the
+        // song is right there. Reported from the sofa.
+        val song = song(1).copy(artist = "The Smashing Pumpkins", title = "Tonight, Tonight")
+        assertTrue(answersPhrase(song, "tonight tonight"))
+    }
+
+    @Test
+    fun `every word somebody typed has to answer to something`() {
+        // What stops the sweep widening into "any row containing any of these letters". A song
+        // called "Tonight" is a fair close match for "tonight tonight" and is shown; one that
+        // answers only half of a two-word query is not.
+        val other = song(2).copy(artist = "Def Leppard", title = "Tonight")
+        assertTrue(answersPhrase(other, "tonight tonight"))
+        assertFalse(answersPhrase(other, "tonight pumpkins"))
+    }
+
+    @Test
+    fun `words may be given in either order`() {
+        val song = song(3).copy(artist = "KISS", title = "God Gave Rock N Roll To You")
+        assertTrue(answersPhrase(song, "god gave kiss"))
+        assertTrue(answersPhrase(song, "kiss god gave"))
     }
 
     private fun page(songs: List<UsdbSong>, total: Int, pages: Int = 1) =

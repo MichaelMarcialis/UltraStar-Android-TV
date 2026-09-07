@@ -26,6 +26,14 @@ const val DEFAULT_PLAYHEAD_FRACTION: Float = 0.3f
 /** A song with a narrow range would otherwise be stretched until a semitone looked like a leap. */
 private const val MIN_SPAN_SEMITONES = 12
 
+/**
+ * Whether a syllable is the format's mark for "keep holding the last one".
+ *
+ * A note whose text is a lone `~`. Anything else is a syllable to sing, including a tilde with
+ * letters beside it — that is somebody's lyric, not the convention.
+ */
+fun isHeldSyllable(text: String): Boolean = text.trim() == "~"
+
 /** A note with its timing and pitch worked out once, in the units the track draws in. */
 class PlacedNote(
     val note: Note,
@@ -33,6 +41,20 @@ class PlacedNote(
     val lineIndex: Int,
     /** What actually gets drawn: tildes stripped, a hyphen if the word runs on. See [syllableTexts]. */
     val displayText: String,
+    /**
+     * Whether this note carries on the vowel the note before it started.
+     *
+     * The UltraStar format says so with a syllable of `~` and nothing else, and it is not rare:
+     * across this card's 117 songs, **2,234** notes are a held syllable at a different pitch from
+     * the one before, and 96 songs have at least one. That is a singer sustaining a note while
+     * the pitch moves under them — no new breath, no new consonant.
+     *
+     * Drawn as a bridge between the two bars, the way Karaoke Revolution does it. It is *only*
+     * drawn: the two notes remain two notes, each scored against its own pitch over its own
+     * beats, and the gap between them is scored by nobody. A bridge is a hint about how to sing,
+     * not a thing to hit.
+     */
+    val heldFromPrevious: Boolean = false,
     val startSeconds: Double,
     val endSeconds: Double,
     /** The note's own pitch as MIDI, which is also what a sung pitch is folded towards. */
@@ -81,6 +103,9 @@ class TrackGeometry(
                 note = note,
                 lineIndex = lineIndex,
                 displayText = texts[noteIndex],
+                // Never the first note of a line: a bridge across a line break would join two
+                // phrases that a singer breathes between, which is the opposite of what it means.
+                heldFromPrevious = noteIndex > 0 && isHeldSyllable(note.text),
                 startSeconds = beats.beatToSeconds(note.startBeat),
                 endSeconds = beats.beatToSeconds(note.startBeat + note.durationBeats),
                 midi = ultraStarPitchToMidi(note.pitch),

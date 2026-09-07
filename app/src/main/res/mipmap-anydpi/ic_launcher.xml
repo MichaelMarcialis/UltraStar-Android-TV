@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  The launcher icon: the logo, centred, on white.
+
+  No <monochrome>. A themed icon has to be a single-colour silhouette, and handing this one a
+  full-colour logo would produce a smear rather than a shape — the template did exactly that with
+  its placeholder. Nothing is lost here anyway: themed icons are API 33 and this app's device is
+  API 30.
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@drawable/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
-    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+    <background android:drawable="@color/white" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
 </adaptive-icon>

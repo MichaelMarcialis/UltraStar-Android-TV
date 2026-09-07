@@ -221,4 +221,26 @@ class SongBrowsingTest {
         coverId = cover,
         backgroundId = null,
     )
+
+    @Test
+    fun `every filter is something the scanner already knows`() {
+        // A song with artwork is a song with artwork, whatever size the picture is. A "soft
+        // artwork" state lived here briefly and needed every cover read and decoded to answer;
+        // it went with the repair it was made for.
+        val songs = listOf(
+            song("Complete", "A", audio = "a", video = "v", cover = "c"),
+            song("Silent", "B", audio = null, cover = "c"),
+        )
+
+        assertEquals(
+            listOf("Complete"),
+            arrange(songs, SongSort.Title, SongFilterState.Ready).map { it.song.metadata.title },
+        )
+        assertEquals(
+            listOf("Silent"),
+            arrange(songs, SongSort.Title, SongFilterState.MissingMusic)
+                .map { it.song.metadata.title },
+        )
+        assertTrue(arrange(songs, SongSort.Title, SongFilterState.MissingArtwork).isEmpty())
+    }
 }

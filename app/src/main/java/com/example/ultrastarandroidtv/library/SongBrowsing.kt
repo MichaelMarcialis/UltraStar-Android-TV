@@ -81,6 +81,14 @@ fun songOrder(sort: SongSort): Comparator<ScannedSong> = compareBy(
     { it.textId },
 )
 
+/**
+ * Whether a song belongs under [filter].
+ *
+ * Every state here is one the scanner already knows from walking the folder, which is what keeps
+ * filtering free. A "soft artwork" state briefly lived here as well and was removed with the
+ * repair it went with: it needed every cover read and decoded, and any artwork now counts as
+ * artwork.
+ */
 fun matches(song: ScannedSong, filter: SongFilterState): Boolean = when (filter) {
     SongFilterState.All -> true
     SongFilterState.Ready -> song.isPlayable
@@ -204,16 +212,26 @@ data class LibraryFilter(
  * Whether a song answers to what somebody typed.
  *
  * Title **and** artist, because half of remembering a song is remembering who sang it, and on a
- * remote nobody wants to be told which of the two field they are in. Plain containment rather than
- * anything cleverer: the query is arriving one directional-pad press per letter, so it is short,
- * and a fuzzy match on two letters would return the library.
+ * remote nobody wants to be told which of the two fields they are in.
+ *
+ * **Matched forgivingly** — see [fuzzyMatches] for the four rules. It used to be plain containment,
+ * on the grounds that a query arriving one directional-pad press per letter is short and a fuzzy
+ * match on two letters returns the library. The second half of that is true and is now handled
+ * where it belongs, by [FUZZY_MIN_TOKEN]: a short query still only matches by containment. What
+ * the old rule could not do was find "Guns N' Roses" for somebody who typed "guns n roses", or the
+ * song for somebody who typed the artist and the title together — both of which are what people
+ * actually type, and both of which used to come back empty.
+ *
+ * Artist and title are matched **together as one string** as well as separately, so a query naming
+ * both finds the song. Separately as well, because otherwise a query would have to be in the right
+ * order.
  */
 fun matchesQuery(song: ScannedSong, query: String): Boolean {
     val needle = query.trim()
     if (needle.isEmpty()) return true
     val metadata = song.song.metadata
-    return metadata.title.contains(needle, ignoreCase = true) ||
-        metadata.artist.contains(needle, ignoreCase = true)
+    return fuzzyMatches("${metadata.artist} ${metadata.title}", needle) ||
+        fuzzyMatches("${metadata.title} ${metadata.artist}", needle)
 }
 
 fun matchesFilter(song: ScannedSong, filter: LibraryFilter): Boolean {

@@ -8,10 +8,27 @@ import org.junit.Test
 class ArrowMotionTest {
 
     /**
-     * A little slower than the shipped position easing, so that "it moved but has not arrived"
-     * is testable in whole frames. The shipped number is deliberately tiny — see [ArrowMotion].
+     * Deliberately eased, where the shipped arrow is not.
+     *
+     * The parameter still exists and still has to work — the argument for it was real, and raw
+     * YIN on a held voice wanders — so most of these tests drive it with a value. What the
+     * *default* is is pinned separately, below.
      */
     private val motion = ArrowMotion(secondsToSettle = 0.03, fadeSeconds = 0.12)
+
+    @Test
+    fun `the shipped arrow adds no delay of its own`() {
+        // Measured against the games this is modelled on: Karaoke Revolution draws its arrow
+        // 39 ms behind its sing line and Rock Band 4 within a few milliseconds of one, where
+        // ours was 113 ms — and 20 of those were this filter, spent on tidiness. Anything
+        // non-zero here is a delay, and a delay has to be added to `GameSession.arrowLagSeconds`
+        // or the arrow is drawn to the right of the note whose audio it is showing.
+        assertEquals(0.0, ArrowMotion.POSITION_SETTLE_SECONDS, 0.0)
+
+        val shipped = ArrowMotion()
+        shipped.update(60f, 0.0)
+        assertEquals(67f, shipped.update(67f, 0.016), 0.001f)
+    }
 
     @Test
     fun `the arrow fades in rather than appearing`() {

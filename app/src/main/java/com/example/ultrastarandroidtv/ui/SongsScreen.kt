@@ -53,6 +53,7 @@ import com.example.ultrastarandroidtv.download.Downloads
 import com.example.ultrastarandroidtv.download.RepairPlan
 import com.example.ultrastarandroidtv.download.RepairStatus
 import com.example.ultrastarandroidtv.download.SongRepairer
+import com.example.ultrastarandroidtv.download.TimingResult
 import com.example.ultrastarandroidtv.download.repairQueueProgress
 import com.example.ultrastarandroidtv.download.repairStatusLabel
 import com.example.ultrastarandroidtv.download.repairSummary
@@ -72,6 +73,9 @@ import com.example.ultrastarandroidtv.library.indexLetters
 import com.example.ultrastarandroidtv.library.matches
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/** How many frames to keep asking for the focus while the grid composes the card. */
+private const val FOCUS_ATTEMPTS = 12
 
 private enum class SongsMode { List, Managing, Confirming }
 
@@ -136,11 +140,29 @@ fun SongsScreen(
     var selected by remember { mutableStateOf<ScannedSong?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
 
+    /**
+     * The grid's scroll, kept outside the `when` that chooses between the list and one song.
+     *
+     * It used to be remembered *inside* the list branch, so opening a song threw it away and
+     * coming back rebuilt it at the top. Reported from the sofa: inspecting the fortieth song
+     * and pressing Back put you on the first, which on a library of a hundred means finding your
+     * place again every time you look at anything.
+     */
+    val gridState = rememberLazyGridState()
+
+    /** The song to come back to, and the requester its card carries while it is on screen. */
+    var returningTo by remember { mutableStateOf<String?>(null) }
+    val returning = remember { FocusRequester() }
+
     val first = remember { FocusRequester() }
     LaunchedEffect(mode, songs, scanning) {
         withFrameNanos { }
+        // Coming back from a song, the song is where the focus belongs -- not on the header
+        // button, which would leave the cursor at the top of a grid scrolled to the middle.
+        if (mode == SongsMode.List && returningTo != null) return@LaunchedEffect
         runCatching { first.requestFocus() }
     }
+
 
     BackHandler {
         if (mode == SongsMode.List) {
@@ -176,8 +198,7 @@ fun SongsScreen(
                 http = downloads.http,
                 tree = it,
                 writer = it,
-                measureCover = CoverLoader::shortestEdge,
-            )
+                )
         }
     }
 
@@ -225,6 +246,30 @@ fun SongsScreen(
                     ?.let { song to it }
             }
         }
+    }
+
+    // Back to the song that was being looked at: scroll to it, then focus it.
+    //
+    // Two steps and both are needed. A lazy grid does not compose what is off screen, so the
+    // card's focus requester does not exist until the scroll has brought it into view -- the
+    // same rule the song picker documents for its row, and the same wait for frames.
+    LaunchedEffect(mode, returningTo, songs) {
+        val textId = returningTo ?: return@LaunchedEffect
+        if (mode != SongsMode.List) return@LaunchedEffect
+        val at = arrange(songs, sort, filter).indexOfFirst { it.textId == textId }
+        if (at >= 0) {
+            gridState.scrollToItem(at)
+            // `return@repeat` would only end the current iteration and go round again -- the loop
+            // has to be left outright, or every successful return from a song asks for focus
+            // eleven more times.
+            for (attempt in 0 until FOCUS_ATTEMPTS) {
+                withFrameNanos { }
+                if (runCatching { returning.requestFocus() }.isSuccess) break
+            }
+        } else {
+            runCatching { first.requestFocus() }
+        }
+        returningTo = null
     }
 
     val picker = rememberLauncherForActivityResult(
@@ -380,7 +425,6 @@ fun SongsScreen(
                     }
                     ProgressBar(repairing, modifier = Modifier.fillMaxWidth())
                 }
-
                 Spacer(Modifier.height(16.dp))
 
                 // Sorting and filtering, small and across the top rather than down the side. This
@@ -417,8 +461,16 @@ fun SongsScreen(
                     // buttons across the top wrapped "Main menu" into two lines, which is exactly
                     // the fault that made UltraStar Play unusable. It also belongs here -- it is a
                     // thing to do *about* what the filters are showing.
+                    //
+                    // Two things are left out of the count, and both were reported as bugs. A
+                    // song already queued or done is held by the queue; a song whose exact
+                    // repair has been tried and came back with nothing is remembered, because
+                    // whether better artwork exists anywhere cannot be known without asking, and
+                    // asking the same fruitless question every visit is how "Repair 7 songs"
+                    // came to mean seven songs that would all fail.
                     val waiting = repairable.filterNot {
-                        downloads.repairs.holds(it.first.textId, it.second.scan)
+                        downloads.repairs.holds(it.first.textId, it.second.scan) ||
+                            downloads.repairMemory.triedInVain(it.first.textId, it.second)
                     }
                     if (waiting.isNotEmpty()) {
                         Spacer(Modifier.weight(1f))
@@ -434,18 +486,18 @@ fun SongsScreen(
                                 modifier = Modifier.padding(horizontal = 8.dp),
                             )
                         }
-                    }
-                }
+                    }                }
 
                 Spacer(Modifier.height(14.dp))
 
-                val arranged = remember(songs, sort, filter) { arrange(songs, sort, filter) }
+                val arranged = remember(songs, sort, filter) {
+                    arrange(songs, sort, filter)
+                }
                 // Indexed from the *filtered* list, which is the one a letter jumps into.
                 // Taken from the whole library instead, a filter like "No music" left letters on
                 // the rail with nothing behind them: pressing one found no song and silently did
                 // nothing, which on a remote is indistinguishable from a broken button.
                 val letters = remember(arranged, sort) { indexLetters(arranged, sort) }
-                val gridState = rememberLazyGridState()
 
                 // Re-sorting starts at the top.
                 //
@@ -454,7 +506,9 @@ fun SongsScreen(
                 // entirely -- which reads as the app having decided to show you a random song.
                 // Arranging a library is a fresh look at it, and a fresh look starts at the
                 // beginning. Focus stays on the chip that was just pressed.
-                LaunchedEffect(sort, filter) { gridState.scrollToItem(0) }
+                LaunchedEffect(sort, filter) {
+                    if (returningTo == null) gridState.scrollToItem(0)
+                }
 
                 Row(modifier = Modifier.fillMaxSize()) {
                     LazyVerticalGrid(
@@ -470,7 +524,13 @@ fun SongsScreen(
                                 cover = covers[scanned.textId],
                                 onSelect = {
                                     selected = scanned
+                                    returningTo = scanned.textId
                                     mode = SongsMode.Managing
+                                },
+                                modifier = if (scanned.textId == returningTo) {
+                                    Modifier.focusRequester(returning)
+                                } else {
+                                    Modifier
                                 },
                             )
                         }
@@ -556,6 +616,30 @@ fun SongsScreen(
                         )
                     }
 
+                    // What listening to this song found, in its own words. This page is where
+                    // somebody comes when a song sounded wrong, so "the notes do not match this
+                    // recording" is the answer to the question they arrived with.
+                    if (downloads.timing.checking == song.textId) {
+                        Spacer(Modifier.height(14.dp))
+                        Text(
+                            "Listening to this song…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = GameTheme.lyricIdle,
+                        )
+                    } else {
+                        downloads.timing.resultFor(song.textId)?.let { result ->
+                            Spacer(Modifier.height(14.dp))
+                            Text(
+                                result.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = when (result) {
+                                    TimingResult.Wrong -> GameTheme.sparkWarm
+                                    else -> GameTheme.lyricIdle
+                                },
+                            )
+                        }
+                    }
+
                     val job = downloads.repairs.jobs.firstOrNull { it.song.textId == song.textId }
                     job?.let {
                         Spacer(Modifier.height(14.dp))
@@ -597,6 +681,33 @@ fun SongsScreen(
                                         ),
                                     )
                                 }
+                            }
+                        }
+                        // Listening to one song, where somebody has already decided this is the
+                        // song worth asking about. A library-wide version of this existed for an
+                        // afternoon and was removed: its cost grows with the library and its
+                        // value does not -- see [TimingMemory].
+                        //
+                        // Offered again after an answer, unlike Repair, because the question is
+                        // cheap and a person may have changed the files underneath it.
+                        //
+                        // **It stays on screen while it works**, saying "Listening…" rather than
+                        // disappearing. Taking away the button somebody has just pressed takes
+                        // the focus with it, and where focus lands after that is luck -- which on
+                        // a remote is the difference between a screen you can drive and one you
+                        // cannot. The press is refused while a check is running, by the same
+                        // guard that stops two at once.
+                        if (canModify && song.isPlayable) {
+                            val listening = downloads.timing.checking != null
+                            Spacer(Modifier.width(16.dp))
+                            Button(onClick = { downloads.checkTiming(song, cache) }) {
+                                Text(
+                                    if (listening) "Listening…" else "Check timing",
+                                    modifier = Modifier.padding(
+                                        horizontal = 16.dp,
+                                        vertical = 4.dp,
+                                    ),
+                                )
                             }
                         }
                         if (canModify) {
@@ -727,11 +838,16 @@ private fun Inventory(label: String, present: Boolean, required: Boolean) {
  * easier.
  */
 @Composable
-private fun SongCard(scanned: ScannedSong, cover: ImageBitmap?, onSelect: () -> Unit) {
+private fun SongCard(
+    scanned: ScannedSong,
+    cover: ImageBitmap?,
+    onSelect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val fault = faultWith(scanned)
     Button(
         onClick = onSelect,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         // A rectangle, said explicitly. `androidx.tv.material3.Button` is a *pill* by default,
         // which is right for a word and catastrophic for anything tall: a card came out as an
         // ellipse with its own title clipped off at the sides -- "7 Years" reading as "Years".

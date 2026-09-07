@@ -13,6 +13,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalDensity
@@ -267,6 +268,43 @@ private fun DrawScope.drawNotes(
     low: Float,
     high: Float,
 ) {
+    // The bridges first, so a note always draws over its own end of one.
+    //
+    // Karaoke Revolution's angled connector, and the UltraStar format carries the same
+    // information: a syllable of `~` means the vowel is held while the pitch moves. Two thousand
+    // of them on this card. Without it, two bars a tone apart look like two attacks and get sung
+    // as two; with it, the eye reads one long note that bends.
+    //
+    // **A bridge is a note that happens to be sloped**, and that is the whole of the style: the
+    // same height, the same colours, so the three pieces read as one sustained sound with only
+    // the angle to tell them apart. It began as a thin dim line — technically honest, since
+    // nothing is scored on it, and wrong, because it looked like two notes with a wire between
+    // them rather than one note that bends.
+    for (i in visible) {
+        val bridge = bridgeAt(geometry, i, nowSeconds, width, noteArea, noteHeight, low, high)
+            ?: continue
+        val before = geometry.placements[i - 1]
+        val placed = geometry.placements[i]
+        val isActive = i == active || i - 1 == active
+
+        // Golden only when *both* ends are, so a golden run stays golden the whole way through
+        // and a bridge into gold does not put the colour change anywhere but the note that earns
+        // it.
+        val golden = before.note.type.isGolden && placed.note.type.isGolden
+        drawLine(
+            color = when {
+                golden && isActive -> GameTheme.noteActiveGolden
+                golden -> GameTheme.noteGolden
+                isActive -> GameTheme.noteActive
+                else -> GameTheme.noteIdle
+            },
+            start = bridge.from,
+            end = bridge.to,
+            strokeWidth = noteHeight,
+            cap = StrokeCap.Round,
+        )
+    }
+
     for (i in visible) {
         val placed = geometry.placements[i]
         val left = geometry.xFor(placed.startSeconds, nowSeconds, width)
@@ -291,6 +329,43 @@ private fun DrawScope.drawNotes(
             cornerRadius = CornerRadius(noteHeight / 2f),
         )
     }
+}
+
+/** Where a held syllable's bridge runs, in drawing coordinates. */
+private class Bridge(val from: Offset, val to: Offset)
+
+/**
+ * The bridge into note [i], or null when that note does not continue the one before it.
+ *
+ * The ends sit at the *centres of the notes' rounded caps* rather than at their edges, which is
+ * what makes the join seamless: a round-capped stroke of the same thickness puts its own
+ * semicircle exactly where the note's already is, so there is no notch and no overlap to see.
+ */
+private fun bridgeAt(
+    geometry: TrackGeometry,
+    i: Int,
+    nowSeconds: Double,
+    width: Float,
+    noteArea: Float,
+    noteHeight: Float,
+    low: Float,
+    high: Float,
+): Bridge? {
+    if (i == 0) return null
+    val placed = geometry.placements[i]
+    if (!placed.heldFromPrevious) return null
+    val before = geometry.placements[i - 1]
+    val radius = noteHeight / 2f
+    return Bridge(
+        from = Offset(
+            geometry.xFor(before.endSeconds - GameTheme.noteGapSeconds, nowSeconds, width) - radius,
+            geometry.yFor(before.midi.toFloat(), noteArea, low, high),
+        ),
+        to = Offset(
+            geometry.xFor(placed.startSeconds, nowSeconds, width) + radius,
+            geometry.yFor(placed.midi.toFloat(), noteArea, low, high),
+        ),
+    )
 }
 
 /**
@@ -361,6 +436,37 @@ private fun DrawScope.drawHits(
                 )
                 beat = end + 1
             }
+        }
+
+        // The singer's colour carries across the slope too, so a held note is one unbroken
+        // stretch of their colour rather than two bars with a gap between them. Nothing is
+        // *scored* on a bridge -- the gap belongs to no note -- but a sustained vowel is one
+        // thing the singer did, and drawing it as two says otherwise.
+        //
+        // Filled only once the note it continues has been credited and has passed the arrow
+        // entirely, which is the same rule the beats above follow: nothing is ever seen to be
+        // paid for before the arrow reaches it.
+        for (i in visible) {
+            val bridge = bridgeAt(geometry, i, nowSeconds, width, noteArea, noteHeight, low, high)
+                ?: continue
+            val before = geometry.placements[i - 1]
+            val score = trace.noteScores.getOrNull(i - 1) ?: continue
+            val beats = before.beatMidSeconds.size
+            if (beats == 0 || !score.wasHit(beats - 1)) continue
+            val beatSeconds = (before.endSeconds - before.startSeconds) / beats
+            val passed = ((arrowNowSeconds - before.startSeconds) / beatSeconds).toInt()
+            if (passed < beats) continue
+
+            // Down into this singer's lane, and the width of one lane, so two singers holding the
+            // same note show the same two stripes the notes either side of it show.
+            val offset = -noteHeight / 2f + lane * laneHeight + laneHeight / 2f
+            drawLine(
+                color = fill,
+                start = bridge.from.copy(y = bridge.from.y + offset),
+                end = bridge.to.copy(y = bridge.to.y + offset),
+                strokeWidth = laneHeight,
+                cap = StrokeCap.Butt,
+            )
         }
     }
 }
@@ -457,8 +563,15 @@ private fun DrawScope.drawArrows(
 
         // On your own the arrow is free to say how well it is going, because nobody else's arrow
         // needs telling apart from it. With two singers the colour is the only thing that does.
+        //
+        // **A solo arrow is never the singer's own colour.** It falls back to the *start* of the
+        // accuracy scale rather than to `trace.color`, which is what the notes, the name and the
+        // score carry. Sharing them makes the arrow purple between notes and green on one, which
+        // reads as two ideas fighting rather than as one scale: green when it is right, red when
+        // it is not, and nothing else.
         val color = when {
-            !accuracyColored || targetMidi == null || midi.isNaN() -> trace.color
+            !accuracyColored -> trace.color
+            targetMidi == null || midi.isNaN() -> GameTheme.arrowOnPitch
             else -> GameTheme.arrowAccuracyColor(midi - targetMidi, toleranceSemitones)
         }
 

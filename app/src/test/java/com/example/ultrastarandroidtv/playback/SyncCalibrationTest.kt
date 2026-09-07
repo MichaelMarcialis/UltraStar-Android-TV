@@ -64,10 +64,18 @@ class SyncCalibrationTest {
     }
 
     @Test
-    fun `the display lead defaults to what was dialled in on the TV`() {
-        // Judged by eye and ear rather than measured by the app, so less precise than the round
-        // trip — but a real observation on the real TV, which is what a default is for.
-        assertEquals(0.040, SyncCalibration().displayLeadSeconds, 1e-12)
+    fun `the display lead defaults to nothing, and still moves the picture when it is set`() {
+        // Zero is the user's own verdict after an evening of play, replacing the 40 ms that was
+        // dialled in before the app drove the television at 120 Hz. Asserting a default of zero
+        // on its own would pass just as well if the lead stopped doing anything at all, so the
+        // second half is the part that matters: it is still a live correction, just idle by
+        // default.
+        val fresh = SyncCalibration()
+        assertEquals(0.0, fresh.displayLeadSeconds, 1e-12)
+
+        val idle = fresh.heardSongTimeFor(10.0)
+        fresh.displayLeadSeconds = 0.05
+        assertEquals(idle + 0.05, fresh.heardSongTimeFor(10.0), 1e-9)
     }
 
     @Test

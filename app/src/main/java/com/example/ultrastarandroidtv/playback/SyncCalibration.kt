@@ -1,5 +1,8 @@
 package com.example.ultrastarandroidtv.playback
 
+import com.example.ultrastarandroidtv.pitch.DEFAULT_SAMPLE_RATE
+import com.example.ultrastarandroidtv.pitch.DEFAULT_WINDOW_SIZE
+
 /**
  * How far behind the player's clock the singer's captured voice runs.
  *
@@ -64,8 +67,8 @@ class SyncCalibration(
      * they are in game mode. Left uncorrected it shows up exactly as reported from the sofa: the
      * lyric is sung a moment before it reaches the line.
      *
-     * Tunable live from the gameplay screen, because the only instrument that can measure it is
-     * a person watching the TV and listening to the song at the same time.
+     * Dialled from the Settings screen, because the only instrument that can measure it is a
+     * person watching the TV and listening to the song at the same time.
      */
     @Volatile
     var displayLeadSeconds: Double = DEFAULT_DISPLAY_LEAD_SECONDS
@@ -87,7 +90,15 @@ class SyncCalibration(
          * centre of the window a reading describes. The one part of the round trip that is
          * calculated rather than measured.
          */
-        const val CAPTURE_LATENCY_SECONDS: Double = 1024.0 / 48_000.0
+        /**
+         * **Half the analysis window, not the hop.** It says where a reading's *centre* sits
+         * relative to the audio's end, which is a property of the window alone — so it does not
+         * move when the hop does. Written as a literal it was indistinguishable from the two
+         * hop-derived latencies in `GameSession`, and halving the hop would have looked like it
+         * ought to change this too.
+         */
+        const val CAPTURE_LATENCY_SECONDS: Double =
+            DEFAULT_WINDOW_SIZE / 2.0 / DEFAULT_SAMPLE_RATE
 
         /**
          * Measured on the Shield into the LG OLED: 127 ms, from four calibration runs whose
@@ -101,14 +112,19 @@ class SyncCalibration(
         const val DEFAULT_LATENCY_SECONDS: Double = 0.127
 
         /**
-         * Dialled in on the sofa at 40 ms: raised live until the lyric met the sing line at the
-         * moment it was sung.
+         * Zero, and arrived at the same way the 40 ms it replaces was: by playing songs.
          *
-         * Judged by eye and ear rather than measured by the app, so it is less precise than the
-         * 127 ms above — but it is a real observation on the real TV, which beats the zero it
-         * replaced. Roughly two frames' worth, which is about what a display pipeline plus a
-         * TV's own processing costs. Re-check it if the TV or its picture mode changes.
+         * It sat at 40 ms from an evening of dialling it up until the lyric met the sing line as
+         * it was sung. The user's own verdict after more play is that zero feels better, and the
+         * arrow's other latency terms were re-measured and shrunk in between. The television is
+         * also asked for its own game mode now (`tv/TvGameMode.kt`), which turns off most of the
+         * processing this number was compensating for.
+         *
+         * Still a real setting with a real range, because it describes the *television* rather
+         * than this app — a different set, or this one in a different picture mode, will want a
+         * different number. It is judged by eye and ear, which is why it is a dial rather than a
+         * constant.
          */
-        const val DEFAULT_DISPLAY_LEAD_SECONDS: Double = 0.040
+        const val DEFAULT_DISPLAY_LEAD_SECONDS: Double = 0.0
     }
 }

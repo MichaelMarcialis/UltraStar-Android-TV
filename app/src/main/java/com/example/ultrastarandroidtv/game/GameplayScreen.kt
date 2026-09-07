@@ -65,9 +65,13 @@ import com.example.ultrastarandroidtv.song.UltraStarSong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "Gameplay"
+
+/** How often the bring-up trace says where the song is. Off the frame loop; see its use. */
+private const val TRACE_INTERVAL_MS = 2_000L
 
 /**
  * How long the score has to stop moving before the points earned are shown as one number.
@@ -172,10 +176,12 @@ fun GameplayScreen(
         label = "intro",
     )
 
-    // A song can name a video that this device cannot decode. Falling back is automatic; there
-    // is nothing to configure per song, and nothing to do when a new song is added.
-    var videoFailed by remember(videoUri) { mutableStateOf(false) }
-    val showVisualizer = videoUri == null || videoFailed
+    // A song can name a video this device cannot decode, and it can name one that turns out to
+    // be a single photograph held for three minutes. Both are worse to look at than the
+    // visualiser, and both are found out rather than configured -- there is nothing to set per
+    // song and nothing to do when a new song is added.
+    var videoUnusable by remember(videoUri) { mutableStateOf(false) }
+    val showVisualizer = videoUri == null || videoUnusable
 
     val focus = remember { FocusRequester() }
 
@@ -265,7 +271,6 @@ fun GameplayScreen(
 
     LaunchedEffect(session) {
         focus.requestFocus()
-        var lastLogged = 0.0
         while (true) {
             withFrameNanos { }
             nowSeconds.doubleValue = session.drawTimeSeconds()
@@ -299,31 +304,53 @@ fun GameplayScreen(
                 }
             }
 
+            // Checked without building anything in the common case, which is every frame of
+            // every song where the microphones are behaving. A `filter` here allocated a list
+            // sixty times a second to answer a question whose answer is almost always "no".
             if (notice == null) {
-                val waiting = session.singers.filter { it.micStatus != "capturing" }
                 notice = when {
                     session.singers.isEmpty() -> session.micSummary
-                    waiting.isNotEmpty() -> waiting.joinToString { "${it.name}: ${it.micStatus}" }
+                    session.singers.any { it.micStatus != "capturing" } ->
+                        session.singers
+                            .filter { it.micStatus != "capturing" }
+                            .joinToString { "${it.name}: ${it.micStatus}" }
                     else -> null
                 }
             }
+        }
+    }
 
-            // Bring-up trace. Beats keep being *scored* whether or not anyone sings, so this
-            // separates "nobody is singing" from "the readings are not arriving at all" —
-            // which look identical on screen. Paced by the wall clock rather than by the song,
-            // because the most interesting moment is the one where the song stops advancing.
-            val position = session.playerPositionSeconds()
-            val nowMs = System.currentTimeMillis().toDouble()
-            if (nowMs - lastLogged > 2000.0) {
-                lastLogged = nowMs
+    // Bring-up trace. Beats keep being *scored* whether or not anyone sings, so this separates
+    // "nobody is singing" from "the readings are not arriving at all", which look identical on
+    // screen. Paced by the wall clock rather than by the song, because the most interesting
+    // moment is the one where the song stops advancing.
+    //
+    // **Its own coroutine, and the line is built off the main thread.** It used to sit in the
+    // frame loop above, which put five `String.format` calls and a log write inside one frame
+    // every two seconds. Reported from the sofa as a subtle hitch "at a set interval", which is
+    // exactly what a periodically expensive frame looks like: sixty frames cost the same and
+    // then one costs more, on a strict two-second beat. Nothing here is drawn, so nothing here
+    // belongs on the thread that draws.
+    //
+    // Reading a scorer from another thread is the same race the drawing already accepts -- one
+    // writer per scorer, and a field may be a beat stale -- and `SongClock` is lock-free by
+    // design so that any thread may ask it the time.
+    LaunchedEffect(session) {
+        while (true) {
+            delay(TRACE_INTERVAL_MS)
+            withContext(Dispatchers.Default) {
                 Log.i(
                     TAG,
-                    "%.1fs  ".format(position) + session.singers.joinToString("  ") {
-                        val s = it.snapshot()
-                        val pitch =
-                            if (it.currentMidi.isNaN()) "silent" else "%.1f".format(it.currentMidi)
-                        "${it.name}: ${s.beatsHit}/${s.beatsScored} beats, ${s.total} pts, $pitch"
-                    },
+                    "%.1fs  ".format(session.playerPositionSeconds()) +
+                        session.singers.joinToString("  ") {
+                            val s = it.snapshot()
+                            val pitch = if (it.currentMidi.isNaN()) {
+                                "silent"
+                            } else {
+                                "%.1f".format(it.currentMidi)
+                            }
+                            "${it.name}: ${s.beatsHit}/${s.beatsScored} beats, ${s.total} pts, $pitch"
+                        },
                 )
             }
         }
@@ -369,7 +396,9 @@ fun GameplayScreen(
                 videoGapSeconds = song.metadata.videoGapSeconds,
                 songPosition = { session.drawTimeSeconds() },
                 isPlaying = { session.player.isPlaying },
-                onFailed = { videoFailed = true },
+                onFailed = { videoUnusable = true },
+                onStillImage = { videoUnusable = true },
+                fillScreen = settings.fillScreenVideo,
                 modifier = Modifier.fillMaxSize(),
             )
         } else {

@@ -9,6 +9,8 @@ import com.example.ultrastarandroidtv.audio.SpectrumTap
 import com.example.ultrastarandroidtv.audio.gainFor
 import com.example.ultrastarandroidtv.mic.OpenMic
 import com.example.ultrastarandroidtv.mic.UsbMicSession
+import com.example.ultrastarandroidtv.pitch.DEFAULT_HOP_SIZE
+import com.example.ultrastarandroidtv.pitch.DEFAULT_SAMPLE_RATE
 import com.example.ultrastarandroidtv.pitch.PitchTracker
 import com.example.ultrastarandroidtv.playback.SongPlayer
 import com.example.ultrastarandroidtv.playback.SyncCalibration
@@ -41,22 +43,32 @@ private const val TAIL_SECONDS = 2.0
  * twentieth of a second of easing put the arrow 150 ms behind the voice and notes lit up before
  * the arrow reached them. That was a *lag* problem, and the fix was the lag, not the median.
  */
+/**
+ * How long one of `PitchTracker`'s hops lasts, in seconds.
+ *
+ * Read from the tracker's own default rather than written out again. Both numbers below are
+ * multiples of it, and both used to be spelled `1024.0 / 48_000.0` — the same literal the
+ * *window*-centre latency uses for a completely different reason. Halving the hop silently left
+ * two of the three wrong.
+ */
+private const val HOP_SECONDS = DEFAULT_HOP_SIZE.toDouble() / DEFAULT_SAMPLE_RATE
+
 private const val MEDIAN_WINDOW = 3
 
 /**
  * Delay the median filter itself adds, in seconds.
  *
  * A median of N follows a step once (N+1)/2 of its samples are new, so it lags the raw reading
- * by (N-1)/2 of them. One reading is one of `PitchTracker`'s hops — 1024 samples at 48 kHz —
+ * by (N-1)/2 of them. One reading is one of `PitchTracker`'s hops, so this is derived from
  * and this must be kept in step with that default, since it is used to decide where on the
  * track the arrow is drawn.
  */
-private const val MEDIAN_LAG_SECONDS = ((MEDIAN_WINDOW - 1) / 2) * (1024.0 / 48_000.0)
+private const val MEDIAN_LAG_SECONDS = ((MEDIAN_WINDOW - 1) / 2) * HOP_SECONDS
 
 /**
  * How old the reading in hand already is when a frame draws it, in seconds.
  *
- * `PitchTracker` publishes a reading once per hop — 1024 samples, 21 ms — and the draw pass
+ * `PitchTracker` publishes a reading once per hop and the draw pass
  * takes whatever the latest one is. At an arbitrary frame that reading was published anywhere
  * between nothing and a whole hop ago, so it averages **half a hop** old, and that is on top of
  * [SyncCalibration.captureLatencySeconds], which describes only where the analysis window's
@@ -66,7 +78,7 @@ private const val MEDIAN_LAG_SECONDS = ((MEDIAN_WINDOW - 1) / 2) * (1024.0 / 48_
  * on the capture thread at the moment it is produced, so it is judged against the song position
  * it genuinely describes however long it then waits to be drawn.
  */
-private const val READING_AGE_SECONDS = (1024.0 / 48_000.0) / 2.0
+private const val READING_AGE_SECONDS = HOP_SECONDS / 2.0
 
 /**
  * How close to the end of the audio counts as the end.
