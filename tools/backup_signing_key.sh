@@ -56,6 +56,13 @@
 #     rclone config          # once: create a remote pointing at your Drive
 #     tools/backup_signing_key.sh
 #
+# **On Windows, run it from Git Bash.** The script needs a real terminal (see below), and Git for
+# Windows often installs only `git.exe` onto the PATH -- `C:\Program Files\Git\cmd` -- leaving the
+# Unix tools in `C:\Program Files\Gitin` off it, so PowerShell answers "the term 'bash' is not
+# recognized". From PowerShell the full path works, if its console is interactive:
+#
+#     & "C:\Program Files\Gitinash.exe" tools/backup_signing_key.sh
+#
 # Override the defaults with environment variables if your setup differs:
 #
 #     RCLONE=/path/to/rclone.exe REMOTE=mydrive: DEST_DIR=Backups/keys \
@@ -90,7 +97,9 @@ command -v gpg >/dev/null 2>&1 || die "gpg not found (it ships with Git for Wind
 
 # Refuse to run without a terminal. See the note above: gpg would otherwise encrypt happily and
 # hand back an archive whose passphrase nobody knows.
-[ -t 0 ] || die "no terminal — run this from an interactive shell (Git Bash), not from a script."
+[ -t 0 ] || die "no terminal — open Git Bash (C:\Program Files\Git\git-bash.exe on Windows) and
+run it there. It cannot run from a script, a pipe, or a non-interactive console, because gpg would
+encrypt with a passphrase nobody knows rather than failing."
 
 # Asked twice and compared. A mistyped passphrase is the realistic way to lose a backup, and it is
 # the one failure that looks exactly like success right up until the day it matters.
