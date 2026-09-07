@@ -23,7 +23,7 @@
 # its value did not.
 #
 # So this is run by hand, at the two moments that matter: when a key is created, and if one is ever
-# replaced. What *is* worth repeating is the verify step, which is why it happens automatically at
+# replaced. What *is* worth repeating is the verifying, which is why it happens automatically at
 # the end of every run rather than being a separate thing to remember. A backup nobody has ever
 # restored from is a rumour.
 #
@@ -33,6 +33,23 @@
 # this repository and off the disk — so put it somewhere designed to remember things. A password
 # manager is the right place, and it is also the right place for a second copy of the two files
 # themselves. Two independent copies, one of which is not a script.
+#
+# ## Two traps in gpg that this had to be rewritten around
+#
+# **Without a terminal, `gpg --symmetric` does not fail — it encrypts anyway, exit 0, with a
+# passphrase nobody knows.** Measured: the resulting file will not open with the empty passphrase,
+# or with any other. So this refuses to run without a TTY rather than producing a convincing
+# archive that can never be decrypted.
+#
+# **And gpg-agent caches the symmetric passphrase for the session**, so a `--decrypt` immediately
+# after a `--symmetric` succeeds without asking for anything. The first version of the verify step
+# did exactly that, which made it worthless: it proved the file was well formed and said nothing
+# about whether the passphrase was the one that had been typed. Both halves now pass
+# `--no-symkey-cache` and supply the passphrase explicitly, so the check really does re-derive the
+# key.
+#
+# The passphrase is asked for **twice and compared**, because a typo is the realistic way to lose a
+# backup — likelier by far than gpg or Drive failing.
 #
 # ## Usage
 #
@@ -71,15 +88,33 @@ command -v gpg >/dev/null 2>&1 || die "gpg not found (it ships with Git for Wind
 "$RCLONE" listremotes | grep -qx "$REMOTE" \
     || die "no rclone remote called '$REMOTE'. Run: $RCLONE config"
 
-say "Encrypting release.jks and keystore.properties…"
-say "(you will be asked for a passphrase — keep it in your password manager)"
-tar -C "$repo" -cf - release.jks keystore.properties \
-    | gpg --symmetric --cipher-algo AES256 -o "$work/$archive"
+# Refuse to run without a terminal. See the note above: gpg would otherwise encrypt happily and
+# hand back an archive whose passphrase nobody knows.
+[ -t 0 ] || die "no terminal — run this from an interactive shell (Git Bash), not from a script."
 
-# Verify against the *encrypted file*, before it is uploaded and before anything is trusted. A
-# wrong passphrase, a truncated write or a broken gpg all show up here rather than in a year.
-say "Verifying the archive decrypts and holds both files…"
-listing="$(gpg --quiet --decrypt "$work/$archive" 2>/dev/null | tar -tf -)"
+# Asked twice and compared. A mistyped passphrase is the realistic way to lose a backup, and it is
+# the one failure that looks exactly like success right up until the day it matters.
+printf 'Passphrase for the backup (keep it in your password manager): ' >&2
+IFS= read -rs pass
+printf '\n' >&2
+printf 'Again: ' >&2
+IFS= read -rs again
+printf '\n' >&2
+[ -n "$pass" ] || die "empty passphrase."
+[ "$pass" = "$again" ] || die "the two passphrases do not match."
+unset again
+
+say "Encrypting release.jks and keystore.properties…"
+tar -C "$repo" -cf - release.jks keystore.properties \
+    | gpg --batch --yes --no-symkey-cache --passphrase-fd 3 \
+          --symmetric --cipher-algo AES256 -o "$work/$archive" 3<<<"$pass"
+
+# Verify against the *encrypted file*, before it is uploaded and before anything is trusted — and
+# with the cache off and the passphrase supplied explicitly, so this re-derives the key rather than
+# reading one gpg-agent is still holding from the line above.
+say "Verifying the archive decrypts with that passphrase and holds both files…"
+listing="$(gpg --batch --quiet --no-symkey-cache --passphrase-fd 3 \
+    --decrypt "$work/$archive" 3<<<"$pass" 2>/dev/null | tar -tf -)"
 for f in release.jks keystore.properties; do
     printf '%s\n' "$listing" | grep -qx "$f" || die "verify failed: $f missing from the archive."
 done
@@ -96,7 +131,8 @@ cmp -s "$work/$archive" "$work/roundtrip.tar.gpg" \
 
 say ""
 say "Done. ${REMOTE}${DEST_DIR}/${archive}"
-say "It decrypts, it holds both files, and the remote copy is byte-identical."
+say "It decrypts with the passphrase you typed, it holds both files, and the copy on Drive is"
+say "byte-identical to the one that was uploaded."
 say ""
 say "Two things left that this script cannot do for you:"
 say "  1. Put the passphrase in your password manager."
