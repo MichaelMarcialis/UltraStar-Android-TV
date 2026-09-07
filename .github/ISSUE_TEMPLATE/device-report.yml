@@ -1,0 +1,86 @@
+name: Device report — did it work?
+description: Tell us how it went on your hardware, whether it worked or not.
+title: "[Device] "
+labels: ["device report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This app has only ever been tested on one machine — a 2019 Nvidia Shield TV Pro on
+        Android 11. **Reports that it worked are as useful as reports that it did not**, because
+        right now there is no evidence either way about any other device.
+
+        There is no telemetry in this app, so this form is genuinely the only way anybody finds out.
+
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Make and model, as specific as you can be.
+      placeholder: "Nvidia Shield TV Pro (2019), Chromecast with Google TV 4K, Onn 4K Pro…"
+    validations:
+      required: true
+
+  - type: input
+    id: android
+    attributes:
+      label: Android version
+      description: "Settings → Device Preferences → About → Android version."
+      placeholder: "11"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: How far did you get?
+      options:
+        - It works — I have sung a whole song
+        - It installs and runs, but something is wrong
+        - It installs but will not get past a particular screen
+        - It will not install at all
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mics
+    attributes:
+      label: Did it find your microphones?
+      description: >
+        The app only supports wired USB microphones — it bypasses Android's audio stack entirely,
+        so Bluetooth, 3.5 mm and remote-control microphones cannot work. See the README for why.
+      options:
+        - Yes, all of them
+        - It found some but not all
+        - No, it found none
+        - I have not tried microphones yet
+    validations:
+      required: true
+
+  - type: input
+    id: mic-model
+    attributes:
+      label: Which microphones?
+      description: >
+        Brand and model if you know it. If you can run `adb shell lsusb` or check
+        Settings, a `vendor:product` id like `046d:0a03` is the most useful thing here.
+      placeholder: "Let's Sing 2024 wired USB mics (046d:0a03)"
+
+  - type: textarea
+    id: detail
+    attributes:
+      label: What happened?
+      description: >
+        Anything you noticed. If something is broken, what you expected and what you got instead.
+        A photo of the television is fine and often clearer than a description.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, if you can get them
+      description: >
+        Optional, and only if adb is already set up for you — `adb logcat -d` around the time it
+        went wrong. Do not go and install adb just for this.
+      render: shell

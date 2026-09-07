@@ -1,0 +1,83 @@
+name: Something is broken
+description: A crash, a wrong score, a screen you cannot get out of, a song that will not play.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If the problem is **"it does not work on my device at all"**, the
+        [device report](?template=device-report.yml) form fits better — it asks the questions that
+        matter for that case.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect instead?
+      description: >
+        A photo or a short video of the television is often clearer than a description, especially
+        for anything about how something looks or when it happens.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How do you make it happen?
+      description: The steps, from opening the app. Say if it only happens sometimes.
+      placeholder: |
+        1. Play → Two singers
+        2. Claim both microphones
+        3. Pick "…"
+        4. …
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device and Android version
+      placeholder: "Nvidia Shield TV Pro (2019), Android 11"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: "Settings → Apps → UltraStar Android TV, or the release you downloaded."
+      placeholder: "1.0.0"
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the app?
+      options:
+        - Singing — scoring, the note track, the pitch arrow
+        - Microphones — claiming, or one not being heard
+        - Songs on my card — scanning, missing songs, artwork
+        - Add songs — searching USDB, downloading
+        - Playback — audio, video, the visualiser, timing
+        - Menus, settings or profiles
+        - Television game mode
+        - Installing or updating
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: song
+    attributes:
+      label: Which song, if it is about one song?
+      description: >
+        Artist and title. If it is a timing problem, the song's own page has a **Check timing**
+        button — what it says is the single most useful thing you can include.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, if you can get them
+      description: >
+        Optional, and only if adb is already set up for you — `adb logcat -d`. Do not go and
+        install adb just for this.
+      render: shell

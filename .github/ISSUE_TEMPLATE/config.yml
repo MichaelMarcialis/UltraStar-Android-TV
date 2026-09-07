@@ -1,0 +1,15 @@
+# Blank issues stay on. The two forms are there to make the common reports contain the things
+# that are actually needed; forcing everybody through a form to ask a question is hostile, and an
+# idea nobody can file because there is no template for it is an idea lost.
+blank_issues_enabled: true
+
+contact_links:
+  - name: Will it work on my device?
+    url: https://github.com/MichaelMarcialis/UltraStar-Android-TV#will-it-work-on-your-device
+    about: The honest answer, and the four limits that will actually stop you — read this first.
+  - name: How do I install it?
+    url: https://github.com/MichaelMarcialis/UltraStar-Android-TV#installing-it
+    about: The Downloader app, a file manager, or adb.
+  - name: Why will it not hear my microphone?
+    url: https://github.com/MichaelMarcialis/UltraStar-Android-TV#why-usb-microphones-only
+    about: Wired USB microphones only. Bluetooth and 3.5 mm cannot work, and this explains why.

@@ -46,6 +46,27 @@ if (keystoreProperties.isNotEmpty() && !canSignRelease) {
 }
 
 android {
+    // **`namespace` and `applicationId` deliberately differ, and this is not an oversight.**
+    //
+    // `namespace` is internal: it names the generated `R` and `BuildConfig` classes and nothing
+    // else. It matches the Kotlin package every source file declares -- and that package is
+    // load-bearing in a way no other package name here is, because `cpp/usb_iso.c` encodes it in
+    // its JNI symbol names (`Java_com_example_ultrastarandroidtv_mic_UsbIsoNative_...`). Renaming
+    // it means renaming those in lockstep, and a mismatch compiles perfectly and fails only at
+    // runtime, only when somebody picks up a microphone.
+    //
+    // `applicationId` is what Android and the outside world see, and it had to change: `com.example`
+    // is a reserved documentation placeholder, it is the single most crowded namespace on Android
+    // (every template project starts there, and two apps sharing an id cannot coexist on a device),
+    // and it is visible in Settings and during a sideload.
+    //
+    // The costs of the two changes are shaped differently, which is why one was done and the other
+    // was not. Changing `applicationId` gets **more expensive with every install** -- to Android a
+    // new id is a new app, so an update cannot land on an existing copy and every user would have to
+    // uninstall and lose their song folder grant, profiles and high scores. It was changed while the
+    // published release had zero downloads, which is the cheapest that will ever be. Renaming the
+    // namespace and the Kotlin packages is invisible to users, so it costs exactly the same in a
+    // year as it does today, and there is no reason to spend it now.
     namespace = "com.example.ultrastarandroidtv"
     ndkVersion = "30.0.15729638"
     compileSdk {
@@ -53,7 +74,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.ultrastarandroidtv"
+        // Reverse-DNS of somewhere actually ours: GitHub serves michaelmarcialis.github.io, which
+        // is what makes `io.github.michaelmarcialis` a domain-backed name rather than a claim.
+        // It matches the repository name on purpose -- somebody reading `pm list packages` should
+        // be able to find the source without guessing.
+        applicationId = "io.github.michaelmarcialis.ultrastarandroidtv"
         minSdk = 30
         targetSdk = 37
         versionCode = 1
