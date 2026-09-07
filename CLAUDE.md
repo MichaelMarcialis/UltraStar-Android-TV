@@ -1107,7 +1107,15 @@ Two decimal places of agreement on the mismatch confidence, from two entirely se
 - **Turning game mode on did not turn it on.** `ON_START` has long since fired by the time somebody is in Settings, so pairing learned the modes, put the original back, and left the row saying "On" over a television in Filmmaker until the next launch. It engages straight after pairing now, which is the one moment the row and the set must agree.
 - **The pairing key was sent in the clear.** It is a working credential for somebody's television with broad control permissions, and port 3000 puts it on the wire on every connection — so the private storage and backup exclusions were protecting the copy at rest while the copy in flight was readable by anything on the network. The TLS port is preferred now, with **trust on first use**: there is nothing to validate a self-signed certificate against, so the fingerprint recorded when somebody accepted the prompt is what identifies the set afterwards, and a different one is refused *before* the key is sent. Port 3000 remains only as a fallback for a set that will not answer on 3001.
 
-**The TLS path is the one thing here not yet verified on hardware** — the television was switched off when the change was made, and a webOS set in standby answers nothing at all.
+**Verified on hardware once the television was free** (2026-09-06). The app connects on **3001** and recorded the certificate fingerprint the workstation reads from the same set, byte for byte — and because a pinned set now refuses the plain port outright, a working engage is itself proof the connection went over TLS. Then, on the Shield's own input with nothing else playing:
+
+| | picture mode |
+|---|---|
+| app closed | FILMMAKER (backlight 25) |
+| app opened | **GAME (75)** |
+| Home pressed | **FILMMAKER (25)** |
+
+The flat readings from earlier in the day were a PlayStation driving HDR on another input, exactly as suspected: with it switched off the values distinguish the modes again.
 
 **Picture settings are per input *and* per HDR state, which is why the fingerprints went flat** (2026-09-06). Every mode reading backlight 100 / contrast 100 / colour 55 was not the set breaking: a PlayStation was driving an HDR signal at the time, and LG keeps a separate profile for that. The values readable over SSAP describe whatever profile is live, so a measurement taken while something else is playing says nothing about the Shield's input.
 - **Learning and restoring are therefore only meaningful for the input and state the app is actually on.** Worth remembering before reading anything into a fingerprint captured at a random moment.
