@@ -52,6 +52,7 @@ import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.example.ultrastarandroidtv.download.DownloadQueue
+import com.example.ultrastarandroidtv.download.DownloadTerms
 import com.example.ultrastarandroidtv.download.Downloads
 import com.example.ultrastarandroidtv.download.QueueStatus
 import com.example.ultrastarandroidtv.download.QueuedSong
@@ -188,7 +189,13 @@ private fun strength(text: String, needle: String, tight: String): Int {
 
 private const val NO_MATCH = 3
 
-private enum class AddMode { SignIn, Browse }
+/**
+ * What the screen is doing.
+ *
+ * [Notice] comes first and is seen exactly once ever — see [DownloadTerms]. After that the screen
+ * opens on [Browse] for anybody already signed in and [SignIn] for anybody not.
+ */
+private enum class AddMode { Notice, SignIn, Browse }
 
 /**
  * Finding songs on USDB and putting them on the card, without a PC.
@@ -229,6 +236,7 @@ fun AddSongsScreen(
 ) {
     val context = LocalContext.current
     val account = remember { UsdbAccount(context) }
+    val terms = remember { DownloadTerms(context) }
     val location = remember { LibraryLocation(context) }
 
     // Everything that outlives this screen comes from [Downloads] -- the session so that walking
@@ -242,7 +250,18 @@ fun AddSongsScreen(
 
     val canWrite = remember { location.canModify() && location.saved() != null }
 
-    var mode by remember { mutableStateOf(if (account.hasAccount) AddMode.Browse else AddMode.SignIn) }
+    // The notice is in front of both other modes rather than beside them: it is about what the
+    // whole screen does, so it has to be read before anything on it can be reached, including a
+    // sign-in that already exists from an older build.
+    var mode by remember {
+        mutableStateOf(
+            when {
+                !terms.accepted -> AddMode.Notice
+                account.hasAccount -> AddMode.Browse
+                else -> AddMode.SignIn
+            }
+        )
+    }
     var user by remember { mutableStateOf(account.username) }
     var password by remember { mutableStateOf("") }
     var signingIn by remember { mutableStateOf(false) }
@@ -544,6 +563,12 @@ fun AddSongsScreen(
 
     Box(modifier = Modifier.fillMaxSize().background(GameTheme.background)) {
         when (mode) {
+            AddMode.Notice -> SongSourceNotice(
+                terms = terms,
+                onAccept = { mode = if (account.hasAccount) AddMode.Browse else AddMode.SignIn },
+                onBack = onBack,
+            )
+
             AddMode.SignIn -> Column(modifier = Modifier.fillMaxSize().padding(48.dp)) {
                 SignInPanel(
                     user = user,
@@ -816,7 +841,21 @@ private fun ResultsPanel(
             }
         }
 
-        Spacer(Modifier.height(14.dp))
+        // The one sentence from the notice, kept where the decision is actually made.
+        //
+        // The notice itself is seen once and then never again, which is right -- a question asked
+        // every time is a door handle rather than a question -- but "once, months ago" is not
+        // where somebody is when they press a card. Directly above the grid and below every
+        // control, so it can cost nothing: the grid scrolls, so a line taken from the top of it
+        // takes nothing away that can be pressed.
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Only download songs you already own a lawful copy of.",
+            style = MaterialTheme.typography.bodySmall,
+            color = GameTheme.lyricIdle,
+        )
+
+        Spacer(Modifier.height(10.dp))
         // The results are already in the order they are shown in -- each page was sorted as it
         // landed. Sorting here would re-sort the whole accumulated list every time another page
         // arrived, moving cards that are already on screen.

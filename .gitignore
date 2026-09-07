@@ -32,3 +32,11 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Release signing. The keystore and its password stay on the machine that builds releases;
+# losing them means never being able to update an installed copy of the app.
+keystore.properties
+
+# Python bytecode from tools/
+__pycache__/
+*.pyc

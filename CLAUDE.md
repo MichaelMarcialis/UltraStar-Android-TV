@@ -1204,3 +1204,22 @@ Deliberately not done in scoring: no seeking. The scorer walks its notes with a 
 **`tools/check_song_sync.py` is the packaged version of the chart-alignment method above** — one song, or `--card` to sweep the whole library. Reach for it before believing any report that the notes are out of time; it answers "is this the file or the app" with a number, and it carries the controls-first warning in its own docstring because the number is meaningless without them.
 
 **The song library has no duets in it**, so the split layout has nothing real to exercise it. `tools/make_duet_test.py` deals any song's lyric lines alternately to P1 and P2 and writes a `.txt` beside it that shares the original's audio — the two parts then genuinely differ in notes, lyrics and beat count, which is the thing worth testing. That is how the split layout was verified; the generated file was pushed to the card, checked, and removed again rather than left cluttering the library.
+
+**Opening the repository, and the first public release** (2026-09-06, branch `final-release-prep`).
+
+- **`README.md` is now the public front door** and says the honest thing first: this has been tested on exactly one device. A 64-bit Android TV box running Android 11+ is welcome to try it, and the four hard limits are named — `arm64-v8a` only (a 32-bit device fails with `INSTALL_FAILED_NO_MATCHING_ABIS`, which reads as a broken download and is not), API 30+, **wired USB microphones only**, and the LG game-mode feature being LG-only and optional.
+  - **The microphone limit is the one that will actually bite people**, so it gets its own section rather than a footnote. Nothing here goes through `AudioRecord`, so a Bluetooth mic, a 3.5 mm mic or the mic in a remote cannot work at all — and it expects mono 16-bit at 48 kHz on an isochronous IN endpoint. A stereo-only or 24-bit mic is *found and then misread*, which is worth an issue rather than a silent failure.
+  - The install guide leads with **the Downloader app**, because that is what an Android TV user actually has. The URL given is `…/releases/latest/download/ultrastar-android-tv.apk` — GitHub resolves `latest` itself, so the same address works for every update, and the asset must therefore keep that exact filename for ever.
+
+- **MIT licence**, the user's call, and consistent with the rule this project already held itself to about dependencies.
+
+- **Release signing is wired up and the key is not in the repository** (`keystore.properties` + `release.jks`, both gitignored). The Gradle config reads the properties file **only if it exists**, so a fresh clone still builds — `assembleRelease` simply produces an unsigned APK for anybody without the key, which is the correct outcome rather than a broken build.
+  - **The key can never be replaced.** Android identifies an app by who signed it, so an update signed with a different key cannot install over an existing copy: the user has to uninstall first, losing the song folder grant, the profiles and the high scores. Back up `release.jks` and `keystore.properties` somewhere that is not this machine.
+  - **The first release build is a different signature from the debug builds on the dev Shield**, so installing it there needs an uninstall and costs that same data. Verify new work with `assembleDebug` and keep the release APK for GitHub.
+
+- **The download disclaimer is a one-time gate, not a launch modal** (`download/DownloadTerms.kt`, `ui/SongSourceNotice.kt`). Shown the first time anybody opens **Add songs**, remembered as a version number rather than a boolean so the wording can be re-asked if it ever materially changes.
+  - **At launch it would have been worse.** Most of a karaoke night never touches that screen, and a notice everybody has to dismiss to reach a feature they are not using is how a notice becomes furniture.
+  - **One sentence is set in the warm colour and the rest is context.** A wall of terms protects nobody; the load-bearing line is *only download songs you already own*, and it is repeated permanently above the results grid — where the decision is actually made, and where it costs nothing because the grid scrolls.
+  - Verified on the television: the notice fits with room to spare at a 700 dp measure, "I understand" takes the focus, accepting writes `download_terms.xml` and goes straight into the search, and a relaunch goes straight to the search with no notice.
+
+- **`tools/__pycache__` was tracked and is not any more.** Compiled bytecode in a public repo is noise at best.

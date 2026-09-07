@@ -1,6 +1,25 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+// Release signing, kept entirely outside the repository.
+//
+// `keystore.properties` and the `.jks` it names are both gitignored: a signing key is the one
+// thing that cannot be regenerated, because Android identifies an app by *who signed it* rather
+// than by its version. Publish an update signed with a different key and every existing install
+// has to be uninstalled first, taking the song folder grant, the profiles and the high scores
+// with it. So the file is absent on a fresh clone by design, and its absence must not break the
+// build -- somebody who has just cloned this to read the code, or to build a debug APK for their
+// own television, has no reason to own a signing key.
+//
+// When it is missing, `release` simply has no signing config and `assembleRelease` produces an
+// unsigned APK. That is a normal, working outcome for everyone except whoever publishes releases.
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
 }
 
 android {
@@ -31,8 +50,21 @@ android {
         }
     }
 
+    signingConfigs {
+        // Only declared when the properties file is actually there; see the note above.
+        if (keystoreProperties.isNotEmpty()) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release")
             optimization {
                 enable = false
             }
