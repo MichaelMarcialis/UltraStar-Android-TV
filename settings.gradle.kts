@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "UltraStar Android(TV"
+rootProject.name = "UltraStar Android TV"
 include(":app")

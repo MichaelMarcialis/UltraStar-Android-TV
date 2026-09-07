@@ -26,10 +26,10 @@ nothing else. Python 3 standard library only.
 
 ## Usage
 
-    python tools/lg_game_mode.py --host 192.168.1.234 pair     # once; accept on the TV
-    python tools/lg_game_mode.py --host 192.168.1.234 info
-    python tools/lg_game_mode.py --host 192.168.1.234 mode game
-    python tools/lg_game_mode.py --host 192.168.1.234 mode standard
+    python tools/lg_game_mode.py --host <tv-ip> pair     # once; accept on the TV
+    python tools/lg_game_mode.py --host <tv-ip> info
+    python tools/lg_game_mode.py --host <tv-ip> mode game
+    python tools/lg_game_mode.py --host <tv-ip> mode standard
 
 The pairing token is written to ``~/.lg_webos_client_key`` — deliberately outside
 this repo, the same rule the USDB account follows.
