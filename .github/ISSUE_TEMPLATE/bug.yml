@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         If the problem is **"it does not work on my device at all"**, the
-        [device report](?template=device-report.yml) form fits better — it asks the questions that
+        [device report](https://github.com/MichaelMarcialis/UltraStar-Android-TV/issues/new?template=device-report.yml) form fits better — it asks the questions that
         matter for that case.
 
   - type: textarea
