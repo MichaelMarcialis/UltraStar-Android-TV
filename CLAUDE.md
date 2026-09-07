@@ -1223,3 +1223,28 @@ Deliberately not done in scoring: no seeking. The scorer walks its notes with a 
   - Verified on the television: the notice fits with room to spare at a 700 dp measure, "I understand" takes the focus, accepting writes `download_terms.xml` and goes straight into the search, and a relaunch goes straight to the search with no notice.
 
 - **`tools/__pycache__` was tracked and is not any more.** Compiled bytecode in a public repo is noise at best.
+
+**The app has a real name now, and moving to it is a documented procedure** (2026-09-07). `applicationId` is **`io.github.michaelmarcialis.ultrastarandroidtv`**; `namespace` is deliberately still `com.example.ultrastarandroidtv`, and `app/build.gradle.kts` explains why at the point where the two disagree.
+
+- **The two changes have differently-shaped costs, which is the whole reason one was done and the other was not.** Changing `applicationId` gets **more expensive with every install** — Android identifies an app by its id, so a new one is a new app and no update can land on an existing copy. It was changed while the published release had **zero downloads**, which is the cheapest it will ever be. Renaming the namespace and the ~90 Kotlin packages is **invisible to users**, so it costs the same in a year as today, and there is no reason to spend it now. If it is ever done, do it as its own commit and test a microphone immediately: `cpp/usb_iso.c` encodes the package in its JNI symbols, and a mismatch compiles perfectly and fails only when somebody sings.
+- **A rename installs *alongside* the old app rather than over it**, and the two then **fight over the microphones** — `UsbIsoCapture: read failed ... errno 16` (`EBUSY`) as the new one claims an endpoint the old one holds. So removing the old copy is part of the procedure, not an optional tidy-up.
+
+**The migration, which worked and is worth keeping:**
+
+```sh
+# 1. take the data while the old app is still installed (debuggable, so run-as works)
+adb exec-out "run-as OLD.ID tar -cf - shared_prefs" > prefs.tar
+# 2. install the renamed build, launch it once so its data dir exists, then
+adb push prefs.tar /data/local/tmp/prefs.tar && adb shell chmod 644 /data/local/tmp/prefs.tar
+adb shell "run-as NEW.ID tar -xf /data/local/tmp/prefs.tar"
+# 3. verify, then
+adb uninstall OLD.ID
+```
+
+- **`shared_prefs` is genuinely all of it.** Checked rather than assumed: `files/` is empty and `cache`/`code_cache` are disposable. Nine files came across — profiles, high scores, settings, USDB login, loudness, repair and timing memory, and the LG pairing (`client_key` *and* `certificate`, so **game mode needs no re-pairing**).
+- **`chmod 644` on the pushed tar matters.** `adb push` leaves it readable only by the shell user, and `run-as` drops to the app's uid, so without it the extract fails with a bare exit 1 and no message.
+- **Two things do not transfer, and both are by design.** The **USB microphone grants** are per app and per port, so the new app asks again — one dialog at a time, which is the queue working. The **SAF folder grant** is bound to the app identity and cannot be moved; `library.xml` carries the URI across, `LibraryLocation` re-checks it against `persistedUriPermissions`, finds nothing, and shows `FirstRunScreen`. That graceful path had never actually been exercised before and it behaved exactly as its comment claims.
+- **Re-grant the same folder, not the drive.** The picker opens on internal storage, which refuses; the drawer is behind **"Show roots"** at input `(72, 64)`, the removable volume is in it, and a volume *root* is accepted — but taking it would change every `songId`. High scores are keyed by document id (`5002-E7C7:UltraStar/…`), so granting `UltraStar/` again reproduces the identical ids and **the six existing records still resolve**. Verified: 118 ready to sing, same as before.
+- **`uiautomator dump` was stale here too**, and cost a detour: a tap on "Show roots" *did* open the drawer while the dump kept insisting it had not. Screenshot before believing a dump, which this file already says about layouts and turns out to be just as true about state.
+
+**And `MSYS_NO_PATHCONV=1` cuts both ways.** It is required so Git Bash does not rewrite `/sdcard/foo`, and it *also* stops it rewriting the **local** side of an `adb push` — so `/c/Users/...` is passed through literally and fails as `cannot stat`. With it set, write local paths as `C:/Users/...`.
