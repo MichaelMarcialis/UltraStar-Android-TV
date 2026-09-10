@@ -686,19 +686,33 @@ private fun DrawScope.drawHits(
     forEachHeldRun(geometry, visible) { first, last ->
         if (first == last) {
             val placed = geometry.placements[first]
+            // Nothing the arrow has not reached can have been paid for, and the playhead sits at
+            // 30% of the width — so most of what is on screen is skipped here without building
+            // anything. That is what keeps the clip below off the common path.
+            if (arrowNowSeconds <= placed.startSeconds) return@forEachHeldRun
+
             val top = geometry.yFor(placed.midi.toFloat(), noteArea, low, high) - radius
-            traces.forEachIndexed { lane, trace ->
-                scratch.hitSpans(
-                    geometry, trace, first, last, nowSeconds, arrowNowSeconds, width, radius,
-                )
-                val fill = GameTheme.hitFill(trace.color)
-                for (i in 0 until scratch.spanCount) {
-                    val from = scratch.spanFrom(i)
-                    drawRect(
-                        color = fill,
-                        topLeft = Offset(from, top + lane * laneHeight),
-                        size = Size((scratch.spanTo(i) - from).coerceAtLeast(3f), laneHeight),
+
+            // Painted inside the bar's own outline, so a fill that reaches the end of a note is
+            // cut to the rounded cap instead of stopping square a pixel past it. A lone note is a
+            // run of one, so the same spine builds it — and its outline is a convex pill, which
+            // is a far cheaper clip than a run's zigzag.
+            scratch.spine(geometry, first, last, nowSeconds, width, noteArea, noteHeight, low, high)
+            scratch.writePath(scratch.outline, -radius, radius, rounded = true)
+            clipPath(scratch.outline) {
+                traces.forEachIndexed { lane, trace ->
+                    scratch.hitSpans(
+                        geometry, trace, first, last, nowSeconds, arrowNowSeconds, width, radius,
                     )
+                    val fill = GameTheme.hitFill(trace.color)
+                    for (i in 0 until scratch.spanCount) {
+                        val from = scratch.spanFrom(i)
+                        drawRect(
+                            color = fill,
+                            topLeft = Offset(from, top + lane * laneHeight),
+                            size = Size((scratch.spanTo(i) - from).coerceAtLeast(3f), laneHeight),
+                        )
+                    }
                 }
             }
             return@forEachHeldRun
