@@ -112,6 +112,23 @@ class HeldRunTest {
         assertEquals(listOf(0 to 2, 3 to 3), runs)
     }
 
+    /**
+     * A run's syllable belongs to the note it started from, whatever the sing line is over.
+     *
+     * This is what keeps the word lit while it is being held. Every note after a run's first is a
+     * lone `~`, which draws nothing, so reading the active index literally dimmed the syllable at
+     * the exact moment the singer was still holding it.
+     */
+    @Test
+    fun `a held note's syllable is the one its run began at`() {
+        val geometry = geometryOf(listOf("hold " to 0, "~" to 4, "~" to 7, "next " to 2))
+
+        assertEquals(0, heldRunStart(geometry, 0))
+        assertEquals(0, heldRunStart(geometry, 1))
+        assertEquals(0, heldRunStart(geometry, 2))
+        assertEquals(3, heldRunStart(geometry, 3))
+    }
+
     @Test
     fun `a note nobody holds through is a run of one`() {
         val geometry = geometryOf(listOf("one " to 0, "two " to 4))

@@ -477,14 +477,26 @@ internal inline fun forEachHeldRun(
     action: (first: Int, last: Int) -> Unit,
 ) {
     val placements = geometry.placements
-    var first = visible.first
-    while (first > 0 && placements[first].heldFromPrevious) first--
+    var first = heldRunStart(geometry, visible.first)
     while (first <= visible.last) {
         var last = first
         while (last + 1 < placements.size && placements[last + 1].heldFromPrevious) last++
         action(first, last)
         first = last + 1
     }
+}
+
+/**
+ * The note the run holding [i] began at.
+ *
+ * A `~` carries no text of its own, so the syllable on screen while a run is being sung belongs
+ * to the note the run started from — which is why this is what decides what is lit up, rather
+ * than the note under the sing line.
+ */
+internal fun heldRunStart(geometry: TrackGeometry, i: Int): Int {
+    var first = i
+    while (first > 0 && geometry.placements[first].heldFromPrevious) first--
+    return first
 }
 
 /** The colour a bar is drawn in, before any singer's fill goes over it. */
@@ -511,6 +523,12 @@ private fun DrawScope.drawNotes(
     val radius = noteHeight / 2f
 
     forEachHeldRun(geometry, visible) { first, last ->
+        // **A run lights as one, because it is one sound.** Highlighting whichever piece the sing
+        // line happens to be over walks the tint along the run — bar, ramp, bar, ramp — which
+        // reads as a row of separate things being counted off while the singer holds a single
+        // note. Reported from the sofa, and the same reasoning that made the run one shape.
+        val runActive = active != null && active in first..last
+
         // The overwhelmingly common case is a note nobody holds through, and it costs nothing
         // beyond a rounded rectangle. Only a run with a ramp in it pays for the ribbon.
         if (first == last) {
@@ -520,7 +538,7 @@ private fun DrawScope.drawNotes(
                 geometry.xFor(placed.endSeconds - GameTheme.noteGapSeconds, nowSeconds, width)
             val top = geometry.yFor(placed.midi.toFloat(), noteArea, low, high) - radius
             drawRoundRect(
-                color = noteColor(placed, first == active),
+                color = noteColor(placed, runActive),
                 topLeft = Offset(left, top),
                 size = Size((right - left).coerceAtLeast(3f), noteHeight),
                 cornerRadius = CornerRadius(radius),
@@ -555,16 +573,15 @@ private fun DrawScope.drawNotes(
                 // through and a ramp into gold does not put the colour change anywhere but the
                 // note that earns it.
                 val golden = before.note.type.isGolden && after.note.type.isGolden
-                val isActive = k == active || k + 1 == active
                 val from =
                     geometry.xFor(before.endSeconds - GameTheme.noteGapSeconds, nowSeconds, width) -
                         radius
                 val to = geometry.xFor(after.startSeconds, nowSeconds, width) + radius
                 drawRect(
                     color = when {
-                        golden && isActive -> GameTheme.noteActiveGolden
+                        golden && runActive -> GameTheme.noteActiveGolden
                         golden -> GameTheme.noteGolden
-                        isActive -> GameTheme.noteActive
+                        runActive -> GameTheme.noteActive
                         else -> GameTheme.noteIdle
                     },
                     topLeft = Offset(from, bandTop),
@@ -581,7 +598,7 @@ private fun DrawScope.drawNotes(
                     geometry.xFor(placed.endSeconds - GameTheme.noteGapSeconds, nowSeconds, width) +
                         1f
                 drawRect(
-                    color = noteColor(placed, k == active),
+                    color = noteColor(placed, runActive),
                     topLeft = Offset(from, bandTop),
                     size = Size((to - from).coerceAtLeast(1f), bandHeight),
                 )
@@ -985,6 +1002,11 @@ private fun DrawScope.drawLyrics(
 ) {
     val top = size.height - lyricLane
 
+    // The word being sung, rather than the note under the sing line. A held run's later notes are
+    // all `~` and draw nothing, so reading the active index literally dimmed the syllable the
+    // moment the line left its first note — while that syllable was still the one being held.
+    val activeWord = active?.let { heldRunStart(geometry, it) }
+
     for (i in visible) {
         val layout = syllables.getOrNull(i) ?: continue
         if (layout.size.width == 0) continue
@@ -997,7 +1019,7 @@ private fun DrawScope.drawLyrics(
 
         drawText(
             textLayoutResult = layout,
-            color = if (i == active) GameTheme.lyricActive else GameTheme.lyricIdle,
+            color = if (i == activeWord) GameTheme.lyricActive else GameTheme.lyricIdle,
             topLeft = Offset(x, top + (lyricLane - layout.size.height) / 2f),
         )
     }
