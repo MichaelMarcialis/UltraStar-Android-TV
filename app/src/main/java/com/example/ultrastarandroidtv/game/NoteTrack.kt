@@ -10,11 +10,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
@@ -98,6 +99,7 @@ fun NoteTrack(
     // frame allocates nothing.
     val motions = remember(geometry, traces.size) { List(traces.size) { ArrowMotion() } }
     val arrowPath = remember { Path() }
+    val ribbon = remember { RibbonScratch() }
 
     BoxWithConstraints(modifier) {
         val widthPx = constraints.maxWidth.toFloat()
@@ -121,7 +123,7 @@ fun NoteTrack(
                 .clip(RoundedCornerShape(GameTheme.trackCorner)),
         ) {
             drawTrack(
-                geometry, traces, syllables, lyrics,
+                geometry, traces, syllables, lyrics, ribbon,
                 toleranceSemitones, now(), arrowNow(),
             )
         }
@@ -156,6 +158,7 @@ private fun DrawScope.drawTrack(
     traces: List<Trace>,
     syllables: List<TextLayoutResult>,
     lyrics: LyricLayout,
+    ribbon: RibbonScratch,
     toleranceSemitones: Float,
     nowSeconds: Double,
     arrowNowSeconds: Double,
@@ -189,15 +192,18 @@ private fun DrawScope.drawTrack(
     drawOctaveLines(geometry, width, noteArea, low, high)
 
     val visible = geometry.visibleIndices(nowSeconds)
-    val active = geometry.activeIndex(nowSeconds)
+    val activeRun = activeRunStart(geometry, visible, nowSeconds)
 
     if (!visible.isEmpty()) {
-        drawNotes(geometry, visible, active, nowSeconds, width, noteArea, noteHeight, low, high)
-        drawHits(
-            geometry, traces, visible, nowSeconds, arrowNowSeconds,
+        drawNotes(
+            geometry, ribbon, visible, activeRun, nowSeconds,
             width, noteArea, noteHeight, low, high,
         )
-        drawLyrics(geometry, syllables, lyrics, visible, active, nowSeconds, width, lyricLane)
+        drawHits(
+            geometry, traces, ribbon, visible, nowSeconds, arrowNowSeconds,
+            width, noteArea, noteHeight, low, high,
+        )
+        drawLyrics(geometry, syllables, lyrics, visible, activeRun, nowSeconds, width, lyricLane)
     }
 
     val singLineX = width * geometry.playheadFraction
@@ -257,10 +263,287 @@ private fun DrawScope.drawOctaveLines(
     }
 }
 
-private fun DrawScope.drawNotes(
+/**
+ * Everything a held run needs to be drawn as one shape, kept for the life of the track.
+ *
+ * A run's geometry is worked out once as a **spine** — two points per note, at that note's own
+ * pitch — and every path is derived from it: the outline the colours are painted inside, and a
+ * lane within that outline for each singer's fill. Reused rather than rebuilt, so a frame
+ * allocates nothing; the same reason the arrow keeps one [Path].
+ */
+internal class RibbonScratch {
+    private var xs = FloatArray(32)
+    private var ys = FloatArray(32)
+
+    /** How many spine points the current run has: two per note, in singing order. */
+    var pointCount = 0
+        private set
+
+    fun pointX(i: Int) = xs[i]
+
+    fun pointY(i: Int) = ys[i]
+
+    /** How far past the first and last spine points the run's own end caps reach. */
+    private var capLeft = 0f
+    private var capRight = 0f
+
+    /** The run's vertical extent, so a fill can be drawn tall enough to cover every ramp. */
+    var minY = 0f
+        private set
+    var maxY = 0f
+        private set
+
+    // Built on first use rather than in the constructor, so the spine arithmetic below — which
+    // is the part that can quietly be wrong — can be exercised by a plain JVM test. A Compose
+    // `Path` is an Android object and throws outside an instrumented run.
+    val outline: Path by lazy(LazyThreadSafetyMode.NONE) { Path() }
+    val lane: Path by lazy(LazyThreadSafetyMode.NONE) { Path() }
+
+    /**
+     * The merged x spans a singer has been credited across the current run, as from/to pairs.
+     *
+     * Held here rather than handed back through a callback for the reason everything else here
+     * is: a lambda per lane per run per frame is an allocation on the drawing thread, and a
+     * callback cannot be inlined out of a loop that has to merge as it goes.
+     */
+    private var spans = FloatArray(64)
+    var spanCount = 0
+        private set
+
+    fun spanFrom(i: Int) = spans[2 * i]
+
+    fun spanTo(i: Int) = spans[2 * i + 1]
+
+    fun clearSpans() {
+        spanCount = 0
+    }
+
+    /**
+     * Adds a span, merging it into the one before it when they touch.
+     *
+     * This is what keeps a translucent fill honest. The spans a note's beats produce and the span
+     * a ramp produces genuinely overlap — a ramp starts half a note height back inside the bar it
+     * leaves — so drawing them one after another blends the fill with itself and leaves a bright
+     * patch at every join, which is exactly where the eye already is. They arrive in x order, so
+     * comparing against the last one merges them all.
+     */
+    fun addSpan(from: Float, to: Float) {
+        if (spanCount > 0 && from <= spans[2 * spanCount - 1]) {
+            spans[2 * spanCount - 1] = maxOf(spans[2 * spanCount - 1], to)
+            return
+        }
+        if (spans.size < 2 * (spanCount + 1)) spans = spans.copyOf(spans.size * 2)
+        spans[2 * spanCount] = from
+        spans[2 * spanCount + 1] = to
+        spanCount++
+    }
+
+    /**
+     * Works out the spine of the run [first]..[last].
+     *
+     * The points sit at the *centres of the notes' end caps*, half a note height in from each
+     * edge, which is where a ramp has to start and finish for the join to be seamless: at that x
+     * the bar is still at full height, so a band of the same vertical thickness meets its top and
+     * bottom edges exactly.
+     */
+    fun spine(
+        geometry: TrackGeometry,
+        first: Int,
+        last: Int,
+        nowSeconds: Double,
+        width: Float,
+        noteArea: Float,
+        noteHeight: Float,
+        low: Float,
+        high: Float,
+    ) {
+        val points = 2 * (last - first + 1)
+        if (xs.size < points) {
+            xs = FloatArray(points)
+            ys = FloatArray(points)
+        }
+        pointCount = 0
+
+        val radius = noteHeight / 2f
+        for (k in first..last) {
+            val placed = geometry.placements[k]
+            val left = geometry.xFor(placed.startSeconds, nowSeconds, width)
+            // Trimmed at the end so two notes on the same pitch back to back read as two notes to
+            // sing rather than one long one to hold.
+            val right =
+                geometry.xFor(placed.endSeconds - GameTheme.noteGapSeconds, nowSeconds, width)
+            val y = geometry.yFor(placed.midi.toFloat(), noteArea, low, high)
+
+            // A note drawn narrower than it is tall cannot carry a full round cap at both ends,
+            // and `drawRoundRect` would have squashed its corner radius to fit. Squash it the
+            // same way here, or a short note at the end of a run bulges past where its bar stops.
+            // Not a corner case: a third of this library's notes are one or two beats long.
+            val half = ((right - left) / 2f).coerceAtLeast(0f)
+            val leftInset = if (k == first) minOf(radius, half) else radius
+            val rightInset = if (k == last) minOf(radius, half) else radius
+
+            add(left + leftInset, y)
+            add(right - rightInset, y)
+
+            if (k == first) capLeft = leftInset
+            if (k == last) capRight = (right - xs[pointCount - 1]).coerceAtLeast(0f)
+        }
+    }
+
+    /**
+     * Adds a spine point, holding x non-decreasing.
+     *
+     * A note narrower than the corner radius would otherwise put its right point left of its left
+     * one and turn the ribbon inside out.
+     */
+    private fun add(x: Float, y: Float) {
+        xs[pointCount] = if (pointCount == 0) x else maxOf(x, xs[pointCount - 1])
+        ys[pointCount] = y
+        if (pointCount == 0) {
+            minY = y
+            maxY = y
+        } else {
+            minY = minOf(minY, y)
+            maxY = maxOf(maxY, y)
+        }
+        pointCount++
+    }
+
+    /**
+     * Writes the ribbon into [path] as one closed shape, [top] and [bottom] being offsets from
+     * the spine.
+     *
+     * **The band's thickness is vertical, not perpendicular to the slope**, and that is the whole
+     * of it. A stroked line is measured across its own direction, so a ramp drawn that way stands
+     * proud of the flat bar it joins by however much it is tilted, and its round cap is tilted
+     * with it — which is the notch this replaces. Offsetting the spine instead makes a ramp
+     * exactly as tall as the notes at the two points where it meets them, so the pieces share an
+     * edge rather than overlapping near one.
+     *
+     * [rounded] caps the two ends of the run the way a lone note's bar is capped. A lane inside
+     * the run passes false and runs square out to the same extent, leaving the outline to trim it
+     * back to the cap.
+     */
+    fun writePath(path: Path, top: Float, bottom: Float, rounded: Boolean) {
+        path.reset()
+        if (pointCount == 0) return
+        val last = pointCount - 1
+
+        if (rounded) {
+            path.moveTo(xs[0], ys[0] + top)
+        } else {
+            path.moveTo(xs[0] - capLeft, ys[0] + top)
+            path.lineTo(xs[0], ys[0] + top)
+        }
+        for (j in 1..last) path.lineTo(xs[j], ys[j] + top)
+
+        if (rounded) {
+            path.arcTo(
+                Rect(xs[last] - capRight, ys[last] + top, xs[last] + capRight, ys[last] + bottom),
+                -90f,
+                180f,
+                false,
+            )
+        } else {
+            path.lineTo(xs[last] + capRight, ys[last] + top)
+            path.lineTo(xs[last] + capRight, ys[last] + bottom)
+        }
+        for (j in last downTo 0) path.lineTo(xs[j], ys[j] + bottom)
+
+        if (rounded) {
+            path.arcTo(
+                Rect(xs[0] - capLeft, ys[0] + top, xs[0] + capLeft, ys[0] + bottom),
+                90f,
+                180f,
+                false,
+            )
+        } else {
+            path.lineTo(xs[0] - capLeft, ys[0] + bottom)
+        }
+        path.close()
+    }
+}
+
+/**
+ * Walks the visible notes as **held runs** — a note on its own, or several joined by ramps.
+ *
+ * A run is one sustained sound and is therefore drawn as one shape. The runs hanging off either
+ * end of the window are completed rather than cut, so a ramp arriving from the left is not
+ * missing until the note it comes from has scrolled in.
+ */
+internal inline fun forEachHeldRun(
     geometry: TrackGeometry,
     visible: IntRange,
-    active: Int?,
+    action: (first: Int, last: Int) -> Unit,
+) {
+    val placements = geometry.placements
+    var first = heldRunStart(geometry, visible.first)
+    while (first <= visible.last) {
+        var last = first
+        while (last + 1 < placements.size && placements[last + 1].heldFromPrevious) last++
+        action(first, last)
+        first = last + 1
+    }
+}
+
+/**
+ * The note the run holding [i] began at.
+ *
+ * A `~` carries no text of its own, so the syllable on screen while a run is being sung belongs
+ * to the note the run started from — which is why this is what decides what is lit up, rather
+ * than the note under the sing line.
+ */
+internal fun heldRunStart(geometry: TrackGeometry, i: Int): Int {
+    var first = i
+    while (first > 0 && geometry.placements[first].heldFromPrevious) first--
+    return first
+}
+
+/**
+ * The held run being sung at [nowSeconds], named by the note it began at, or null between runs.
+ *
+ * **This is deliberately not [TrackGeometry.activeIndex], and the difference is the gaps.** A
+ * chart leaves a beat between every pair of notes, so the thing crossing the sing line for part
+ * of every held run is the *ramp* — which belongs to no note, and left the active index null. The
+ * whole group therefore went dark each time one passed and lit again at the next bar, reported
+ * from the sofa as flashing. A gap *inside* a run is the middle of one sustained sound, so it
+ * counts as that run; a gap between runs is a rest and counts as nothing.
+ */
+internal fun activeRunStart(
+    geometry: TrackGeometry,
+    visible: IntRange,
+    nowSeconds: Double,
+): Int? {
+    if (visible.isEmpty()) return null
+    val placements = geometry.placements
+    for (i in visible) {
+        val note = placements[i]
+        if (nowSeconds < note.startSeconds) {
+            // Before this note and past the one before it: a gap, and only a run's own.
+            val inRun = note.heldFromPrevious &&
+                i > 0 &&
+                nowSeconds >= placements[i - 1].endSeconds
+            return if (inRun) heldRunStart(geometry, i) else null
+        }
+        if (nowSeconds < note.endSeconds) return heldRunStart(geometry, i)
+    }
+    return null
+}
+
+/** The colour a bar is drawn in, before any singer's fill goes over it. */
+private fun noteColor(placed: PlacedNote, isActive: Boolean): Color = when {
+    placed.note.type == NoteType.FREESTYLE -> GameTheme.noteFreestyle
+    placed.note.type.isGolden && isActive -> GameTheme.noteActiveGolden
+    placed.note.type.isGolden -> GameTheme.noteGolden
+    isActive -> GameTheme.noteActive
+    else -> GameTheme.noteIdle
+}
+
+private fun DrawScope.drawNotes(
+    geometry: TrackGeometry,
+    scratch: RibbonScratch,
+    visible: IntRange,
+    activeRun: Int?,
     nowSeconds: Double,
     width: Float,
     noteArea: Float,
@@ -268,104 +551,160 @@ private fun DrawScope.drawNotes(
     low: Float,
     high: Float,
 ) {
-    // The bridges first, so a note always draws over its own end of one.
-    //
-    // Karaoke Revolution's angled connector, and the UltraStar format carries the same
-    // information: a syllable of `~` means the vowel is held while the pitch moves. Two thousand
-    // of them on this card. Without it, two bars a tone apart look like two attacks and get sung
-    // as two; with it, the eye reads one long note that bends.
-    //
-    // **A bridge is a note that happens to be sloped**, and that is the whole of the style: the
-    // same height, the same colours, so the three pieces read as one sustained sound with only
-    // the angle to tell them apart. It began as a thin dim line — technically honest, since
-    // nothing is scored on it, and wrong, because it looked like two notes with a wire between
-    // them rather than one note that bends.
-    for (i in visible) {
-        val bridge = bridgeAt(geometry, i, nowSeconds, width, noteArea, noteHeight, low, high)
-            ?: continue
-        val before = geometry.placements[i - 1]
-        val placed = geometry.placements[i]
-        val isActive = i == active || i - 1 == active
+    val radius = noteHeight / 2f
 
-        // Golden only when *both* ends are, so a golden run stays golden the whole way through
-        // and a bridge into gold does not put the colour change anywhere but the note that earns
-        // it.
-        val golden = before.note.type.isGolden && placed.note.type.isGolden
-        drawLine(
-            color = when {
-                golden && isActive -> GameTheme.noteActiveGolden
-                golden -> GameTheme.noteGolden
-                isActive -> GameTheme.noteActive
-                else -> GameTheme.noteIdle
-            },
-            start = bridge.from,
-            end = bridge.to,
-            strokeWidth = noteHeight,
-            cap = StrokeCap.Round,
-        )
-    }
+    forEachHeldRun(geometry, visible) { first, last ->
+        // **A run lights as one, because it is one sound.** Highlighting whichever piece the sing
+        // line happens to be over walks the tint along the run — bar, ramp, bar, ramp — which
+        // reads as a row of separate things being counted off while the singer holds a single
+        // note. Reported from the sofa, and the same reasoning that made the run one shape.
+        val runActive = activeRun == first
 
-    for (i in visible) {
-        val placed = geometry.placements[i]
-        val left = geometry.xFor(placed.startSeconds, nowSeconds, width)
-        // Trimmed at the end so two notes on the same pitch back to back read as two notes to
-        // sing rather than one long one to hold.
-        val right = geometry.xFor(placed.endSeconds - GameTheme.noteGapSeconds, nowSeconds, width)
-        val top = geometry.yFor(placed.midi.toFloat(), noteArea, low, high) - noteHeight / 2f
-        val isActive = i == active
-
-        val color = when {
-            placed.note.type == NoteType.FREESTYLE -> GameTheme.noteFreestyle
-            placed.note.type.isGolden && isActive -> GameTheme.noteActiveGolden
-            placed.note.type.isGolden -> GameTheme.noteGolden
-            isActive -> GameTheme.noteActive
-            else -> GameTheme.noteIdle
+        // The overwhelmingly common case is a note nobody holds through, and it costs nothing
+        // beyond a rounded rectangle. Only a run with a ramp in it pays for the ribbon.
+        if (first == last) {
+            val placed = geometry.placements[first]
+            val left = geometry.xFor(placed.startSeconds, nowSeconds, width)
+            val right =
+                geometry.xFor(placed.endSeconds - GameTheme.noteGapSeconds, nowSeconds, width)
+            val top = geometry.yFor(placed.midi.toFloat(), noteArea, low, high) - radius
+            drawRoundRect(
+                color = noteColor(placed, runActive),
+                topLeft = Offset(left, top),
+                size = Size((right - left).coerceAtLeast(3f), noteHeight),
+                cornerRadius = CornerRadius(radius),
+            )
+            return@forEachHeldRun
         }
 
-        drawRoundRect(
-            color = color,
-            topLeft = Offset(left, top),
-            size = Size((right - left).coerceAtLeast(3f), noteHeight),
-            cornerRadius = CornerRadius(noteHeight / 2f),
-        )
+        // Karaoke Revolution's angled connector, and the UltraStar format carries the same
+        // information: a syllable of `~` means the vowel is held while the pitch moves. Two
+        // thousand of them on this card. Without it, two bars a tone apart look like two attacks
+        // and get sung as two; with it, the eye reads one long note that bends.
+        //
+        // **A run is one shape, not three stacked ones**, and getting there took three goes. A
+        // thin dim line read as two notes with a wire between them. A stroked bar of the same
+        // height read as one note and left a notch at every join, because a stroke is measured
+        // across its own slope and stands taller than the flat bar it meets. Painting the colours
+        // *inside* one outline fixes the notch and the second half of the same problem: pieces
+        // that overlap blend twice wherever they meet, which a translucent fill shows as a bright
+        // patch and an opaque one shows as a fringe around each cap.
+        scratch.spine(geometry, first, last, nowSeconds, width, noteArea, noteHeight, low, high)
+        scratch.writePath(scratch.outline, -radius, radius, rounded = true)
+        val bandTop = scratch.minY - noteHeight
+        val bandHeight = scratch.maxY - scratch.minY + 2f * noteHeight
+
+        clipPath(scratch.outline) {
+            // The ramps first and the bars over their own ends of one, so a ramp carries a colour
+            // of its own only where neither bar reaches.
+            for (k in first until last) {
+                val before = geometry.placements[k]
+                val after = geometry.placements[k + 1]
+                // Golden only when *both* ends are, so a golden run stays golden the whole way
+                // through and a ramp into gold does not put the colour change anywhere but the
+                // note that earns it.
+                val golden = before.note.type.isGolden && after.note.type.isGolden
+                val from =
+                    geometry.xFor(before.endSeconds - GameTheme.noteGapSeconds, nowSeconds, width) -
+                        radius
+                val to = geometry.xFor(after.startSeconds, nowSeconds, width) + radius
+                drawRect(
+                    color = when {
+                        golden && runActive -> GameTheme.noteActiveGolden
+                        golden -> GameTheme.noteGolden
+                        runActive -> GameTheme.noteActive
+                        else -> GameTheme.noteIdle
+                    },
+                    topLeft = Offset(from, bandTop),
+                    size = Size((to - from).coerceAtLeast(1f), bandHeight),
+                )
+            }
+
+            for (k in first..last) {
+                val placed = geometry.placements[k]
+                // A pixel proud at each end, so the outline decides where the shape stops rather
+                // than two edges landing on the same coordinate and softening each other.
+                val from = geometry.xFor(placed.startSeconds, nowSeconds, width) - 1f
+                val to =
+                    geometry.xFor(placed.endSeconds - GameTheme.noteGapSeconds, nowSeconds, width) +
+                        1f
+                drawRect(
+                    color = noteColor(placed, runActive),
+                    topLeft = Offset(from, bandTop),
+                    size = Size((to - from).coerceAtLeast(1f), bandHeight),
+                )
+            }
+        }
     }
 }
 
-/** Where a held syllable's bridge runs, in drawing coordinates. */
-private class Bridge(val from: Offset, val to: Offset)
-
 /**
- * The bridge into note [i], or null when that note does not continue the one before it.
+ * Collects the x spans of everything [trace] has been credited across the run [first]..[last].
  *
- * The ends sit at the *centres of the notes' rounded caps* rather than at their edges, which is
- * what makes the join seamless: a round-capped stroke of the same thickness puts its own
- * semicircle exactly where the note's already is, so there is no notch and no overlap to see.
+ * They land in this scratch's own span list, already merged — see [RibbonScratch.addSpan] for why
+ * merging them is the difference between a solid fill and a row of bright patches.
  */
-private fun bridgeAt(
+private fun RibbonScratch.hitSpans(
     geometry: TrackGeometry,
-    i: Int,
+    trace: Trace,
+    first: Int,
+    last: Int,
     nowSeconds: Double,
+    arrowNowSeconds: Double,
     width: Float,
-    noteArea: Float,
-    noteHeight: Float,
-    low: Float,
-    high: Float,
-): Bridge? {
-    if (i == 0) return null
-    val placed = geometry.placements[i]
-    if (!placed.heldFromPrevious) return null
-    val before = geometry.placements[i - 1]
-    val radius = noteHeight / 2f
-    return Bridge(
-        from = Offset(
-            geometry.xFor(before.endSeconds - GameTheme.noteGapSeconds, nowSeconds, width) - radius,
-            geometry.yFor(before.midi.toFloat(), noteArea, low, high),
-        ),
-        to = Offset(
-            geometry.xFor(placed.startSeconds, nowSeconds, width) + radius,
-            geometry.yFor(placed.midi.toFloat(), noteArea, low, high),
-        ),
-    )
+    radius: Float,
+) {
+    clearSpans()
+    for (k in first..last) {
+        val placed = geometry.placements[k]
+        val score = trace.noteScores.getOrNull(k) ?: continue
+        val beats = placed.beatMidSeconds.size
+        if (beats == 0) continue
+        val beatSeconds = (placed.endSeconds - placed.startSeconds) / beats
+
+        // A beat is judged at its midpoint but drawn as a whole bar, so the moment it is
+        // credited its trailing half is still ahead of the arrow that earned it — the note
+        // appears to light up before the singer gets there. Hold each beat until it has passed
+        // the arrow entirely. Costs half a beat of delay and buys the guarantee that nothing is
+        // ever seen to be paid for before the arrow reaches it.
+        val passed = ((arrowNowSeconds - placed.startSeconds) / beatSeconds)
+            .toInt()
+            .coerceIn(0, beats)
+
+        // Runs of consecutive hits rather than one span per beat, so a note sung all the way
+        // through is a single clean bar with no seams in it.
+        var beat = 0
+        while (beat < passed) {
+            if (!score.wasHit(beat)) {
+                beat++
+                continue
+            }
+            var end = beat
+            while (end + 1 < passed && score.wasHit(end + 1)) end++
+            addSpan(
+                geometry.xFor(placed.startSeconds + beat * beatSeconds, nowSeconds, width),
+                geometry.xFor(
+                    placed.startSeconds + (end + 1) * beatSeconds - GameTheme.noteGapSeconds,
+                    nowSeconds,
+                    width,
+                ),
+            )
+            beat = end + 1
+        }
+
+        // The singer's colour carries across the ramp too, so a held note is one unbroken stretch
+        // of their colour rather than two bars with a gap between them. Nothing is *scored* on a
+        // ramp — the gap belongs to no note — but a sustained vowel is one thing the singer did,
+        // and drawing it as two says otherwise. Filled only once the note it continues has been
+        // credited and has passed the arrow entirely, the same rule the beats above follow.
+        if (k < last && passed >= beats && score.wasHit(beats - 1)) {
+            addSpan(
+                geometry.xFor(placed.endSeconds - GameTheme.noteGapSeconds, nowSeconds, width) -
+                    radius,
+                geometry.xFor(geometry.placements[k + 1].startSeconds, nowSeconds, width) + radius,
+            )
+        }
+    }
 }
 
 /**
@@ -378,6 +717,7 @@ private fun bridgeAt(
 private fun DrawScope.drawHits(
     geometry: TrackGeometry,
     traces: List<Trace>,
+    scratch: RibbonScratch,
     visible: IntRange,
     nowSeconds: Double,
     arrowNowSeconds: Double,
@@ -389,84 +729,74 @@ private fun DrawScope.drawHits(
 ) {
     if (traces.isEmpty()) return
     val laneHeight = noteHeight / traces.size
+    val radius = noteHeight / 2f
 
-    traces.forEachIndexed { lane, trace ->
-        val fill = GameTheme.hitFill(trace.color)
-        for (i in visible) {
-            val placed = geometry.placements[i]
-            val score = trace.noteScores.getOrNull(i) ?: continue
-            val beats = placed.beatMidSeconds.size
-            if (beats == 0) continue
+    forEachHeldRun(geometry, visible) { first, last ->
+        if (first == last) {
+            val placed = geometry.placements[first]
+            // Nothing the arrow has not reached can have been paid for, and the playhead sits at
+            // 30% of the width — so most of what is on screen is skipped here without building
+            // anything. That is what keeps the clip below off the common path.
+            if (arrowNowSeconds <= placed.startSeconds) return@forEachHeldRun
 
-            val beatSeconds = (placed.endSeconds - placed.startSeconds) / beats
+            val top = geometry.yFor(placed.midi.toFloat(), noteArea, low, high) - radius
 
-            // A beat is judged at its midpoint but drawn as a whole bar, so the moment it is
-            // credited its trailing half is still ahead of the arrow that earned it — the note
-            // appears to light up before the singer gets there. Hold each beat until it has
-            // passed the arrow entirely. Costs half a beat of delay and buys the guarantee that
-            // nothing is ever seen to be paid for before the arrow reaches it.
-            val passed = ((arrowNowSeconds - placed.startSeconds) / beatSeconds)
-                .toInt()
-                .coerceIn(0, beats)
-            if (passed == 0) continue
-            val top = geometry.yFor(placed.midi.toFloat(), noteArea, low, high) -
-                noteHeight / 2f + lane * laneHeight
-
-            // Drawn as runs of consecutive hits rather than one rectangle per beat, so a note
-            // sung all the way through is a single clean bar with no seams in it.
-            var beat = 0
-            while (beat < passed) {
-                if (!score.wasHit(beat)) {
-                    beat++
-                    continue
+            // Painted inside the bar's own outline, so a fill that reaches the end of a note is
+            // cut to the rounded cap instead of stopping square a pixel past it. A lone note is a
+            // run of one, so the same spine builds it — and its outline is a convex pill, which
+            // is a far cheaper clip than a run's zigzag.
+            scratch.spine(geometry, first, last, nowSeconds, width, noteArea, noteHeight, low, high)
+            scratch.writePath(scratch.outline, -radius, radius, rounded = true)
+            clipPath(scratch.outline) {
+                traces.forEachIndexed { lane, trace ->
+                    scratch.hitSpans(
+                        geometry, trace, first, last, nowSeconds, arrowNowSeconds, width, radius,
+                    )
+                    val fill = GameTheme.hitFill(trace.color)
+                    for (i in 0 until scratch.spanCount) {
+                        val from = scratch.spanFrom(i)
+                        drawRect(
+                            color = fill,
+                            topLeft = Offset(from, top + lane * laneHeight),
+                            size = Size((scratch.spanTo(i) - from).coerceAtLeast(3f), laneHeight),
+                        )
+                    }
                 }
-                var end = beat
-                while (end + 1 < passed && score.wasHit(end + 1)) end++
-
-                val from = geometry.xFor(placed.startSeconds + beat * beatSeconds, nowSeconds, width)
-                val to = geometry.xFor(
-                    placed.startSeconds + (end + 1) * beatSeconds - GameTheme.noteGapSeconds,
-                    nowSeconds,
-                    width,
-                )
-                drawRect(
-                    color = fill,
-                    topLeft = Offset(from, top),
-                    size = Size((to - from).coerceAtLeast(3f), laneHeight),
-                )
-                beat = end + 1
             }
+            return@forEachHeldRun
         }
 
-        // The singer's colour carries across the slope too, so a held note is one unbroken
-        // stretch of their colour rather than two bars with a gap between them. Nothing is
-        // *scored* on a bridge -- the gap belongs to no note -- but a sustained vowel is one
-        // thing the singer did, and drawing it as two says otherwise.
-        //
-        // Filled only once the note it continues has been credited and has passed the arrow
-        // entirely, which is the same rule the beats above follow: nothing is ever seen to be
-        // paid for before the arrow reaches it.
-        for (i in visible) {
-            val bridge = bridgeAt(geometry, i, nowSeconds, width, noteArea, noteHeight, low, high)
-                ?: continue
-            val before = geometry.placements[i - 1]
-            val score = trace.noteScores.getOrNull(i - 1) ?: continue
-            val beats = before.beatMidSeconds.size
-            if (beats == 0 || !score.wasHit(beats - 1)) continue
-            val beatSeconds = (before.endSeconds - before.startSeconds) / beats
-            val passed = ((arrowNowSeconds - before.startSeconds) / beatSeconds).toInt()
-            if (passed < beats) continue
+        scratch.spine(geometry, first, last, nowSeconds, width, noteArea, noteHeight, low, high)
+        scratch.writePath(scratch.outline, -radius, radius, rounded = true)
+        val bandTop = scratch.minY - noteHeight
+        val bandHeight = scratch.maxY - scratch.minY + 2f * noteHeight
 
-            // Down into this singer's lane, and the width of one lane, so two singers holding the
-            // same note show the same two stripes the notes either side of it show.
-            val offset = -noteHeight / 2f + lane * laneHeight + laneHeight / 2f
-            drawLine(
-                color = fill,
-                start = bridge.from.copy(y = bridge.from.y + offset),
-                end = bridge.to.copy(y = bridge.to.y + offset),
-                strokeWidth = laneHeight,
-                cap = StrokeCap.Butt,
-            )
+        // Painted inside the run's own outline and then inside the singer's lane within it, so a
+        // plain upright rectangle comes out following the ramp — and stops exactly where the bars
+        // do. Stroking the ramp instead is what used to leave the fill standing proud of them.
+        clipPath(scratch.outline) {
+            traces.forEachIndexed { lane, trace ->
+                val fill = GameTheme.hitFill(trace.color)
+                scratch.writePath(
+                    scratch.lane,
+                    -radius + lane * laneHeight,
+                    -radius + (lane + 1) * laneHeight,
+                    rounded = false,
+                )
+                scratch.hitSpans(
+                    geometry, trace, first, last, nowSeconds, arrowNowSeconds, width, radius,
+                )
+                clipPath(scratch.lane) {
+                    for (i in 0 until scratch.spanCount) {
+                        val from = scratch.spanFrom(i)
+                        drawRect(
+                            color = fill,
+                            topLeft = Offset(from, bandTop),
+                            size = Size((scratch.spanTo(i) - from).coerceAtLeast(3f), bandHeight),
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -696,7 +1026,7 @@ private fun DrawScope.drawLyrics(
     syllables: List<TextLayoutResult>,
     lyrics: LyricLayout,
     visible: IntRange,
-    active: Int?,
+    activeRun: Int?,
     nowSeconds: Double,
     width: Float,
     lyricLane: Float,
@@ -715,7 +1045,7 @@ private fun DrawScope.drawLyrics(
 
         drawText(
             textLayoutResult = layout,
-            color = if (i == active) GameTheme.lyricActive else GameTheme.lyricIdle,
+            color = if (i == activeRun) GameTheme.lyricActive else GameTheme.lyricIdle,
             topLeft = Offset(x, top + (lyricLane - layout.size.height) / 2f),
         )
     }
