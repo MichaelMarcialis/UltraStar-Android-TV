@@ -192,18 +192,18 @@ private fun DrawScope.drawTrack(
     drawOctaveLines(geometry, width, noteArea, low, high)
 
     val visible = geometry.visibleIndices(nowSeconds)
-    val active = geometry.activeIndex(nowSeconds)
+    val activeRun = activeRunStart(geometry, visible, nowSeconds)
 
     if (!visible.isEmpty()) {
         drawNotes(
-            geometry, ribbon, visible, active, nowSeconds,
+            geometry, ribbon, visible, activeRun, nowSeconds,
             width, noteArea, noteHeight, low, high,
         )
         drawHits(
             geometry, traces, ribbon, visible, nowSeconds, arrowNowSeconds,
             width, noteArea, noteHeight, low, high,
         )
-        drawLyrics(geometry, syllables, lyrics, visible, active, nowSeconds, width, lyricLane)
+        drawLyrics(geometry, syllables, lyrics, visible, activeRun, nowSeconds, width, lyricLane)
     }
 
     val singLineX = width * geometry.playheadFraction
@@ -499,6 +499,37 @@ internal fun heldRunStart(geometry: TrackGeometry, i: Int): Int {
     return first
 }
 
+/**
+ * The held run being sung at [nowSeconds], named by the note it began at, or null between runs.
+ *
+ * **This is deliberately not [TrackGeometry.activeIndex], and the difference is the gaps.** A
+ * chart leaves a beat between every pair of notes, so the thing crossing the sing line for part
+ * of every held run is the *ramp* — which belongs to no note, and left the active index null. The
+ * whole group therefore went dark each time one passed and lit again at the next bar, reported
+ * from the sofa as flashing. A gap *inside* a run is the middle of one sustained sound, so it
+ * counts as that run; a gap between runs is a rest and counts as nothing.
+ */
+internal fun activeRunStart(
+    geometry: TrackGeometry,
+    visible: IntRange,
+    nowSeconds: Double,
+): Int? {
+    if (visible.isEmpty()) return null
+    val placements = geometry.placements
+    for (i in visible) {
+        val note = placements[i]
+        if (nowSeconds < note.startSeconds) {
+            // Before this note and past the one before it: a gap, and only a run's own.
+            val inRun = note.heldFromPrevious &&
+                i > 0 &&
+                nowSeconds >= placements[i - 1].endSeconds
+            return if (inRun) heldRunStart(geometry, i) else null
+        }
+        if (nowSeconds < note.endSeconds) return heldRunStart(geometry, i)
+    }
+    return null
+}
+
 /** The colour a bar is drawn in, before any singer's fill goes over it. */
 private fun noteColor(placed: PlacedNote, isActive: Boolean): Color = when {
     placed.note.type == NoteType.FREESTYLE -> GameTheme.noteFreestyle
@@ -512,7 +543,7 @@ private fun DrawScope.drawNotes(
     geometry: TrackGeometry,
     scratch: RibbonScratch,
     visible: IntRange,
-    active: Int?,
+    activeRun: Int?,
     nowSeconds: Double,
     width: Float,
     noteArea: Float,
@@ -527,7 +558,7 @@ private fun DrawScope.drawNotes(
         // line happens to be over walks the tint along the run — bar, ramp, bar, ramp — which
         // reads as a row of separate things being counted off while the singer holds a single
         // note. Reported from the sofa, and the same reasoning that made the run one shape.
-        val runActive = active != null && active in first..last
+        val runActive = activeRun == first
 
         // The overwhelmingly common case is a note nobody holds through, and it costs nothing
         // beyond a rounded rectangle. Only a run with a ramp in it pays for the ribbon.
@@ -995,17 +1026,12 @@ private fun DrawScope.drawLyrics(
     syllables: List<TextLayoutResult>,
     lyrics: LyricLayout,
     visible: IntRange,
-    active: Int?,
+    activeRun: Int?,
     nowSeconds: Double,
     width: Float,
     lyricLane: Float,
 ) {
     val top = size.height - lyricLane
-
-    // The word being sung, rather than the note under the sing line. A held run's later notes are
-    // all `~` and draw nothing, so reading the active index literally dimmed the syllable the
-    // moment the line left its first note — while that syllable was still the one being held.
-    val activeWord = active?.let { heldRunStart(geometry, it) }
 
     for (i in visible) {
         val layout = syllables.getOrNull(i) ?: continue
@@ -1019,7 +1045,7 @@ private fun DrawScope.drawLyrics(
 
         drawText(
             textLayoutResult = layout,
-            color = if (i == activeWord) GameTheme.lyricActive else GameTheme.lyricIdle,
+            color = if (i == activeRun) GameTheme.lyricActive else GameTheme.lyricIdle,
             topLeft = Offset(x, top + (lyricLane - layout.size.height) / 2f),
         )
     }

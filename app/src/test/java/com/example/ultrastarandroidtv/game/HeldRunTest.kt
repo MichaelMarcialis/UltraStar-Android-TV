@@ -129,6 +129,37 @@ class HeldRunTest {
         assertEquals(3, heldRunStart(geometry, 3))
     }
 
+    /**
+     * The run stays the run being sung while its own ramp crosses the sing line.
+     *
+     * Charts leave a beat between every pair of notes, so for part of every held run the thing at
+     * the sing line is the *gap* — and `activeIndex` is null in any gap, which dropped the whole
+     * group back to idle and lit it again at the next bar. Reported from the sofa as flashing. A
+     * gap inside a run is the middle of one sustained sound; a gap between runs is a rest.
+     */
+    @Test
+    fun `a run stays lit across its own ramps and goes out between runs`() {
+        val geometry = geometryOf(listOf("hold " to 0, "~" to 4, "next " to 2))
+        val all = geometry.placements.indices.let { it.first..it.last }
+        val held = geometry.placements[0]
+        val tilde = geometry.placements[1]
+        val next = geometry.placements[2]
+
+        // Inside the run's first bar, inside its ramp, and inside its second bar.
+        assertEquals(0, activeRunStart(geometry, all, held.startSeconds + 0.01))
+        assertEquals(
+            "the run went out while its own ramp crossed the line",
+            0,
+            activeRunStart(geometry, all, (held.endSeconds + tilde.startSeconds) / 2),
+        )
+        assertEquals(0, activeRunStart(geometry, all, tilde.startSeconds + 0.01))
+
+        // The rest after the run belongs to nobody, and the next note is its own run.
+        assertEquals(null, activeRunStart(geometry, all, (tilde.endSeconds + next.startSeconds) / 2))
+        assertEquals(2, activeRunStart(geometry, all, next.startSeconds + 0.01))
+        assertEquals(null, activeRunStart(geometry, all, next.endSeconds + 0.01))
+    }
+
     @Test
     fun `a note nobody holds through is a run of one`() {
         val geometry = geometryOf(listOf("one " to 0, "two " to 4))
