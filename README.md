@@ -1,4 +1,6 @@
-# UltraStar Android TV
+<p align="center">
+  <img src="art/readme-logo.png" alt="UltraStar Android TV" width="620">
+</p>
 
 A karaoke game for Android TV that scores singers on pitch, in real time, against the community
 UltraStar song format — lyrics scroll, notes scroll, you sing, it marks you out of 10000.
@@ -62,7 +64,7 @@ If you have a **64-bit Android TV device running Android 11 or newer, you are ve
 it** — and please [tell us how it went](#feedback-and-bug-reports) either way. But go in expecting
 these specific limits:
 
-| | |
+| Requirement | What to expect |
 |---|---|
 | **CPU** | `arm64-v8a` **only**. The app ships one ABI. On a 32-bit device (including 2015-era Shields) it fails to install with `INSTALL_FAILED_NO_MATCHING_ABIS`, which looks like a broken download and is not. |
 | **Android** | 11 (API 30) or newer. |
@@ -290,7 +292,7 @@ Both files are gitignored.
 
 ### How the code is laid out
 
-| | |
+| Package | What is in it |
 |---|---|
 | `song/` | Parsing UltraStar `.txt` charts, and beat ↔ time conversion. |
 | `mic/`, `cpp/` | USB microphone capture — the Host API bypass, and the C that pumps the transfers. |
